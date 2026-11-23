@@ -34,16 +34,18 @@ const STYLES = `
 
 .add {
   flex: 0 0 auto;
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 48px;
-  padding: 0 17px;
+  gap: 0;
+  width: 48px;
+  height: 48px;
+  padding: 0;
   color: var(--paper-bright, #faf6ed);
   background: var(--ink, #151310);
   border: 1px solid var(--ink, #151310);
-  border-radius: 999px;
+  border-radius: 50%;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -70,8 +72,9 @@ const STYLES = `
 
 .add-text {
   font-family: var(--mono, ui-monospace, monospace);
-  font-size: 10px;
+  font-size: 8px;
   letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 .list {
@@ -136,12 +139,16 @@ const STYLES = `
   }
 
   .add {
-    min-height: 44px;
-    padding: 0 13px;
+    width: 44px;
+    height: 44px;
   }
 
   .add-plus {
     font-size: 17px;
+  }
+
+  .add-text {
+    font-size: 7px;
   }
 
   .circle {
@@ -254,6 +261,15 @@ export class CircleBar extends HTMLElement {
         <div class="list" part="list">${circles}</div>
       </nav>
     `;
+
+    const list = root.querySelector<HTMLElement>('.list');
+    const active = root.querySelector<HTMLElement>('.circle.is-active');
+    if (!list || !active) return;
+    const left = active.offsetLeft;
+    const right = left + active.offsetWidth;
+    const visibleRight = list.scrollLeft + list.clientWidth;
+    if (left < list.scrollLeft) list.scrollLeft = left;
+    else if (right > visibleRight) list.scrollLeft = right - list.clientWidth;
   }
 }
 

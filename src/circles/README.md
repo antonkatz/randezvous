@@ -1,6 +1,6 @@
 # Circles: membership, invitations and stats
 
-A UI-independent, client-side module for named circles. Every member holds the same grow-only set of signed records; merging is union. There is no server, no authority, no photo content in this module, and no runtime dependency beyond Web Crypto and the host app's existing identity, storage and direct-connection layers.
+A UI-independent module for named circles. Every member holds the same grow-only set of signed records; merging is union. The core has no server dependency and no authority: it works over any injected `PeerChannel`. The reference app uses its existing signalling server as an online, opaque relay between connected direct humans; the server stores no circle records and verifies no signatures. There is no photo content in this module, and no runtime dependency beyond Web Crypto and the host app's identity, storage and relay layers.
 
 The source lives in `src/circles`. The core entry point is `src/circles/index.ts` (package subpath `@instanthero/rendezvous/circles`); the framework-free UI is `src/circles/ui/index.ts` (package subpath `@instanthero/rendezvous/circles/ui`) and is deliberately not imported by the core. Tests sit beside each module and run with `npm test`.
 
@@ -222,7 +222,7 @@ Day arithmetic is done on calendar date components, so it crosses DST without ad
 
 ## Sync protocol
 
-`CircleSync` runs over an already authenticated `PeerChannel` (the host app's direct connection). Message types are in `CircleSyncMessage`:
+`CircleSync` runs over an already authenticated `PeerChannel`. In the reference app, `createRelayPeerChannel` adapts the host client's `circle:relay` messages, which the signalling server forwards between two connected mutual humans. The relay is untrusted and may only be online: it does not persist circle records, and no invitation or sync message is queued for an offline human. Message types are in `CircleSyncMessage`:
 
 - `circle-sync/hello { circles }`: circles where the sender is a member and believes the recipient is a current, non-banned member.
 - `circle-sync/have { circleId, ids }`: ids the sender is willing to share with this peer.
@@ -267,8 +267,10 @@ Weekly participation, season pairs and prompt ratios use current member-derived 
 - **Plan/Attendance have no circleId.** Circle association is derived from current membership; one rendezvous can count in multiple circles.
 - **Duplicate `Attendance` records** for the same rendezvous/person contribute at most one pair. Any duplicate that satisfies the window can establish the pair.
 - **Prompt counts are all-time** occurrences of the active recurring prompt ids, not only today's/this week's photographs.
-- **Invitations are addressed** to a public-key id. The bundle is not a bearer capability to join without that identity's private key. Delivery is the host's responsibility; direct `PeerChannel` is the default. Invitations do not expire or get revoked by this module; a later `Leave`/ban is the available remedy.
-- **Invitation consent is explicit.** `CircleSync` never auto-accepts an invitation.
+- **Invitations are addressed** to a public-key id. The bundle is not a bearer capability to join without that identity's private key. In the reference app, delivery uses the signalling server's online `circle:relay` between mutual direct humans; the server stores neither the bundle nor membership records. Invitations do not expire or get revoked by this module; a later `Leave`/ban is the available remedy.
+- **Invitation consent is explicit in this implementation.** The invitee sees an accept/decline card and `CircleSync` never auto-accepts. The temporary auto-accept policy written in `docs/SPEC.md` CIR-3 is not enabled.
+- **The reference relay is online-only.** If either human is offline, no circle invitation, Join/Leave, or sync record is queued. Both must reconnect; `CircleSync.refresh()` then re-exchanges ids. This differs from the expiring store-and-forward rendezvous invite described in `docs/SPEC.md` CIR-4.
+- **Daily canonical rendezvous is not implemented.** The stats module counts signed Attendance pairs; the CIR-1/CIR-2 canonical-plan rule and the extra Plan fields (`circleId`, signed creation time) described in `docs/SPEC.md` are not in the current record schema.
 - **Public-key resolution for transitive members is host-provided.** See the key-availability section above.
 - **Circle names and timezones are immutable** in this grow-only model. A future record type would be required to rename a circle.
 - **Prompt/time ambiguities chosen here:** prompt counts are lifetime counts of the active ids; duplicate attendance records are deduplicated per rendezvous/person pair. `dailyRun` uses the same counted/pair-capped set as `monthlyKept`, not merely any kept rendezvous.
@@ -339,9 +341,9 @@ dashboard.addEventListener('circle-create', async (event) => {
 });
 ```
 
-For `circle-select`, load that circle, set `dashboard.stats`, `dashboard.view` and `dashboard.inviteCandidates`. For `circle-invite-request`, call `createCircleInvite` and send the bundle. For `circle-invite-accept`, call `acceptCircleInvite`, append the returned records and send the acceptance back.
+For `circle-select`, load that circle, set `dashboard.stats`, `dashboard.view` and `dashboard.inviteCandidates`. For `circle-invite-request`, call `createCircleInvite` and send the bundle through `createRelayPeerChannel`/`sendCircleInvite`. For `circle-invite-accept`, call `acceptCircleInvite`, append the returned records and send the acceptance back.
 
-The existing `<rendezvous-app>` mounts a persistent bottom `<circle-bar>` with **`+ circle` pinned left** and one circular button per circle. Choosing `+ circle` opens the create flow; choosing a circle opens that circle’s dashboard. Creation and local listing/stats work today. Invitation delivery is still not wired into the app because the current app does not expose a direct `PeerChannel`, and this task excluded changing WebRTC/signalling/TURN. The in-app invite-candidate list is therefore intentionally empty until that transport exists; the API, dashboard and invitation card are ready for it.
+The existing `<rendezvous-app>` mounts a persistent bottom `<circle-bar>` with **`+ circle` pinned left** and one circular button per circle. Choosing `+ circle` opens the create flow; choosing a circle opens that circle’s dashboard. Creation, local listing/stats, online relay invitation delivery, offer/acceptance, and circle sync are wired through the existing signalling server. Invitations still show the consent card; automatic acceptance is specified but not yet enabled.
 
 ## Tests
 
@@ -374,4 +376,4 @@ The suite covers canonical encoding, merge laws and rejections, window edges wit
 
 ## Non-goals
 
-Hub-level daily streak and freezes, admin roles, peer-as-signaller, TURN, any server, photo/voice transfer, scaling targets by circle size, public discovery, and automatic invitation acceptance.
+Hub-level daily streak and freezes, admin roles, peer-as-signaller, TURN, server-side circle history or offline circle queues, photo/voice transfer, scaling targets by circle size, public discovery, and automatic invitation acceptance.

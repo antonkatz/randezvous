@@ -9,7 +9,7 @@ This repository contains the reference app, the reusable package, and a small st
 
 - **Spec:** [`docs/SPEC.md`](docs/SPEC.md) — user stories, visual design stories, architecture, protocol, threat model, IPv6/TURN assumptions, and the future peer-as-signaller path.
 - **Circles:** [`src/circles/README.md`](src/circles/README.md) — client-side group membership, signed invitations, sync, and the six circle-stats ratios.
-- **UI:** encapsulated `<rendezvous-app>` custom element with a cumulative, ranked photo wall and a short confetti celebration when a photo completes its handoff.
+- **UI:** encapsulated `<rendezvous-app>` custom element with a live hero countdown to the next rendezvous, a cumulative ranked photo wall, and a short confetti celebration when a photo completes its handoff.
 - **Client:** headless `RendezvousClient` with snapshots and typed events.
 - **Server:** WebSocket bootstrap for authenticated presence, appointment notices, invite relay, revocation, and WebRTC signalling. It never stores photo bytes.
 
@@ -59,7 +59,7 @@ The app has a small, round **`+ circle`** button at the lower left of the window
 - open a circle page showing monthly kept, weekly participation, season pairs, daily run, the weekly prompt and all-time progress;
 - see members who are not yet direct humans.
 
-Circle creation and local statistics work now. Invitation delivery and peer-to-peer circle sync are not wired into the app yet: they need a direct authenticated `PeerChannel`, and the current app's WebRTC/signalling layer is intentionally untouched by this module. The signed invitation API and UI are in `src/circles/`; see [`src/circles/README.md`](src/circles/README.md).
+Circle creation, local statistics, invitations, and circle sync are wired through the existing authenticated signalling server as opaque metadata relay. The server does not store or verify circle records. Delivery is online-only: both humans must be connected, and an offline invitation is not queued. The signed invitation API and UI are in `src/circles/`; see [`src/circles/README.md`](src/circles/README.md).
 
 ## Try it on your phone
 

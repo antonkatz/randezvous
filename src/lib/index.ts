@@ -7,6 +7,7 @@ export { defineRendezvousApp, RendezvousApp } from './ui/rendezvous-app';
 export { deriveVerificationWords, displayName, normalizeName } from './crypto';
 export {
   HANDOFF_WINDOW_MS,
+  formatCountdown,
   handoffClosesAt,
   handoffOpensAt,
   handoffPhase,

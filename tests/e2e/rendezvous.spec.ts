@@ -275,6 +275,10 @@ test('waits when the recipient is offline and completes when they return', async
     { humanId: humanId! },
   );
 
+  await expect(ana.locator('#hero-title .hero-countdown')).toHaveText(
+    /^(?:\d{2}:\d{2}|now|still open)$/u,
+  );
+  await expect(ana.locator('#hero-title .hero-when')).toContainText(/at /u);
   await expect
     .poll(async () => (await snapshot(ana)).rendezvous.find((entry) => entry.id === record.id)?.status)
     .toBe('waiting');

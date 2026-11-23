@@ -6,9 +6,22 @@ test('the circle bar creates, selects, and marks the active circle', async ({ pa
 
   const bar = page.locator('circle-bar');
   await expect(bar).toBeVisible();
-  await expect(bar.getByRole('button', { name: 'Create a circle' })).toBeVisible();
+  const create = bar.getByRole('button', { name: 'Create a circle' });
+  await expect(create).toBeVisible();
 
-  await bar.getByRole('button', { name: 'Create a circle' }).click();
+  const shape = await create.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    return {
+      width: rect.width,
+      height: rect.height,
+      radius: getComputedStyle(button).borderRadius,
+    };
+  });
+  expect(shape.width).toBe(shape.height);
+  expect(shape.width).toBeGreaterThanOrEqual(44);
+  expect(shape.radius).toBe('50%');
+
+  await create.click();
   const dialog = page.locator('#circle-dialog');
   await expect(dialog).toBeVisible();
 

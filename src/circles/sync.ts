@@ -17,6 +17,8 @@ import type {
 } from './types';
 import { isCircleScopedRecord } from './types';
 
+const MAX_RECORDS_PER_MESSAGE = 100;
+
 export interface RecordsMergedEvent {
   circleId: CircleId;
   peerKey: PublicKeyId;
@@ -310,6 +312,20 @@ export class CircleSync {
     return [...new Set(result)].sort(compareStrings);
   }
 
+  private async sendRecords(
+    state: PeerState,
+    circleId: CircleId,
+    records: readonly StoredCircleRecord[],
+  ): Promise<void> {
+    for (let index = 0; index < records.length; index += MAX_RECORDS_PER_MESSAGE) {
+      await this.send(state, {
+        type: 'circle-sync/records',
+        circleId,
+        records: records.slice(index, index + MAX_RECORDS_PER_MESSAGE),
+      });
+    }
+  }
+
   private async sendHave(state: PeerState, circleId: CircleId, force = false): Promise<void> {
     if (!force && state.sentHave.has(circleId)) return;
     state.sentHave.add(circleId);
@@ -385,13 +401,7 @@ export class CircleSync {
             }),
         )
         .sort((a, b) => compareStrings(a.id, b.id));
-      if (missing.length > 0) {
-        await this.send(state, {
-          type: 'circle-sync/records',
-          circleId,
-          records: missing,
-        });
-      }
+      await this.sendRecords(state, circleId, missing);
       return;
     }
 
@@ -413,13 +423,7 @@ export class CircleSync {
             view,
           }),
       );
-      if (selected.length > 0) {
-        await this.send(state, {
-          type: 'circle-sync/records',
-          circleId,
-          records: selected,
-        });
-      }
+      await this.sendRecords(state, circleId, selected);
       return;
     }
 

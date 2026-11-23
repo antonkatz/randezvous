@@ -31,3 +31,16 @@ export function isHandoffEligible(scheduledFor: number, now = Date.now()): boole
 export function isHandoffOnTime(scheduledFor: number, now = Date.now()): boolean {
   return now >= handoffOpensAt(scheduledFor) && now <= handoffClosesAt(scheduledFor);
 }
+
+/** Compact countdown such as `04:32`, `01:04:32`, or `2d 03:04:05`. */
+export function formatCountdown(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1_000));
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  if (days > 0) return `${days}d ${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  if (hours > 0) return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  return `${pad(minutes)}:${pad(seconds)}`;
+}

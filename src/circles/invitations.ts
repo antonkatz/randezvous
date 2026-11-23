@@ -349,10 +349,26 @@ export type CircleInviteMessage =
 
 export function isCircleInviteMessage(value: unknown): value is CircleInviteMessage {
   if (!isObject(value)) return false;
-  return (
-    value.type === 'circle-invite/offer' ||
-    value.type === 'circle-invite/accept'
-  );
+  if (value.type === 'circle-invite/offer') {
+    const bundle = value.bundle;
+    return (
+      isObject(bundle) &&
+      typeof bundle.inviter === 'string' &&
+      typeof bundle.invitee === 'string' &&
+      Array.isArray(bundle.records) &&
+      isObject(bundle.invite)
+    );
+  }
+  if (value.type === 'circle-invite/accept') {
+    const acceptance = value.acceptance;
+    return (
+      isObject(acceptance) &&
+      typeof acceptance.circleId === 'string' &&
+      Array.isArray(acceptance.records) &&
+      isObject(acceptance.join)
+    );
+  }
+  return false;
 }
 
 export async function sendCircleInvite(

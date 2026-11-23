@@ -23,6 +23,16 @@ export class CircleKeyDirectory {
     this.keys.set(id, publicKey);
   }
 
+  /** Replace the complete trusted set, so removed humans stop resolving. */
+  replace(entries: Iterable<{ id: PublicKeyId; publicKey: string }>): void {
+    this.keys.clear();
+    for (const entry of entries) this.add(entry.id, entry.publicKey);
+  }
+
+  clear(): void {
+    this.keys.clear();
+  }
+
   resolve(id: PublicKeyId): string | null {
     return this.keys.get(id) ?? null;
   }
