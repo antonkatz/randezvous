@@ -1,5 +1,6 @@
 import { compareStrings } from './canonical';
 import { collectKeptPairs, pairKey, type KeptRendezvous } from './rendezvous';
+import { nonCanonicalPlanIds } from './plans';
 import { activePrompts } from './prompts';
 import {
   dayKey,
@@ -115,13 +116,27 @@ export function computeCircleStats(
     return true;
   });
 
+  // Extra signed plans for a day are history, not extra rendezvous. Attendance
+  // tied to a non-canonical plan never contributes to any stat.
+  const ignoredPlanIds = nonCanonicalPlanIds(
+    usable,
+    view.circleId,
+    view.timezone,
+    memberSet,
+  );
+  const countable = usable.filter(
+    (entry) =>
+      entry.record.type !== 'Attendance' ||
+      !ignoredPlanIds.has(entry.record.rendezvousId),
+  );
+
   let asOf: number | null = null;
   for (const entry of usable) {
     const timestamp = recordTimestamp(entry.record);
     if (asOf === null || timestamp > asOf) asOf = timestamp;
   }
 
-  const inCirclePairs = collectKeptPairs(usable, resolved).filter(
+  const inCirclePairs = collectKeptPairs(countable, resolved).filter(
     (pair) => memberSet.has(pair.a) && memberSet.has(pair.b),
   );
   const kept = groupKeptPairs(inCirclePairs);
@@ -183,7 +198,7 @@ export function computeCircleStats(
       activeDays.add(dayKey(rendezvous.scheduledAt, view.timezone));
     }
   }
-  for (const entry of usable) {
+  for (const entry of countable) {
     if (entry.record.type !== 'Attendance') continue;
     if (!memberSet.has(entry.record.attendee)) continue;
     const participants =
@@ -206,7 +221,7 @@ export function computeCircleStats(
   let weekCount = 0;
   const weekMembers = new Set<string>();
   const seenAttendanceIds = new Set<string>();
-  for (const entry of usable) {
+  for (const entry of countable) {
     if (entry.record.type !== 'Attendance') continue;
     if (!memberSet.has(entry.record.attendee)) continue;
     if (seenAttendanceIds.has(entry.id)) continue;

@@ -12,6 +12,7 @@ import {
   signText,
   base64UrlToBytes,
 } from './crypto';
+import { AudioSession } from './audio';
 import { handoffPhase, isHandoffEligible } from './handoff';
 import {
   buildInviteUrl,
@@ -22,7 +23,18 @@ import {
   verifyInviteToken,
   verifyJoinRequest,
 } from './invite';
+import { isValidVoiceNote, makePhotoAttachment } from './media';
+import {
+  createPossessionMessage,
+  isPossessionMessage,
+  newerPossession,
+  possessionKey,
+  possessionState,
+  verifyPossessionMessage,
+  type PossessionMessage,
+} from './possession';
 import type {
+  CircleRendezvousInvite,
   JoinRequest,
   PresenceEntry,
   RendezvousNotice,
@@ -35,31 +47,41 @@ import {
   MAX_PHOTO_BYTES,
   ReceiverTransfer,
   SenderTransfer,
+  type MediaPayload,
   type PhotoMeta,
 } from './rtc';
 import { WebSocketSignalTransport } from './signal';
 import { RendezvousStore, type PendingRemoval } from './store';
-import type {
-  ClientNotice,
-  Human,
-  PublicIdentity,
-  RendezvousClientEvents,
-  RendezvousClientOptions,
-  RendezvousSnapshot,
-  RendezvousStatus,
-  ScheduleInput,
-  SignalNetworkInfo,
-  SignalStatus,
-  StoredHuman,
-  StoredIdentity,
-  StoredRendezvous,
-  TransferDiagnostics,
-  TransferEvent,
+import {
+  IDLE_AUDIO,
+  type AudioPhase,
+  type AudioSnapshot,
+  type ClientNotice,
+  type ContributionInput,
+  type Human,
+  type PossessionView,
+  type PublicIdentity,
+  type RendezvousClientEvents,
+  type RendezvousClientOptions,
+  type RendezvousSnapshot,
+  type RendezvousStatus,
+  type ScheduleInput,
+  type SignalNetworkInfo,
+  type SignalStatus,
+  type StoredHuman,
+  type StoredIdentity,
+  type StoredPossession,
+  type StoredPrint,
+  type StoredRendezvous,
+  type TransferDiagnostics,
+  type TransferEvent,
+  type VoiceNoteAttachment,
 } from './types';
 
 const RETRY_DELAY_MS = 20_000;
 const ANNOUNCE_RETRY_MS = 5_000;
 const SIGNAL_AUTH_DOMAIN = 'rendezvous/signal-auth/v1';
+const AUDIO_REQUEST_TIMEOUT_MS = 30_000;
 
 type Listener<T> = (value: T) => void;
 
@@ -77,6 +99,13 @@ interface ActiveTransfer {
   direction: 'outgoing' | 'incoming';
   peerId: string;
   transfer: SenderTransfer | ReceiverTransfer;
+}
+
+interface PendingAudioRequest {
+  rendezvousId: string;
+  sessionId: string;
+  peerId: string;
+  at: number;
 }
 
 function cloneRecord(record: StoredRendezvous): StoredRendezvous {
@@ -108,6 +137,9 @@ export class RendezvousClient {
   private identity: StoredIdentity | null = null;
   private humans = new Map<string, Human>();
   private rendezvous = new Map<string, StoredRendezvous>();
+  private prints = new Map<string, StoredPrint>();
+  private possessions = new Map<string, StoredPossession>();
+  private confirmedPossessionChecks = new Set<string>();
   private activeTransfers = new Map<string, ActiveTransfer>();
   private transport: WebSocketSignalTransport | null = null;
   private signalStatus: SignalStatus = 'starting';
@@ -130,6 +162,19 @@ export class RendezvousClient {
   private joinRetryNotified = new Set<string>();
   private removalsInFlight = new Set<string>();
   private lastSignalStatusWasOnline = false;
+  private audio: AudioSnapshot = { ...IDLE_AUDIO };
+  private audioSession: AudioSession | null = null;
+  private audioSessionId: string | null = null;
+  private audioSessionPeer: string | null = null;
+  private audioOfferSdp: string | null = null;
+  private audioStream: MediaStream | null = null;
+  private audioRemoteStream: MediaStream | null = null;
+  private remoteAudio: HTMLAudioElement | null = null;
+  private pendingAudioRequest: PendingAudioRequest | null = null;
+  private outgoingAudioRequest: PendingAudioRequest | null = null;
+  private audioRequestTimer: number | null = null;
+  private audioClosing = false;
+  private lastAudioSecond = -1;
   private readonly listeners = new Map<
     keyof RendezvousClientEvents,
     Set<Listener<RendezvousClientEvents[keyof RendezvousClientEvents]>>
@@ -202,6 +247,12 @@ export class RendezvousClient {
         : { id: '', name: '', publicKey: '' },
       humans: [...this.humans.values()].sort((a, b) => a.addedAt - b.addedAt),
       rendezvous: sortRendezvous(this.rendezvous.values()).map(cloneRecord),
+      prints: [...this.prints.values()].sort((a, b) => {
+        const arrival = b.deliveredAt - a.deliveredAt;
+        return arrival !== 0 ? arrival : a.id.localeCompare(b.id);
+      }),
+      possessions: this.possessionViews(),
+      audio: { ...this.audio },
     };
   }
 
@@ -224,6 +275,49 @@ export class RendezvousClient {
     return this.on('circle', (event) => listener(event.fromId, event.message));
   }
 
+  /** Send signed app metadata. Queued notices wait for an offline human. */
+  sendAppMessage(peerId: string, message: unknown, queue = true): boolean {
+    if (!this.identity || !this.humans.has(peerId)) return false;
+    const id = `ob_${randomToken(10)}`;
+    const sent =
+      this.transport?.send({
+        type: 'app:relay',
+        to: peerId,
+        message,
+        queue,
+      }) ?? false;
+    if (!sent && queue) {
+      // The release/claim is signed already. Keep it until a connection can
+      // carry it rather than silently losing a deletion notice.
+      void this.store.addAppOutbox({
+        id,
+        peerId,
+        message,
+        createdAt: Date.now(),
+      });
+    }
+    return sent;
+  }
+
+ /** Publish a signed circle rendezvous invite for the server's expiring queue. */
+  publishCircleRendezvousInvite(
+    invite: Omit<CircleRendezvousInvite, 'fromId' | 'fromName' | 'createdAt'>,
+  ): boolean {
+    const identity = this.identity;
+    if (!identity) return false;
+    return (
+      this.transport?.send({
+        type: 'circle:rendezvous:create',
+        invite: {
+          ...invite,
+          fromId: identity.id,
+          fromName: identity.name,
+          createdAt: Date.now(),
+        },
+      }) ?? false
+    );
+  }
+
   private emitState(): void {
     if (!this.ready) return;
     this.emit('state', this.getSnapshot());
@@ -240,6 +334,8 @@ export class RendezvousClient {
     if (this.ready || this.stopped) return;
     await this.loadIdentity();
     await this.loadHumans();
+    await this.loadPrints();
+    await this.loadPossessions();
     await this.loadRendezvous();
     this.revokedInvites = new Set(await this.store.getRevokedInvites());
     await this.processInviteFromLocation();
@@ -297,6 +393,11 @@ export class RendezvousClient {
       window.clearInterval(this.ticker);
       this.ticker = null;
     }
+    if (this.audioRequestTimer !== null) {
+      window.clearTimeout(this.audioRequestTimer);
+      this.audioRequestTimer = null;
+    }
+    this.closeAudio('Rendezvous closed.');
     window.removeEventListener('visibilitychange', this.onVisibilityChange);
     window.removeEventListener('online', this.onBrowserOnline);
     window.removeEventListener('hashchange', this.onHashChange);
@@ -358,16 +459,83 @@ export class RendezvousClient {
     );
   }
 
+  private async loadPrints(): Promise<void> {
+    const stored = await this.store.listPrints();
+    for (const print of stored) {
+      if (!print.photo.photoId) {
+        print.photo = await makePhotoAttachment({
+          photo: print.photo.blob,
+          fileName: print.photo.name,
+        });
+      }
+      this.prints.set(print.id, print);
+    }
+  }
+
+  private async loadPossessions(): Promise<void> {
+    const stored = await this.store.listPossessions();
+    for (const possession of stored) {
+      possession.copies ??= 1;
+      this.possessions.set(possession.key, possession);
+    }
+  }
+
   private async loadRendezvous(): Promise<void> {
     const stored = await this.store.listRendezvous();
     const now = Date.now();
     for (const record of stored) {
+      record.contribution ??= null;
+      record.reciprocal ??= null;
+      record.sessionStartedAt ??= null;
+      record.audioWindowUsedAt ??= null;
+      if (record.photo && !record.photo.photoId) {
+        record.photo = await makePhotoAttachment({
+          photo: record.photo.blob,
+          fileName: record.photo.name,
+        });
+      }
+      if (record.contribution && !record.contribution.photoId) {
+        record.contribution = await makePhotoAttachment({
+          photo: record.contribution.blob,
+          fileName: record.contribution.name,
+        });
+      }
+      if (record.reciprocal && !record.reciprocal.photoId) {
+        record.reciprocal = await makePhotoAttachment({
+          photo: record.reciprocal.blob,
+          fileName: record.reciprocal.name,
+        });
+      }
       if (record.status === 'connecting' || record.status === 'transferring') {
         record.status = isHandoffEligible(record.scheduledFor, now) ? 'waiting' : 'scheduled';
         record.error = null;
         await this.store.putRendezvous(record);
       }
       this.rendezvous.set(record.id, record);
+      await this.migrateDeliveredPrint(record);
+    }
+  }
+
+  /** Convert pre-print databases into independent wall prints once. */
+  private async migrateDeliveredPrint(record: StoredRendezvous): Promise<void> {
+    if (record.status !== 'delivered' || !record.photo || !record.deliveredAt) return;
+    const id = `pr_${record.id}_${record.direction}_primary`;
+    if (this.prints.has(id)) return;
+    const print: StoredPrint = {
+      id,
+      appointmentId: record.id,
+      photoId: record.photo.photoId,
+      direction: record.direction,
+      peerId: record.peerId,
+      peerName: record.peerName,
+      photo: record.photo,
+      deliveredAt: record.deliveredAt,
+      createdAt: record.deliveredAt,
+    };
+    this.prints.set(id, print);
+    await this.store.putPrint(print);
+    if (print.direction === 'incoming') {
+      void this.claimPhoto(record, print.photoId);
     }
   }
 
@@ -477,6 +645,19 @@ export class RendezvousClient {
   private async flushPending(): Promise<void> {
     const transport = this.transport;
     if (!transport?.isOnline) return;
+    const outbox = await this.store.getAppOutbox();
+    for (const entry of outbox) {
+      if (
+        transport.send({
+          type: 'app:relay',
+          to: entry.peerId,
+          message: entry.message,
+          queue: true,
+        })
+      ) {
+        await this.store.removeAppOutbox(entry.id);
+      }
+    }
     const joins = await this.store.getPendingJoins();
     for (const join of joins) {
       if (this.joinsInFlight.has(join.id)) continue;
@@ -579,6 +760,24 @@ export class RendezvousClient {
         if (!this.humans.has(message.fromId)) return;
         this.emit('circle', { fromId: message.fromId, message: message.message });
         return;
+      case 'app:relay':
+        if (!this.humans.has(message.fromId)) return;
+        this.emit('app', { fromId: message.fromId, message: message.message });
+        await this.handleAppMessage(message.fromId, message.message);
+        if (message.queuedId) {
+          this.transport?.send({ type: 'app:ack', queuedId: message.queuedId });
+        }
+        return;
+      case 'circle:rendezvous:notice':
+        if (message.invite.fromId === this.identity?.id) return;
+        if (!message.invite.recipients.includes(this.identity?.id ?? '')) return;
+        this.emit('circleRendezvous', {
+          fromId: message.invite.fromId,
+          invite: message.invite,
+        });
+        return;
+      case 'circle:rendezvous:created':
+        return;
       case 'rtc':
         await this.handleRtcSignal(message.fromId, message.transferId, message.payload);
         return;
@@ -627,6 +826,12 @@ export class RendezvousClient {
         }
       }
       this.emitState();
+    }
+    if (this.audio.peerId) {
+      const audioHuman = this.humans.get(this.audio.peerId);
+      if (audioHuman && !audioHuman.online) {
+        this.closeAudio('The other person left. The audio window ended.');
+      }
     }
     void this.processDue();
   }
@@ -778,6 +983,10 @@ export class RendezvousClient {
         scheduledFor: notice.scheduledFor,
         status: isHandoffEligible(notice.scheduledFor) ? 'waiting' : 'scheduled',
         photo: null,
+        contribution: null,
+        reciprocal: null,
+        sessionStartedAt: null,
+        audioWindowUsedAt: null,
         announcedAt: null,
         lastAttemptAt: null,
         deliveredAt: null,
@@ -814,6 +1023,47 @@ export class RendezvousClient {
     if (!human) return;
     const identity = this.requireIdentity();
 
+    if (transferId.startsWith('au_')) {
+      if (this.audioSessionId !== transferId || this.audioSessionPeer !== fromId) return;
+      if (!this.audioSession) {
+        if (payload.kind !== 'offer') return;
+        const stream = this.audioStream;
+        if (!stream) return;
+        this.audioSession = new AudioSession({
+          sessionId: transferId,
+          localPeerId: identity.id,
+          remotePeerId: fromId,
+          localPrivateKey: identity.privateKey,
+          remotePublicKey: human.publicKey,
+          iceServers: this.iceServers,
+          stream,
+          offerSdp: payload.sdp,
+          offerer: false,
+          sendSignal: (next) => this.sendRtc(fromId, transferId, next),
+          onRemoteStream: (remote) => this.attachRemoteAudio(remote),
+          onBegan: (startedAt) => this.markAudioLive(startedAt),
+          onRemoteMute: (muted) => {
+            this.audio = { ...this.audio, remoteMuted: muted };
+            this.emitAudio();
+          },
+          onEnded: (reason) => this.finishAudio(reason),
+          onError: (message) => this.failAudio(message),
+        });
+        this.audio = {
+          ...this.audio,
+          phase: 'connecting',
+          peerId: fromId,
+          peerName: human.name,
+          message: 'Proving both identities before audio.',
+        };
+        this.emitAudio();
+        await this.audioSession.start();
+        return;
+      }
+      await this.audioSession.handleSignal(payload);
+      return;
+    }
+
     if (payload.kind === 'offer') {
       const existingActive = this.activeTransfers.get(transferId);
       if (existingActive) {
@@ -822,20 +1072,7 @@ export class RendezvousClient {
       }
       let record = this.rendezvous.get(transferId);
       if (!record) {
-        record = {
-          id: transferId,
-          direction: 'incoming',
-          peerId: fromId,
-          peerName: human.name,
-          createdAt: Date.now(),
-          scheduledFor: Date.now(),
-          status: 'waiting',
-          photo: null,
-          announcedAt: null,
-          lastAttemptAt: null,
-          deliveredAt: null,
-          error: null,
-        };
+        record = this.blankIncomingRecord(transferId, fromId, human);
         this.rendezvous.set(record.id, record);
         await this.store.putRendezvous(record);
         this.emitState();
@@ -844,9 +1081,30 @@ export class RendezvousClient {
 
       record.status = 'connecting';
       record.error = null;
+      record.sessionStartedAt ??= Date.now();
       await this.store.putRendezvous(record);
       this.emitState();
 
+      const contribution = record.contribution
+        ? {
+            photo: record.contribution.blob,
+            meta: {
+              name: record.contribution.name,
+              type: record.contribution.type,
+              size: record.contribution.size,
+              photoId: record.contribution.photoId,
+              note: record.contribution.note
+                ? {
+                    name: record.contribution.note.name,
+                    type: record.contribution.note.type,
+                    size: record.contribution.note.size,
+                    durationMs: record.contribution.note.durationMs,
+                  }
+                : null,
+            },
+            note: record.contribution.note,
+          }
+        : null;
       const transfer = new ReceiverTransfer({
         transferId,
         localPeerId: identity.id,
@@ -855,6 +1113,7 @@ export class RendezvousClient {
         remotePublicKey: human.publicKey,
         iceServers: this.iceServers,
         offerSdp: payload.sdp,
+        contribution,
         callbacks: this.transferCallbacks(record),
         sendSignal: (next) => this.sendRtc(fromId, transferId, next),
       });
@@ -868,18 +1127,51 @@ export class RendezvousClient {
     await active.transfer.handleSignal(payload);
   }
 
+  private blankIncomingRecord(
+    id: string,
+    peerId: string,
+    human: Human,
+  ): StoredRendezvous {
+    return {
+      id,
+      direction: 'incoming',
+      peerId,
+      peerName: human.name,
+      createdAt: Date.now(),
+      scheduledFor: Date.now(),
+      status: 'waiting',
+      photo: null,
+      contribution: null,
+      reciprocal: null,
+      sessionStartedAt: null,
+      audioWindowUsedAt: null,
+      announcedAt: null,
+      lastAttemptAt: null,
+      deliveredAt: null,
+      error: null,
+    };
+  }
+
   private sendRtc(to: string, transferId: string, payload: RtcSignalPayload): void {
     this.transport?.send({ type: 'rtc', to, transferId, payload });
   }
 
   private transferCallbacks(record: StoredRendezvous) {
+    const attachmentFrom = async (payload: MediaPayload) =>
+      makePhotoAttachment({
+        photo: payload.photo,
+        fileName: payload.meta.name,
+        photoId: payload.photoId,
+        note: payload.note,
+      });
+
     return {
       onPhase: (
         phase: 'connecting' | 'progress' | 'complete' | 'error',
         transferred: number,
         total: number,
       ) => {
-        if (phase === 'progress' && record.status !== 'transferring') {
+        if (phase === 'progress' && record.status !== 'transferring' && record.status !== 'delivered') {
           record.status = 'transferring';
           void this.store.putRendezvous(record);
           this.emitState();
@@ -893,10 +1185,17 @@ export class RendezvousClient {
           total,
         } satisfies TransferEvent);
       },
-      onError: (message: string) => {
-        const active = this.activeTransfers.get(record.id);
-        active?.transfer.close();
-        this.activeTransfers.delete(record.id);
+      onError: (message: string, direction: 'primary' | 'reciprocal') => {
+        if (direction === 'reciprocal' && record.status === 'delivered') {
+          this.notice({
+            tone: 'warning',
+            code: 'transfer-failed',
+            message: `Your reciprocal photograph was not delivered. ${message}`,
+            humanId: record.peerId,
+            rendezvousId: record.id,
+          });
+          return;
+        }
         if (isDelivered(record)) return;
         record.status = 'failed';
         record.error = message;
@@ -923,12 +1222,14 @@ export class RendezvousClient {
         } satisfies TransferEvent);
         void this.processDue();
       },
-      onSenderComplete: () => {
-        this.activeTransfers.delete(record.id);
+      onSenderComplete: async () => {
         record.status = 'delivered';
         record.deliveredAt = Date.now();
         record.error = null;
-        void this.store.putRendezvous(record);
+        await this.store.putRendezvous(record);
+        if (record.photo) {
+          await this.createPrint(record, 'outgoing', record.photo, 'primary');
+        }
         this.emitState();
         this.notice({
           tone: 'success',
@@ -938,34 +1239,81 @@ export class RendezvousClient {
           rendezvousId: record.id,
         });
       },
-      onReceiverComplete: (blob: Blob, meta: PhotoMeta) => {
-        this.activeTransfers.delete(record.id);
+      onReceiverComplete: async (payload: MediaPayload) => {
+        const attachment = await attachmentFrom(payload);
+        record.photo = attachment;
         record.status = 'delivered';
         record.deliveredAt = Date.now();
         record.error = null;
-        record.photo = {
-          blob,
-          name: meta.name,
-          type: meta.type,
-          size: meta.size,
-        };
-        void this.store.putRendezvous(record);
+        await this.store.putRendezvous(record);
+        await this.createPrint(record, 'incoming', attachment, 'primary');
         this.emitState();
         this.emit('appointment', {
           rendezvous: cloneRecord(record),
           phase: 'received',
         });
       },
+      onReceiverAcked: (payload: MediaPayload) => {
+        void this.claimPhoto(record, payload.photoId);
+      },
+      onReciprocalComplete: async (payload: MediaPayload) => {
+        const attachment = await attachmentFrom(payload);
+        record.reciprocal = attachment;
+        await this.store.putRendezvous(record);
+        await this.createPrint(record, 'incoming', attachment, 'contribution');
+        this.emitState();
+        this.emit('appointment', {
+          rendezvous: cloneRecord(record),
+          phase: 'received',
+        });
+      },
+      onReciprocalAcked: (payload: MediaPayload) => {
+        void this.claimPhoto(record, payload.photoId);
+      },
+      onContributionAcked: async () => {
+        if (!record.contribution) return;
+        await this.createPrint(record, 'outgoing', record.contribution, 'contribution');
+        this.emitState();
+      },
       onDiagnostics: (diagnostics: TransferDiagnostics) => {
         this.lastTransferDiagnostics = diagnostics;
         this.emitState();
       },
+      onClosed: () => {
+        const active = this.activeTransfers.get(record.id);
+        if (active) this.activeTransfers.delete(record.id);
+        void this.processDue();
+      },
     };
+  }
+
+  private async createPrint(
+    record: StoredRendezvous,
+    direction: StoredPrint['direction'],
+    photo: NonNullable<StoredRendezvous['photo']>,
+    kind: 'primary' | 'contribution',
+  ): Promise<StoredPrint> {
+    const id = `pr_${record.id}_${direction}_${kind}`;
+    const print: StoredPrint = {
+      id,
+      appointmentId: record.id,
+      photoId: photo.photoId,
+      direction,
+      peerId: record.peerId,
+      peerName: record.peerName,
+      photo,
+      deliveredAt: record.deliveredAt ?? Date.now(),
+      createdAt: Date.now(),
+    };
+    this.prints.set(id, print);
+    await this.store.putPrint(print);
+    return print;
   }
 
   private async processDue(): Promise<void> {
     if (!this.ready || this.processingDue || this.stopped) return;
     this.processingDue = true;
+    this.updateAudioTick();
     const now = Date.now();
     let changed = false;
     try {
@@ -1044,6 +1392,7 @@ export class RendezvousClient {
     record.lastAttemptAt = Date.now();
     record.status = 'connecting';
     record.error = null;
+    record.sessionStartedAt ??= Date.now();
     await this.store.putRendezvous(record);
     this.emitState();
 
@@ -1055,10 +1404,20 @@ export class RendezvousClient {
       remotePublicKey: human.publicKey,
       iceServers: this.iceServers,
       photo: record.photo.blob,
+      note: record.photo.note,
       meta: {
         name: record.photo.name,
         type: record.photo.type,
         size: record.photo.size,
+        photoId: record.photo.photoId,
+        note: record.photo.note
+          ? {
+              name: record.photo.note.name,
+              type: record.photo.note.type,
+              size: record.photo.note.size,
+              durationMs: record.photo.note.durationMs,
+            }
+          : null,
       },
       callbacks: this.transferCallbacks(record),
       sendSignal: (payload) => this.sendRtc(record.peerId, record.id, payload),
@@ -1190,6 +1549,9 @@ export class RendezvousClient {
     }
     this.humans.delete(humanId);
     await this.store.deleteHuman(humanId);
+    if (this.audio.peerId === humanId) {
+      this.closeAudio('The human was removed. The audio window ended.');
+    }
 
     for (const [id, active] of [...this.activeTransfers.entries()]) {
       if (active.peerId === humanId) {
@@ -1253,10 +1615,18 @@ export class RendezvousClient {
     if (!Number.isFinite(input.scheduledFor) || input.scheduledFor <= Date.now() + 500) {
       throw new RendezvousClientError('invalid-time', 'Choose a moment in the near future.');
     }
+    if (input.note && !isValidVoiceNote(input.note)) {
+      throw new RendezvousClientError('invalid-photo', 'That voice note cannot be attached.');
+    }
     const human = this.humans.get(input.humanId);
     if (!human) throw new RendezvousClientError('no-human', 'Choose a human first.');
 
-    const fallbackName = input.photo instanceof File ? input.photo.name : 'photograph';
+    const attachment = await makePhotoAttachment({
+      photo,
+      fileName: input.fileName,
+      photoId: input.photoId,
+      note: input.note,
+    });
     const record: StoredRendezvous = {
       id: `rv_${randomToken(12)}`,
       direction: 'outgoing',
@@ -1265,12 +1635,11 @@ export class RendezvousClient {
       createdAt: Date.now(),
       scheduledFor: input.scheduledFor,
       status: 'scheduled',
-      photo: {
-        blob: photo,
-        name: input.fileName?.trim() || fallbackName || 'photograph',
-        type: photo.type,
-        size: photo.size,
-      },
+      photo: attachment,
+      contribution: null,
+      reciprocal: null,
+      sessionStartedAt: null,
+      audioWindowUsedAt: null,
       announcedAt: null,
       lastAttemptAt: null,
       deliveredAt: null,
@@ -1283,14 +1652,710 @@ export class RendezvousClient {
     return cloneRecord(record);
   }
 
+  /**
+   * Attach (or replace) my reciprocal photo on an appointment I did not
+   * create. It stays local until the handoff session starts.
+   */
+  async setContribution(input: ContributionInput): Promise<StoredRendezvous> {
+    const record = this.rendezvous.get(input.rendezvousId);
+    if (!record) throw new RendezvousClientError('no-human', 'That rendezvous is not here.');
+    if (record.direction !== 'incoming') {
+      throw new RendezvousClientError('invalid-photo', 'This is already your own rendezvous.');
+    }
+    if (record.status === 'delivered' || record.deliveredAt) {
+      throw new RendezvousClientError('invalid-photo', 'This rendezvous is already complete.');
+    }
+    if (record.sessionStartedAt || this.activeTransfers.has(record.id)) {
+      throw new RendezvousClientError('invalid-photo', 'The handoff has begun; contributions are locked.');
+    }
+    const photo = input.photo;
+    if (!photo || photo.size <= 0) {
+      throw new RendezvousClientError('invalid-photo', 'Choose a photograph first.');
+    }
+    if (photo.size > MAX_PHOTO_BYTES) {
+      throw new RendezvousClientError('photo-too-large', 'Photographs must be 25 MB or smaller.');
+    }
+    if (!photo.type.startsWith('image/')) {
+      throw new RendezvousClientError('invalid-photo', 'That file is not an image.');
+    }
+    if (input.note && !isValidVoiceNote(input.note)) {
+      throw new RendezvousClientError('invalid-photo', 'That voice note cannot be attached.');
+    }
+    record.contribution = await makePhotoAttachment({
+      photo,
+      fileName: input.fileName,
+      photoId: input.photoId,
+      note: input.note,
+    });
+    await this.store.putRendezvous(record);
+    this.emitState();
+    return cloneRecord(record);
+  }
+
+  async removeContribution(rendezvousId: string): Promise<void> {
+    const record = this.rendezvous.get(rendezvousId);
+    if (!record || record.direction !== 'incoming') return;
+    if (record.sessionStartedAt || this.activeTransfers.has(record.id)) {
+      throw new RendezvousClientError('invalid-photo', 'The handoff has begun; contributions are locked.');
+    }
+    record.contribution = null;
+    await this.store.putRendezvous(record);
+    this.emitState();
+  }
+
+  getPrint(printId: string): StoredPrint | null {
+    return this.prints.get(printId) ?? null;
+  }
+
+  async deletePrint(printId: string): Promise<void> {
+    const print = this.prints.get(printId);
+    if (!print) return;
+    this.prints.delete(printId);
+    await this.store.deletePrint(printId);
+    const remaining = await this.store.listPrintsForPhoto(print.photoId);
+    if (remaining.length === 0) {
+      const ownership = [...this.possessions.values()].filter(
+        (entry) => entry.photoId === print.photoId,
+      );
+      for (const entry of ownership) {
+        this.possessions.delete(entry.key);
+      }
+      await this.store.deletePossessionsForPhoto(print.photoId);
+    }
+    if (print.direction === 'incoming' && remaining.length === 0) {
+      void this.releasePhoto(print);
+    }
+    this.emitState();
+  }
+
   async deleteRendezvous(id: string): Promise<void> {
     const active = this.activeTransfers.get(id);
     if (active) {
       active.transfer.close();
       this.activeTransfers.delete(id);
     }
+    if (this.audio.rendezvousId === id) {
+      this.closeAudio('The rendezvous was deleted. The audio window ended.');
+    }
     this.rendezvous.delete(id);
     await this.store.deleteRendezvous(id);
+    this.emitState();
+  }
+
+  private emitAudio(): void {
+    this.emit('audio', { audio: { ...this.audio } });
+    this.emitState();
+  }
+
+  private audioRecord(): StoredRendezvous | null {
+    return this.audio.rendezvousId
+      ? this.rendezvous.get(this.audio.rendezvousId) ?? null
+      : null;
+  }
+
+  /** Ask the other participant for the single one-minute voice window. */
+  async requestAudioMinute(rendezvousId: string): Promise<void> {
+    const record = this.rendezvous.get(rendezvousId);
+    const human = record ? this.humans.get(record.peerId) : null;
+    if (!record || !human) {
+      throw new RendezvousClientError('no-human', 'That rendezvous is not here.');
+    }
+    if (!human.online) {
+      throw new RendezvousClientError('no-human', 'The other human is not here yet.');
+    }
+    if (!isHandoffEligible(record.scheduledFor)) {
+      throw new RendezvousClientError('invalid-time', 'The handoff window is not open yet.');
+    }
+    if (record.audioWindowUsedAt) {
+      throw new RendezvousClientError('invalid-time', 'The minute for this rendezvous is already used.');
+    }
+    if (
+      this.audio.phase === 'requesting' ||
+      this.audio.phase === 'incoming' ||
+      this.audio.phase === 'connecting' ||
+      this.audio.phase === 'live'
+    ) {
+      return;
+    }
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      throw new RendezvousClientError('handshake-failed', 'This browser cannot use a microphone here.');
+    }
+    this.audioClosing = false;
+    const sessionId = `au_${randomToken(12)}`;
+    const request: PendingAudioRequest = {
+      rendezvousId,
+      sessionId,
+      peerId: record.peerId,
+      at: Date.now(),
+    };
+    this.outgoingAudioRequest = request;
+    this.audio = {
+      ...IDLE_AUDIO,
+      rendezvousId,
+      peerId: record.peerId,
+      peerName: record.peerName,
+      phase: 'requesting',
+      message: `Waiting for ${displayName(record.peerName)} to allow a minute.`,
+    };
+    this.sendAppMessage(
+      record.peerId,
+      { kind: 'audio/request', rendezvousId, sessionId, at: request.at },
+      false,
+    );
+    this.emitAudio();
+    this.audioRequestTimer = window.setTimeout(() => {
+      if (this.audio.phase !== 'requesting') return;
+      if (this.outgoingAudioRequest?.sessionId !== sessionId) return;
+      this.outgoingAudioRequest = null;
+      this.audio = {
+        ...this.audio,
+        phase: 'declined',
+        message: 'No answer. The minute was not used.',
+      };
+      this.emitAudio();
+    }, AUDIO_REQUEST_TIMEOUT_MS);
+  }
+
+  /** Accept or decline a pending incoming request. */
+  async respondAudioMinute(accept: boolean): Promise<void> {
+    const request = this.pendingAudioRequest;
+    if (!request || this.audio.phase !== 'incoming') return;
+    this.pendingAudioRequest = null;
+    if (!accept) {
+      this.sendAppMessage(
+        request.peerId,
+        { kind: 'audio/decline', rendezvousId: request.rendezvousId, sessionId: request.sessionId },
+        false,
+      );
+      this.audio = {
+        ...this.audio,
+        phase: 'declined',
+        message: 'You declined. Nothing was recorded and the minute is not used.',
+      };
+      this.emitAudio();
+      return;
+    }
+
+    this.audioClosing = false;
+    this.sendAppMessage(
+      request.peerId,
+      { kind: 'audio/accept', rendezvousId: request.rendezvousId, sessionId: request.sessionId },
+      false,
+    );
+    this.audioSessionId = request.sessionId;
+    this.audioSessionPeer = request.peerId;
+    this.audio = {
+      ...this.audio,
+      phase: 'connecting',
+      message: 'Opening the microphone. Both browsers must prove their keys.',
+    };
+    this.emitAudio();
+    try {
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+        throw new Error('This browser cannot use a microphone here.');
+      }
+      this.audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
+    } catch {
+      this.sendAppMessage(
+        request.peerId,
+        { kind: 'audio/failed', rendezvousId: request.rendezvousId, sessionId: request.sessionId },
+        false,
+      );
+      this.failAudio('Microphone permission was denied. The photo handoff is unaffected.');
+    }
+  }
+
+  toggleAudioMute(): void {
+    if (this.audio.phase !== 'live') return;
+    this.audio = { ...this.audio, muted: !this.audio.muted };
+    this.audioSession?.setMuted(this.audio.muted);
+    this.emitAudio();
+  }
+
+  endAudioMinute(): void {
+    if (this.audio.phase !== 'live' && this.audio.phase !== 'connecting') return;
+    if (this.audioSession) {
+      this.audioSession.end();
+    } else {
+      this.failAudio('The minute ended.');
+    }
+  }
+
+  private async handleAudioRelay(
+    fromId: string,
+    message: Record<string, unknown>,
+  ): Promise<void> {
+    const kind = message.kind;
+    const record =
+      typeof message.rendezvousId === 'string'
+        ? this.rendezvous.get(message.rendezvousId)
+        : null;
+    const human = record ? this.humans.get(record.peerId) : null;
+
+    if (kind === 'audio/request') {
+      if (
+        !record ||
+        !human ||
+        human.id !== fromId ||
+        typeof message.sessionId !== 'string' ||
+        record.audioWindowUsedAt ||
+        !isHandoffEligible(record.scheduledFor)
+      ) {
+        this.sendAppMessage(
+          fromId,
+          {
+            kind: 'audio/decline',
+            rendezvousId: message.rendezvousId,
+            sessionId: message.sessionId,
+          },
+          false,
+        );
+        return;
+      }
+      if (
+        this.audio.phase === 'requesting' ||
+        this.audio.phase === 'incoming' ||
+        this.audio.phase === 'connecting' ||
+        this.audio.phase === 'live'
+      ) {
+        this.sendAppMessage(
+          fromId,
+          {
+            kind: 'audio/decline',
+            rendezvousId: message.rendezvousId,
+            sessionId: message.sessionId,
+          },
+          false,
+        );
+        return;
+      }
+      this.pendingAudioRequest = {
+        rendezvousId: record.id,
+        sessionId: message.sessionId,
+        peerId: fromId,
+        at: Date.now(),
+      };
+      this.audio = {
+        ...IDLE_AUDIO,
+        rendezvousId: record.id,
+        peerId: fromId,
+        peerName: record.peerName,
+        phase: 'incoming',
+        message: `${displayName(record.peerName)} asks for one live minute.`,
+      };
+      this.emitAudio();
+      this.notice({
+        tone: 'info',
+        code: 'audio-declined',
+        message: `${displayName(record.peerName)} asks for one minute of live voice. Nothing is recorded.`,
+        humanId: fromId,
+        rendezvousId: record.id,
+      });
+      return;
+    }
+
+    if (kind === 'audio/accept') {
+      const request = this.outgoingAudioRequest;
+      if (
+        !request ||
+        request.sessionId !== message.sessionId ||
+        request.peerId !== fromId ||
+        !record
+      ) {
+        return;
+      }
+      this.outgoingAudioRequest = null;
+      if (this.audioRequestTimer !== null) {
+        window.clearTimeout(this.audioRequestTimer);
+        this.audioRequestTimer = null;
+      }
+      await this.startAudioOffer(request);
+      return;
+    }
+
+    if (kind === 'audio/decline') {
+      if (this.outgoingAudioRequest?.sessionId === message.sessionId) {
+        this.outgoingAudioRequest = null;
+        if (this.audioRequestTimer !== null) {
+          window.clearTimeout(this.audioRequestTimer);
+          this.audioRequestTimer = null;
+        }
+        this.audio = {
+          ...this.audio,
+          phase: 'declined',
+          message: 'The minute was declined. The photo handoff continues.',
+        };
+        this.emitAudio();
+      }
+      return;
+    }
+
+    if (kind === 'audio/failed') {
+      if (
+        this.outgoingAudioRequest?.sessionId === message.sessionId ||
+        this.audioSessionId === message.sessionId
+      ) {
+        this.failAudio('The microphone could not be opened on the other browser.');
+      }
+    }
+  }
+
+  private async startAudioOffer(request: PendingAudioRequest): Promise<void> {
+    this.audioClosing = false;
+    const record = this.rendezvous.get(request.rendezvousId);
+    const human = this.humans.get(request.peerId);
+    const identity = this.identity;
+    if (!record || !human || !identity) return;
+    this.audioSessionId = request.sessionId;
+    this.audioSessionPeer = request.peerId;
+    this.audio = {
+      ...this.audio,
+      phase: 'connecting',
+      message: 'Opening the microphone. Both browsers must prove their keys.',
+    };
+    this.emitAudio();
+    try {
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+        throw new Error('This browser cannot use a microphone here.');
+      }
+      this.audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
+    } catch {
+      this.sendAppMessage(
+        request.peerId,
+        { kind: 'audio/failed', rendezvousId: request.rendezvousId, sessionId: request.sessionId },
+        false,
+      );
+      this.failAudio('Microphone permission was denied. The photo handoff is unaffected.');
+      return;
+    }
+    this.audioSession = new AudioSession({
+      sessionId: request.sessionId,
+      localPeerId: identity.id,
+      remotePeerId: request.peerId,
+      localPrivateKey: identity.privateKey,
+      remotePublicKey: human.publicKey,
+      iceServers: this.iceServers,
+      stream: this.audioStream,
+      offerer: true,
+      sendSignal: (next) => this.sendRtc(request.peerId, request.sessionId, next),
+      onRemoteStream: (remote) => this.attachRemoteAudio(remote),
+      onBegan: (startedAt) => this.markAudioLive(startedAt),
+      onRemoteMute: (muted) => {
+        this.audio = { ...this.audio, remoteMuted: muted };
+        this.emitAudio();
+      },
+      onEnded: (reason) => this.finishAudio(reason),
+      onError: (message) => this.failAudio(message),
+    });
+    await this.audioSession.start();
+  }
+
+  private attachRemoteAudio(stream: MediaStream): void {
+    this.audioRemoteStream = stream;
+    if (typeof document === 'undefined') return;
+    if (!this.remoteAudio) {
+      const element = document.createElement('audio');
+      element.autoplay = true;
+      element.setAttribute('playsinline', '');
+      element.hidden = true;
+      this.remoteAudio = element;
+      document.body.append(element);
+    }
+    this.remoteAudio.srcObject = stream;
+    void this.remoteAudio.play().catch(() => {
+      // A user gesture opened this window; if autoplay is still blocked the
+      // controls stay visible so the person can retry.
+    });
+  }
+
+  private markAudioLive(startedAt: number): void {
+    const record = this.audioRecord();
+    if (record) {
+      record.audioWindowUsedAt = startedAt;
+      void this.store.putRendezvous(record);
+    }
+    this.audio = {
+      ...this.audio,
+      phase: 'live',
+      remainingMs: 60_000,
+      message: null,
+      muted: false,
+      remoteMuted: false,
+    };
+    this.lastAudioSecond = 60;
+    this.emitAudio();
+  }
+
+  private finishAudio(reason: string): void {
+    if (this.audioClosing) return;
+    const wasLive = this.audio.phase === 'live';
+    this.audio = {
+      ...this.audio,
+      phase: 'ended',
+      remainingMs: 0,
+      message: reason,
+    };
+    this.audioSession = null;
+    this.audioSessionId = null;
+    this.audioSessionPeer = null;
+    this.pendingAudioRequest = null;
+    this.outgoingAudioRequest = null;
+    if (this.audioStream) {
+      for (const track of this.audioStream.getTracks()) track.stop();
+      this.audioStream = null;
+    }
+    if (this.remoteAudio) {
+      this.remoteAudio.srcObject = null;
+      this.remoteAudio.remove();
+      this.remoteAudio = null;
+    }
+    this.audioRemoteStream = null;
+    this.emitAudio();
+    if (wasLive) {
+      this.notice({
+        tone: 'info',
+        code: 'audio-ended',
+        message: reason,
+        humanId: this.audio.peerId ?? undefined,
+        rendezvousId: this.audio.rendezvousId ?? undefined,
+      });
+    }
+  }
+
+  private failAudio(message: string): void {
+    if (this.audioClosing) return;
+    this.audio = { ...this.audio, phase: 'error', message };
+    this.audioSession = null;
+    this.audioSessionId = null;
+    this.audioSessionPeer = null;
+    this.pendingAudioRequest = null;
+    this.outgoingAudioRequest = null;
+    if (this.audioStream) {
+      for (const track of this.audioStream.getTracks()) track.stop();
+      this.audioStream = null;
+    }
+    if (this.remoteAudio) {
+      this.remoteAudio.srcObject = null;
+      this.remoteAudio.remove();
+      this.remoteAudio = null;
+    }
+    this.audioRemoteStream = null;
+    this.emitAudio();
+    this.notice({
+      tone: 'warning',
+      code: 'audio-error',
+      message,
+    });
+  }
+
+  private closeAudio(reason: string): void {
+    this.audioClosing = true;
+    const session = this.audioSession;
+    this.audioSession = null;
+    this.audioSessionId = null;
+    this.audioSessionPeer = null;
+    this.pendingAudioRequest = null;
+    this.outgoingAudioRequest = null;
+    if (this.audioRequestTimer !== null) {
+      window.clearTimeout(this.audioRequestTimer);
+      this.audioRequestTimer = null;
+    }
+    session?.close();
+    if (this.audioStream) {
+      for (const track of this.audioStream.getTracks()) track.stop();
+      this.audioStream = null;
+    }
+    if (this.remoteAudio) {
+      this.remoteAudio.srcObject = null;
+      this.remoteAudio.remove();
+      this.remoteAudio = null;
+    }
+    this.audioRemoteStream = null;
+    if (this.audio.phase !== 'idle') {
+      this.audio = { ...this.audio, phase: 'ended', remainingMs: 0, message: reason };
+      this.emitAudio();
+    }
+  }
+
+  private updateAudioTick(): void {
+    if (this.audio.phase !== 'live' || !this.audioSession) return;
+    const remaining = this.audioSession.remainingMs;
+    const seconds = Math.ceil(remaining / 1_000);
+    this.audio = { ...this.audio, remainingMs: remaining };
+    if (seconds !== this.lastAudioSecond) {
+      this.lastAudioSecond = seconds;
+      this.emitAudio();
+    }
+  }
+
+  private possessionViews(): PossessionView[] {
+    return [...this.possessions.values()]
+      .map((entry) => {
+        const human = this.humans.get(entry.holder);
+        return {
+          ...entry,
+          online: Boolean(human?.online),
+          connected: Boolean(human),
+          confirmedNow: this.confirmedPossessionChecks.has(entry.key),
+        };
+      })
+      .sort((a, b) => {
+        const photo = a.photoId.localeCompare(b.photoId);
+        return photo !== 0 ? photo : a.holder.localeCompare(b.holder);
+      });
+  }
+
+  /** Owner-only inventory for one photo, or every tracked photo. */
+  getPossessionInventory(photoId?: string): PossessionView[] {
+    const all = this.possessionViews();
+    return photoId ? all.filter((entry) => entry.photoId === photoId) : all;
+  }
+
+  private async claimPhoto(record: StoredRendezvous, photoId: string): Promise<void> {
+    const identity = this.identity;
+    if (!identity) return;
+    const message = await createPossessionMessage({
+      privateKey: identity.privateKey,
+      kind: 'possess/claim',
+      photoId,
+      from: identity.id,
+      to: record.peerId,
+      appointmentId: record.id,
+    });
+    this.sendAppMessage(record.peerId, message, true);
+  }
+
+  private async releasePhoto(print: StoredPrint): Promise<void> {
+    const identity = this.identity;
+    if (!identity) return;
+    const message = await createPossessionMessage({
+      privateKey: identity.privateKey,
+      kind: 'possess/release',
+      photoId: print.photoId,
+      from: identity.id,
+      to: print.peerId,
+      appointmentId: print.appointmentId,
+    });
+    this.sendAppMessage(print.peerId, message, true);
+  }
+
+  /** Ask every connected holder for a fresh signed claim or release. */
+  async requestPossessionCheck(photoId: string, holder?: string): Promise<number> {
+    const identity = this.identity;
+    if (!identity) return 0;
+    const targets = [...this.possessions.values()].filter(
+      (entry) =>
+        entry.photoId === photoId &&
+        entry.state === 'held' &&
+        (!holder || entry.holder === holder) &&
+        this.humans.get(entry.holder)?.online,
+    );
+    for (const entry of targets) {
+      const message = await createPossessionMessage({
+        privateKey: identity.privateKey,
+        kind: 'possess/check',
+        photoId,
+        from: identity.id,
+        to: entry.holder,
+        appointmentId: entry.appointmentId,
+      });
+      this.confirmedPossessionChecks.delete(entry.key);
+      entry.checkedAt = Date.now();
+      await this.store.putPossession(entry);
+      this.sendAppMessage(entry.holder, message, false);
+    }
+    if (targets.length > 0) this.emitState();
+    return targets.length;
+  }
+
+  private async handleAppMessage(fromId: string, message: unknown): Promise<void> {
+    if (isPossessionMessage(message)) {
+      await this.handlePossessionMessage(fromId, message);
+      return;
+    }
+    if (!message || typeof message !== 'object') return;
+    const kind = (message as { kind?: unknown }).kind;
+    if (typeof kind === 'string' && kind.startsWith('audio/')) {
+      await this.handleAudioRelay(fromId, message as Record<string, unknown>);
+    }
+  }
+
+  private async handlePossessionMessage(
+    fromId: string,
+    message: PossessionMessage,
+  ): Promise<void> {
+    const identity = this.identity;
+    if (!identity || message.from !== fromId || message.to !== identity.id) return;
+    const human = this.humans.get(fromId);
+    if (!human) return;
+    if (!(await verifyPossessionMessage(human.publicKey, message))) return;
+
+    if (message.kind === 'possess/check') {
+      const copies = [...this.prints.values()].filter(
+        (print) => print.photoId === message.photoId,
+      );
+      const held = copies[0] ?? null;
+      const reply = await createPossessionMessage({
+        privateKey: identity.privateKey,
+        kind: held ? 'possess/claim' : 'possess/release',
+        photoId: message.photoId,
+        from: identity.id,
+        to: fromId,
+        appointmentId: held?.appointmentId ?? message.appointmentId,
+        at: Math.max(Date.now(), message.at + 1),
+      });
+      this.sendAppMessage(fromId, reply, true);
+      return;
+    }
+
+    const state = possessionState(message);
+    if (!state) return;
+    const owned =
+      [...this.prints.values()].some(
+        (print) => print.photoId === message.photoId && print.direction === 'outgoing',
+      ) ||
+      [...this.rendezvous.values()].some(
+        (record) =>
+          record.direction === 'outgoing' &&
+          record.photo?.photoId === message.photoId,
+      );
+    if (!owned) return;
+    const key = possessionKey(message.photoId, fromId);
+    const previous = this.possessions.get(key);
+    const sameCopy =
+      previous?.state === 'held' &&
+      previous.appointmentId === message.appointmentId;
+    const copies =
+      state === 'released'
+        ? previous?.copies ?? 1
+        : sameCopy
+          ? previous.copies
+          : previous?.state === 'held'
+            ? previous.copies + 1
+            : 1;
+    const next: StoredPossession = {
+      key,
+      photoId: message.photoId,
+      holder: fromId,
+      state,
+      at: message.at,
+      appointmentId: message.appointmentId,
+      updatedAt: Date.now(),
+      checkedAt: previous?.checkedAt ?? null,
+      copies,
+    };
+    if (!newerPossession(previous, next)) return;
+    this.possessions.set(key, next);
+    await this.store.putPossession(next);
+    if (next.checkedAt !== null && message.at >= next.checkedAt) {
+      this.confirmedPossessionChecks.add(key);
+    }
     this.emitState();
   }
 

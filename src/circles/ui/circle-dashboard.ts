@@ -9,6 +9,7 @@ import {
 import { CircleStatsList, defineCircleStatsList } from './circle-stats-list';
 import type { CircleInviteBundle } from '../invitations';
 import type { RankedCircle } from '../leaderboard';
+import type { CircleDayPlans } from '../plans';
 import type { CircleStats, MemberView } from '../types';
 
 type Panel = 'list' | 'create' | 'circle';
@@ -30,6 +31,8 @@ export class CircleDashboard extends HTMLElement {
   private stateView: MemberView | null = null;
   private stateInviteCandidates: readonly InviteCandidate[] = [];
   private statePendingInvite: CircleInviteBundle | null = null;
+  private statePlans: readonly CircleDayPlans[] = [];
+  private stateWindow: { start: number; end: number } | null = null;
   private stateBusy = false;
   private stateError = '';
   private stateDefaultTimezone = '';
@@ -91,6 +94,24 @@ export class CircleDashboard extends HTMLElement {
 
   get inviteCandidates(): readonly InviteCandidate[] {
     return this.stateInviteCandidates;
+  }
+
+  set plans(value: readonly CircleDayPlans[]) {
+    this.statePlans = value;
+    this.render();
+  }
+
+  get plans(): readonly CircleDayPlans[] {
+    return this.statePlans;
+  }
+
+  set window(value: { start: number; end: number } | null) {
+    this.stateWindow = value;
+    this.render();
+  }
+
+  get window(): { start: number; end: number } | null {
+    return this.stateWindow;
   }
 
   set pendingInvite(value: CircleInviteBundle | null) {
@@ -233,6 +254,8 @@ export class CircleDashboard extends HTMLElement {
       page.stats = this.stateStats;
       page.view = this.stateView;
       page.inviteCandidates = this.stateInviteCandidates;
+      page.plans = this.statePlans;
+      page.window = this.stateWindow;
       body.append(page);
       return;
     }

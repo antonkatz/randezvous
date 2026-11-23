@@ -94,7 +94,16 @@ export function canSendRecord(input: RecordPolicyInput): boolean {
     );
   }
 
-  if (record.type === 'Plan' || record.type === 'Attendance') {
+  // A circle plan belongs to the circle itself, not only to the people named
+  // as invitees when it was signed. Members who joined later still need the
+  // canonical history, so plans flow between direct members of that circle.
+  if (record.type === 'Plan') {
+    return direct && record.circleId === circleId;
+  }
+
+  // Attendance can name people outside the circle; gossip it only when at
+  // least two current members took part.
+  if (record.type === 'Attendance') {
     return direct && inCircleParticipants(entry, view) >= 2;
   }
 
@@ -123,11 +132,15 @@ export function canAcceptRecord(
     );
   }
 
-  if (record.type === 'Plan' || record.type === 'Attendance') {
+  if (record.type === 'Plan') {
+    return direct && record.circleId === circleId;
+  }
+
+  if (record.type === 'Attendance') {
     return direct && inCircleParticipants(entry, view) >= 2;
   }
 
-  return true;
+  return !isCircleScopedRecord(record) || record.circleId === circleId;
 }
 
 interface PeerState {
@@ -452,8 +465,13 @@ export class CircleSync {
       const merged = await mergeRecords(this.options.identity, existing, accepted, {
         circleId,
       });
+      if (merged.removed.length > 0) {
+        await this.options.store.remove?.(circleId, merged.removed);
+      }
       if (merged.added.length > 0) {
         await this.options.store.append(circleId, merged.added);
+      }
+      if (merged.added.length > 0 || merged.removed.length > 0) {
         await this.options.onRecords?.({
           circleId,
           peerKey,

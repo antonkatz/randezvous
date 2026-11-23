@@ -577,3 +577,76 @@ h1 {
   background: rgba(255, 255, 255, 0.04);
   outline: none;
 }
+
+/* ─── Circle rendezvous plan + gathering window ─────────── */
+
+.circle-plan,
+.circle-window {
+  margin: 22px 0;
+  padding: 16px 0;
+  border-top: 1px solid var(--line, rgba(21, 19, 16, 0.16));
+}
+
+.circle-plan h2,
+.circle-window h2 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.circle-plan p,
+.circle-window p {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted, #6d655a);
+}
+
+.canonical-plan {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px !important;
+  color: var(--ink, #151310) !important;
+}
+
+.canonical-plan.is-empty {
+  color: var(--muted, #6d655a) !important;
+}
+
+.canonical-plan span {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--sans, ui-sans-serif, system-ui, sans-serif);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted, #6d655a);
+}
+
+.plan-label {
+  display: block;
+  margin: 8px 0 4px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted, #6d655a);
+}
+
+.plan-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.plan-row input {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong, rgba(21, 19, 16, 0.32));
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}

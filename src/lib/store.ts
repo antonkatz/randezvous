@@ -1,18 +1,32 @@
 import { migrateLegacyDatabase, requestPersistentStorage } from './persistence';
 import type { JoinRequest } from './protocol';
-import type { StoredHuman, StoredIdentity, StoredRendezvous } from './types';
+import type {
+  StoredHuman,
+  StoredIdentity,
+  StoredPossession,
+  StoredPrint,
+  StoredRendezvous,
+} from './types';
 
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const IDENTITY_KEY = 'self';
 const PENDING_JOINS_KEY = 'pending-joins';
 const PENDING_REMOVALS_KEY = 'pending-removals';
 const REVOKED_INVITES_KEY = 'revoked-invites';
+const APP_OUTBOX_KEY = 'app-outbox';
 
 export interface PendingRemoval {
   id: string;
   to: string;
   createdAt: number;
   revokedInvites: string[];
+}
+
+export interface QueuedAppMessage {
+  id: string;
+  peerId: string;
+  message: unknown;
+  createdAt: number;
 }
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
@@ -60,6 +74,16 @@ export class RendezvousStore {
           const store = db.createObjectStore('rendezvous', { keyPath: 'id' });
           store.createIndex('scheduledFor', 'scheduledFor');
           store.createIndex('direction', 'direction');
+        }
+        if (!db.objectStoreNames.contains('prints')) {
+          const store = db.createObjectStore('prints', { keyPath: 'id' });
+          store.createIndex('appointmentId', 'appointmentId');
+          store.createIndex('photoId', 'photoId');
+          store.createIndex('deliveredAt', 'deliveredAt');
+        }
+        if (!db.objectStoreNames.contains('possession')) {
+          const store = db.createObjectStore('possession', { keyPath: 'key' });
+          store.createIndex('photoId', 'photoId');
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -149,6 +173,110 @@ export class RendezvousStore {
     for (const id of ids) store.delete(id);
     await transactionToPromise(tx);
     return ids;
+  }
+
+  async listPrints(): Promise<StoredPrint[]> {
+    const db = await this.open();
+    const tx = db.transaction('prints', 'readonly');
+    const prints = await requestToPromise<StoredPrint[]>(tx.objectStore('prints').getAll());
+    return prints.sort((a, b) => {
+      const arrival = b.deliveredAt - a.deliveredAt;
+      return arrival !== 0 ? arrival : a.id.localeCompare(b.id);
+    });
+  }
+
+  async putPrint(print: StoredPrint): Promise<void> {
+    const db = await this.open();
+    const tx = db.transaction('prints', 'readwrite');
+    tx.objectStore('prints').put(print);
+    await transactionToPromise(tx);
+  }
+
+  async deletePrint(id: string): Promise<void> {
+    const db = await this.open();
+    const tx = db.transaction('prints', 'readwrite');
+    tx.objectStore('prints').delete(id);
+    await transactionToPromise(tx);
+  }
+
+  async getPrint(id: string): Promise<StoredPrint | null> {
+    const db = await this.open();
+    const tx = db.transaction('prints', 'readonly');
+    const value = await requestToPromise<StoredPrint | undefined>(
+      tx.objectStore('prints').get(id),
+    );
+    return value ?? null;
+  }
+
+  async listPrintsForPhoto(photoId: string): Promise<StoredPrint[]> {
+    const db = await this.open();
+    const tx = db.transaction('prints', 'readonly');
+    const index = tx.objectStore('prints').index('photoId');
+    return requestToPromise<StoredPrint[]>(index.getAll(photoId));
+  }
+
+  async deletePrintsForHuman(peerId: string): Promise<string[]> {
+    const prints = await this.listPrints();
+    const ids = prints.filter((print) => print.peerId === peerId).map((print) => print.id);
+    if (ids.length === 0) return ids;
+    const db = await this.open();
+    const tx = db.transaction('prints', 'readwrite');
+    const store = tx.objectStore('prints');
+    for (const id of ids) store.delete(id);
+    await transactionToPromise(tx);
+    return ids;
+  }
+
+  async listPossessions(): Promise<StoredPossession[]> {
+    const db = await this.open();
+    const tx = db.transaction('possession', 'readonly');
+    return requestToPromise<StoredPossession[]>(tx.objectStore('possession').getAll());
+  }
+
+  async putPossession(record: StoredPossession): Promise<void> {
+    const db = await this.open();
+    const tx = db.transaction('possession', 'readwrite');
+    tx.objectStore('possession').put(record);
+    await transactionToPromise(tx);
+  }
+
+  async deletePossessionsForPhoto(photoId: string): Promise<void> {
+    const db = await this.open();
+    const tx = db.transaction('possession', 'readwrite');
+    const index = tx.objectStore('possession').index('photoId');
+    const keys = await requestToPromise<IDBValidKey[]>(index.getAllKeys(photoId));
+    const store = tx.objectStore('possession');
+    for (const key of keys) store.delete(key);
+    await transactionToPromise(tx);
+  }
+
+  async getAppOutbox(): Promise<QueuedAppMessage[]> {
+    const db = await this.open();
+    const tx = db.transaction('meta', 'readonly');
+    const value = await requestToPromise<
+      { key: string; value: QueuedAppMessage[] } | undefined
+    >(tx.objectStore('meta').get(APP_OUTBOX_KEY));
+    return value?.value ?? [];
+  }
+
+  async addAppOutbox(entry: QueuedAppMessage): Promise<void> {
+    const entries = await this.getAppOutbox();
+    if (entries.some((candidate) => candidate.id === entry.id)) return;
+    entries.push(entry);
+    const db = await this.open();
+    const tx = db.transaction('meta', 'readwrite');
+    tx.objectStore('meta').put({ key: APP_OUTBOX_KEY, value: entries });
+    await transactionToPromise(tx);
+  }
+
+  async removeAppOutbox(id: string): Promise<void> {
+    const entries = await this.getAppOutbox();
+    const next = entries.filter((entry) => entry.id !== id);
+    if (next.length === entries.length) return;
+    const db = await this.open();
+    const tx = db.transaction('meta', 'readwrite');
+    tx.objectStore('meta').put({ key: APP_OUTBOX_KEY, value: next });
+    await transactionToPromise(tx);
   }
 
   async getPendingJoins(): Promise<JoinRequest[]> {

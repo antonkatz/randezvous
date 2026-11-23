@@ -42,11 +42,60 @@ export type RendezvousStatus =
   | 'delivered'
   | 'failed';
 
+export interface VoiceNoteAttachment {
+  blob: Blob;
+  name: string;
+  type: string;
+  size: number;
+  /** Recorded duration in milliseconds, never more than 60,000. */
+  durationMs: number;
+}
+
 export interface PhotoAttachment {
   blob: Blob;
   name: string;
   type: string;
   size: number;
+  /** Stable content-derived id shared by every local re-share. */
+  photoId: string;
+  note: VoiceNoteAttachment | null;
+}
+
+/** One delivered print on the wall. Re-shares create independent prints. */
+export interface StoredPrint {
+  id: string;
+  appointmentId: string;
+  photoId: string;
+  direction: RendezvousDirection;
+  peerId: string;
+  peerName: string;
+  photo: PhotoAttachment;
+  deliveredAt: number;
+  createdAt: number;
+}
+
+export type PossessionState = 'held' | 'released';
+
+/** Latest signed possession statement from one holder about one photo. */
+export interface StoredPossession {
+  key: string;
+  photoId: string;
+  holder: string;
+  state: PossessionState;
+  at: number;
+  appointmentId: string | null;
+  /** Distinct delivery appointments seen for this holder and photo. */
+  copies: number;
+  updatedAt: number;
+  /** Last time the owner asked this holder for a fresh check. */
+  checkedAt: number | null;
+}
+
+export interface PossessionView extends StoredPossession {
+  online: boolean;
+  connected: boolean;
+  /** True when a fresh answer arrived during this browser session. */
+  confirmedNow: boolean;
 }
 
 export interface StoredRendezvous {
@@ -59,11 +108,51 @@ export interface StoredRendezvous {
   status: RendezvousStatus;
   /** Present on outgoing appointments from the start; on incoming after receipt. */
   photo: PhotoAttachment | null;
+  /** A reciprocal photo this browser attached to someone else's appointment. */
+  contribution: PhotoAttachment | null;
+  /** A reciprocal photo received from the other participant (outgoing record). */
+  reciprocal: PhotoAttachment | null;
+  /** Set when the first handoff session starts; contributions lock afterwards. */
+  sessionStartedAt: number | null;
+  /** Set when a live audio minute started successfully. */
+  audioWindowUsedAt: number | null;
   announcedAt: number | null;
   lastAttemptAt: number | null;
   deliveredAt: number | null;
   error: string | null;
 }
+
+export type AudioPhase =
+  | 'idle'
+  | 'requesting'
+  | 'incoming'
+  | 'connecting'
+  | 'live'
+  | 'ended'
+  | 'declined'
+  | 'error';
+
+export interface AudioSnapshot {
+  rendezvousId: string | null;
+  peerId: string | null;
+  peerName: string;
+  phase: AudioPhase;
+  muted: boolean;
+  remoteMuted: boolean;
+  remainingMs: number;
+  message: string | null;
+}
+
+export const IDLE_AUDIO: AudioSnapshot = Object.freeze({
+  rendezvousId: null,
+  peerId: null,
+  peerName: '',
+  phase: 'idle',
+  muted: false,
+  remoteMuted: false,
+  remainingMs: 0,
+  message: null,
+});
 
 export interface SignalNetworkInfo {
   remoteFamily: 'IPv4' | 'IPv6' | 'unknown';
@@ -104,6 +193,9 @@ export interface RendezvousSnapshot {
   lastTransferDiagnostics: TransferDiagnostics | null;
   humans: Human[];
   rendezvous: StoredRendezvous[];
+  prints: StoredPrint[];
+  possessions: PossessionView[];
+  audio: AudioSnapshot;
 }
 
 export interface RendezvousError extends Error {
@@ -132,6 +224,10 @@ export type NoticeCode =
   | 'handshake-failed'
   | 'transfer-delivered'
   | 'photo-received'
+  | 'audio-error'
+  | 'audio-declined'
+  | 'audio-ended'
+  | 'possession-updated'
   | 'server-error'
   | 'storage-error'
   | 'key-mismatch'
@@ -158,6 +254,20 @@ export interface CircleRelayEvent {
   message: unknown;
 }
 
+export interface AppRelayEvent {
+  fromId: string;
+  message: unknown;
+}
+
+export interface CircleRendezvousEvent {
+  fromId: string;
+  invite: unknown;
+}
+
+export interface AudioEvent {
+  audio: AudioSnapshot;
+}
+
 export interface TransferEvent {
   rendezvousId: string;
   peerId: string;
@@ -174,6 +284,9 @@ export interface RendezvousClientEvents {
   appointment: AppointmentEvent;
   transfer: TransferEvent;
   circle: CircleRelayEvent;
+  app: AppRelayEvent;
+  circleRendezvous: CircleRendezvousEvent;
+  audio: AudioEvent;
 }
 
 export interface RendezvousClientOptions {
@@ -188,5 +301,16 @@ export interface ScheduleInput {
   humanId: string;
   photo: File | Blob;
   fileName?: string;
+  /** Stable id when the photo is reused from the wall. */
+  photoId?: string;
+  note?: VoiceNoteAttachment | null;
   scheduledFor: number;
+}
+
+export interface ContributionInput {
+  rendezvousId: string;
+  photo: File | Blob;
+  fileName?: string;
+  photoId?: string;
+  note?: VoiceNoteAttachment | null;
 }

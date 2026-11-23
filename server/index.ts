@@ -16,6 +16,7 @@ import {
 } from '../src/lib/crypto';
 import { verifyInviteToken, verifyJoinRequest } from '../src/lib/invite';
 import type {
+  CircleRendezvousInvite,
   ClientSignalMessage,
   JoinRequest,
   PresenceEntry,
@@ -24,7 +25,12 @@ import type {
   ServerSignalMessage,
 } from '../src/lib/protocol';
 import type { SignalNetworkInfo } from '../src/lib/types';
-import { SignalStore, type StoredRemoval } from './store';
+import {
+  SignalStore,
+  type StoredAppMessage,
+  type StoredCircleRendezvous,
+  type StoredRemoval,
+} from './store';
 
 // Load a local .env when present. Real deployment environment variables win.
 try {
@@ -43,6 +49,9 @@ const DIST_DIR = resolve(process.cwd(), 'dist');
 const CHALLENGE_TTL_MS = 60_000;
 const MAX_PENDING_RENDEZVOUS_PER_SENDER = 100;
 const MAX_CIRCLE_RELAY_BYTES = 512_000;
+const MAX_APP_RELAY_BYTES = 256_000;
+const MAX_CIRCLE_INVITE_BYTES = 512_000;
+const APP_MESSAGE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // A queued join is retried until the recipient acknowledges it. This heals
 // dropped messages, transient client storage failures, and silently dead
 // mobile sockets that the server still believes are online.
@@ -193,6 +202,24 @@ function deliverPending(target: ClientState): void {
           scheduledFor: rendezvous.scheduledFor,
           createdAt: rendezvous.createdAt,
         },
+      });
+    }
+  }
+  for (const message of store.appMessages) {
+    if (message.toId === target.id) {
+      send(target.ws, {
+        type: 'app:relay',
+        fromId: message.fromId,
+        message: message.message,
+        queuedId: message.id,
+      });
+    }
+  }
+  for (const entry of store.circleRendezvous) {
+    if (entry.invite.recipients.includes(target.id)) {
+      send(target.ws, {
+        type: 'circle:rendezvous:notice',
+        invite: entry.invite,
       });
     }
   }
@@ -472,6 +499,127 @@ async function handleRendezvousCreate(state: ClientState, input: unknown): Promi
   }
 }
 
+function sanitizeAppMessage(value: unknown): unknown | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  try {
+    return JSON.stringify(value).length > MAX_APP_RELAY_BYTES ? null : value;
+  } catch {
+    return null;
+  }
+}
+
+function handleAppRelay(
+  state: ClientState,
+  to: unknown,
+  message: unknown,
+  queue: unknown,
+): void {
+  if (!state.id || typeof to !== 'string' || !isPeerId(to) || to === state.id) return;
+  const payload = sanitizeAppMessage(message);
+  if (!payload) return;
+  const target = online.get(to);
+  const targetState = target ? clients.get(target) : null;
+  const mutual =
+    Boolean(target && targetState?.authenticated) &&
+    state.subscriptions.has(to) &&
+    targetState!.subscriptions.has(state.id);
+
+  if (target && mutual) {
+    send(target, { type: 'app:relay', fromId: state.id, message: payload });
+    return;
+  }
+  if (queue !== true) return;
+  if (!state.subscriptions.has(to)) return;
+  const now = Date.now();
+  const stored: StoredAppMessage = {
+    id: `ap_${randomToken(12)}`,
+    fromId: state.id,
+    toId: to,
+    message: payload,
+    createdAt: now,
+    expiresAt: now + APP_MESSAGE_TTL_MS,
+  };
+  store.addAppMessage(stored);
+  void store.persist();
+  if (target) {
+    send(target, {
+      type: 'app:relay',
+      fromId: state.id,
+      message: payload,
+      queuedId: stored.id,
+    });
+  }
+}
+
+function sanitizeCircleRendezvousInvite(
+  value: unknown,
+  state: ClientState,
+): CircleRendezvousInvite | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const invite = value as Partial<CircleRendezvousInvite>;
+  if (
+    typeof invite.id !== 'string' ||
+    !/^ri_[A-Za-z0-9_-]{8,64}$/u.test(invite.id) ||
+    typeof invite.circleId !== 'string' ||
+    invite.circleId.length === 0 ||
+    invite.circleId.length > 512 ||
+    invite.fromId !== state.id ||
+    typeof invite.scheduledAt !== 'number' ||
+    !Number.isFinite(invite.scheduledAt) ||
+    invite.scheduledAt < 0 ||
+    invite.scheduledAt > Date.now() + 10 * 365 * 24 * 60 * 60 * 1000 ||
+    !Array.isArray(invite.recipients) ||
+    invite.recipients.length === 0 ||
+    invite.recipients.length > 500 ||
+    !invite.recipients.every(
+      (id): id is string => typeof id === 'string' && isPeerId(id) && id !== state.id,
+    ) ||
+    !invite.plan ||
+    typeof invite.plan !== 'object'
+  ) {
+    return null;
+  }
+  try {
+    if (JSON.stringify(invite.plan).length > MAX_CIRCLE_INVITE_BYTES) return null;
+  } catch {
+    return null;
+  }
+  return {
+    id: invite.id,
+    circleId: invite.circleId,
+    fromId: state.id,
+    fromName: state.name,
+    recipients: [...new Set(invite.recipients)],
+    plan: invite.plan,
+    scheduledAt: invite.scheduledAt,
+    createdAt: Date.now(),
+  };
+}
+
+async function handleCircleRendezvousCreate(state: ClientState, value: unknown): Promise<void> {
+  const invite = sanitizeCircleRendezvousInvite(value, state);
+  if (!invite) {
+    fail(state.ws, 'invalid-circle-invite', 'Invalid circle rendezvous invite.');
+    return;
+  }
+  if (invite.scheduledAt <= Date.now()) {
+    fail(state.ws, 'expired-circle-invite', 'That circle rendezvous has already happened.');
+    return;
+  }
+  const entry: StoredCircleRendezvous = {
+    invite,
+    expiresAt: invite.scheduledAt,
+  };
+  store.addCircleRendezvous(entry);
+  await store.persist();
+  send(state.ws, { type: 'circle:rendezvous:created', id: invite.id });
+  for (const recipient of invite.recipients) {
+    const target = online.get(recipient);
+    if (!target) continue;
+    send(target, { type: 'circle:rendezvous:notice', invite });
+  }
+}
+
 async function handleMessage(ws: WebSocket, message: ClientSignalMessage): Promise<void> {
   const state = clients.get(ws);
   if (!state) return;
@@ -582,6 +730,21 @@ async function handleMessage(ws: WebSocket, message: ClientSignalMessage): Promi
       });
       break;
     }
+    case 'app:relay':
+      handleAppRelay(state, message.to, message.message, message.queue);
+      break;
+    case 'app:ack': {
+      if (typeof message.queuedId !== 'string') return;
+      const stored = store.appMessages.find((entry) => entry.id === message.queuedId);
+      if (stored?.toId === state.id) {
+        store.removeAppMessage(message.queuedId);
+        void store.persist();
+      }
+      break;
+    }
+    case 'circle:rendezvous:create':
+      await handleCircleRendezvousCreate(state, message.invite);
+      break;
     case 'rtc': {
       if (
         typeof message.to !== 'string' ||

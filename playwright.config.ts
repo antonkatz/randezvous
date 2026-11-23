@@ -13,7 +13,14 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     trace: 'retain-on-failure',
-    launchOptions: browserPath ? { executablePath: browserPath } : {},
+    launchOptions: {
+      ...(browserPath ? { executablePath: browserPath } : {}),
+      args: [
+        '--use-fake-ui-for-media-stream',
+        '--use-fake-device-for-media-stream',
+        '--autoplay-policy=no-user-gesture-required',
+      ],
+    },
   },
   webServer: {
     command:

@@ -1,6 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { JoinRequest, RendezvousWire } from '../src/lib/protocol';
+import type {
+  CircleRendezvousInvite,
+  JoinRequest,
+  RendezvousWire,
+} from '../src/lib/protocol';
 
 export interface StoredRemoval {
   id: string;
@@ -11,18 +15,42 @@ export interface StoredRemoval {
   revokedInvites: string[];
 }
 
+export interface StoredAppMessage {
+  id: string;
+  fromId: string;
+  toId: string;
+  message: unknown;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface StoredCircleRendezvous {
+  invite: CircleRendezvousInvite;
+  expiresAt: number;
+}
+
 interface StoreData {
   version: 1;
   joins: JoinRequest[];
   rendezvous: RendezvousWire[];
   removals: StoredRemoval[];
   revokedInvites: string[];
+  appMessages: StoredAppMessage[];
+  circleRendezvous: StoredCircleRendezvous[];
 }
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function emptyStore(): StoreData {
-  return { version: 1, joins: [], rendezvous: [], removals: [], revokedInvites: [] };
+  return {
+    version: 1,
+    joins: [],
+    rendezvous: [],
+    removals: [],
+    revokedInvites: [],
+    appMessages: [],
+    circleRendezvous: [],
+  };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -61,6 +89,12 @@ export class SignalStore {
       data.revokedInvites = Array.isArray(parsed.revokedInvites)
         ? parsed.revokedInvites.filter((hash): hash is string => typeof hash === 'string')
         : [];
+      data.appMessages = Array.isArray(parsed.appMessages)
+        ? parsed.appMessages.filter(isAppMessage)
+        : [];
+      data.circleRendezvous = Array.isArray(parsed.circleRendezvous)
+        ? parsed.circleRendezvous.filter(isStoredCircleRendezvous)
+        : [];
       this.data = data;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -77,6 +111,13 @@ export class SignalStore {
     this.data.removals = this.data.removals.filter((removal) => removal.createdAt > cutoff);
     this.data.rendezvous = this.data.rendezvous.filter(
       (rendezvous) => rendezvous.createdAt > cutoff,
+    );
+    const now = Date.now();
+    this.data.appMessages = this.data.appMessages.filter(
+      (message) => message.expiresAt > now,
+    );
+    this.data.circleRendezvous = this.data.circleRendezvous.filter(
+      (entry) => entry.expiresAt > now,
     );
   }
 
@@ -97,6 +138,54 @@ export class SignalStore {
       (removal) => removal.createdAt > Date.now() - RETENTION_MS,
     );
     return this.data.removals;
+  }
+
+  get appMessages(): readonly StoredAppMessage[] {
+    const now = Date.now();
+    this.data.appMessages = this.data.appMessages.filter(
+      (message) => message.expiresAt > now,
+    );
+    return this.data.appMessages;
+  }
+
+  get circleRendezvous(): readonly StoredCircleRendezvous[] {
+    const now = Date.now();
+    this.data.circleRendezvous = this.data.circleRendezvous.filter(
+      (entry) => entry.expiresAt > now,
+    );
+    return this.data.circleRendezvous;
+  }
+
+  addAppMessage(message: StoredAppMessage): void {
+    if (!this.data.appMessages.some((entry) => entry.id === message.id)) {
+      this.data.appMessages.push(message);
+    }
+  }
+
+  removeAppMessage(id: string): void {
+    this.data.appMessages = this.data.appMessages.filter((entry) => entry.id !== id);
+  }
+
+  addCircleRendezvous(entry: StoredCircleRendezvous): void {
+    if (!this.data.circleRendezvous.some((existing) => existing.invite.id === entry.invite.id)) {
+      this.data.circleRendezvous.push(entry);
+    }
+  }
+
+  removeCircleRendezvous(id: string): void {
+    this.data.circleRendezvous = this.data.circleRendezvous.filter(
+      (entry) => entry.invite.id !== id,
+    );
+  }
+
+  removeCircleRendezvousForPair(first: string, second: string): void {
+    this.data.circleRendezvous = this.data.circleRendezvous.filter(
+      (entry) =>
+        !(
+          (entry.invite.fromId === first && entry.invite.recipients.includes(second)) ||
+          (entry.invite.fromId === second && entry.invite.recipients.includes(first))
+        ),
+    );
   }
 
   addJoin(join: JoinRequest): void {
@@ -154,6 +243,14 @@ export class SignalStore {
           (rendezvous.fromId === second && rendezvous.toId === first)
         ),
     );
+    this.data.appMessages = this.data.appMessages.filter(
+      (message) =>
+        !(
+          (message.fromId === first && message.toId === second) ||
+          (message.fromId === second && message.toId === first)
+        ),
+    );
+    this.removeCircleRendezvousForPair(first, second);
   }
 
   async persist(): Promise<void> {
@@ -201,5 +298,40 @@ function isRemoval(value: unknown): value is StoredRemoval {
     typeof value.fromId === 'string' &&
     typeof value.toId === 'string' &&
     typeof value.createdAt === 'number'
+  );
+}
+
+function isAppMessage(value: unknown): value is StoredAppMessage {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.fromId === 'string' &&
+    typeof value.toId === 'string' &&
+    typeof value.createdAt === 'number' &&
+    typeof value.expiresAt === 'number' &&
+    'message' in value
+  );
+}
+
+function isCircleRendezvousInvite(value: unknown): value is CircleRendezvousInvite {
+  if (!isObject(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.circleId === 'string' &&
+    typeof value.fromId === 'string' &&
+    typeof value.fromName === 'string' &&
+    Array.isArray(value.recipients) &&
+    value.recipients.every((id) => typeof id === 'string') &&
+    typeof value.scheduledAt === 'number' &&
+    typeof value.createdAt === 'number' &&
+    'plan' in value
+  );
+}
+
+function isStoredCircleRendezvous(value: unknown): value is StoredCircleRendezvous {
+  return (
+    isObject(value) &&
+    isCircleRendezvousInvite(value.invite) &&
+    typeof value.expiresAt === 'number'
   );
 }

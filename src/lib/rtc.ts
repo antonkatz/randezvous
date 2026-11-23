@@ -9,9 +9,11 @@ import type {
   IceFamilyCounts,
   IpFamily,
   TransferDiagnostics,
+  VoiceNoteAttachment,
 } from './types';
 
 export const MAX_PHOTO_BYTES = 25 * 1024 * 1024;
+export const MAX_NOTE_BYTES = 8 * 1024 * 1024;
 const CHUNK_SIZE = 64 * 1024;
 const HIGH_WATER_MARK = 4 * 1024 * 1024;
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -21,19 +23,45 @@ const ACK_TIMEOUT_MS = 20_000;
 const RTC_AUTH_DOMAIN = 'rendezvous/rtc-auth/v1';
 
 export type TransferPhase = 'connecting' | 'progress' | 'complete' | 'error';
+export type PayloadDirection = 'primary' | 'reciprocal';
 
-export interface TransferCallbacks {
-  onPhase: (phase: TransferPhase, transferred: number, total: number) => void;
-  onError: (message: string) => void;
-  onSenderComplete: () => void;
-  onReceiverComplete: (photo: Blob, meta: PhotoMeta) => void;
-  onDiagnostics?: (diagnostics: TransferDiagnostics) => void;
+export interface NoteMeta {
+  name: string;
+  type: string;
+  size: number;
+  durationMs: number;
 }
 
 export interface PhotoMeta {
   name: string;
   type: string;
   size: number;
+  photoId?: string;
+  note?: NoteMeta | null;
+}
+
+export interface MediaPayload {
+  photo: Blob;
+  meta: PhotoMeta;
+  note: VoiceNoteAttachment | null;
+  photoId: string;
+}
+
+export interface TransferCallbacks {
+  onPhase: (phase: TransferPhase, transferred: number, total: number) => void;
+  onError: (message: string, direction: PayloadDirection) => void;
+  onSenderComplete: () => void | Promise<void>;
+  onReceiverComplete: (payload: MediaPayload) => void | Promise<void>;
+  onReciprocalComplete?: (payload: MediaPayload) => void | Promise<void>;
+  /** Fired only after the primary ACK has gone out over the wire. */
+  onReceiverAcked?: (payload: MediaPayload) => void;
+  /** Fired after we ACK the reciprocal payload we received. */
+  onReciprocalAcked?: (payload: MediaPayload) => void;
+  /** Fired when our own reciprocal contribution was ACKed by the peer. */
+  onContributionAcked?: () => void;
+  onPeerContribution?: (present: boolean) => void;
+  onDiagnostics?: (diagnostics: TransferDiagnostics) => void;
+  onClosed?: () => void;
 }
 
 interface CommonOptions {
@@ -57,13 +85,28 @@ interface AuthMessage {
   signature: string;
 }
 
-interface SenderOptions extends CommonOptions {
+interface PayloadOptions {
   photo: Blob;
   meta: PhotoMeta;
+  note: VoiceNoteAttachment | null;
 }
+
+interface SenderOptions extends CommonOptions, PayloadOptions {}
 
 interface ReceiverOptions extends CommonOptions {
   offerSdp: string;
+  contribution: PayloadOptions | null;
+}
+
+interface IncomingPayload {
+  direction: PayloadDirection;
+  meta: PhotoMeta;
+  noteMeta: NoteMeta | null;
+  chunks: ArrayBuffer[];
+  noteChunks: ArrayBuffer[];
+  photoBytes: number;
+  noteBytes: number;
+  completed: boolean;
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -78,23 +121,24 @@ function parseMessage(value: string): unknown {
   }
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function isAuthMessage(value: unknown, transferId: string): value is AuthMessage {
-  if (!value || typeof value !== 'object') return false;
-  const message = value as Partial<AuthMessage>;
+  if (!isObject(value)) return false;
   return (
-    message.kind === 'auth' &&
-    message.transferId === transferId &&
-    typeof message.from === 'string' &&
-    typeof message.to === 'string' &&
-    typeof message.localFingerprint === 'string' &&
-    typeof message.remoteFingerprint === 'string' &&
-    typeof message.signature === 'string'
+    value.kind === 'auth' &&
+    value.transferId === transferId &&
+    typeof value.from === 'string' &&
+    typeof value.to === 'string' &&
+    typeof value.localFingerprint === 'string' &&
+    typeof value.remoteFingerprint === 'string' &&
+    typeof value.signature === 'string'
   );
 }
 
-function iceConnection(
-  iceServers: RTCIceServer[],
-): RTCConfiguration {
+function iceConnection(iceServers: RTCIceServer[]): RTCConfiguration {
   return {
     iceServers,
     bundlePolicy: 'max-bundle',
@@ -126,6 +170,60 @@ function countLocalCandidate(counts: IceFamilyCounts, candidate: RTCIceCandidate
   else counts.unknown += 1;
 }
 
+function noteMeta(note: VoiceNoteAttachment | null): NoteMeta | null {
+  if (!note) return null;
+  return {
+    name: note.name,
+    type: note.type,
+    size: note.size,
+    durationMs: note.durationMs,
+  };
+}
+
+function validateMeta(value: unknown): { meta: PhotoMeta; noteMeta: NoteMeta | null } | null {
+  if (!isObject(value)) return null;
+  const name = typeof value.name === 'string' ? value.name.slice(0, 200) : 'photograph';
+  const type = typeof value.type === 'string' ? value.type : '';
+  const size = typeof value.size === 'number' ? value.size : 0;
+  if (!type.startsWith('image/') || !Number.isFinite(size) || size <= 0 || size > MAX_PHOTO_BYTES) {
+    return null;
+  }
+  const rawNote = value.note;
+  let validNote: NoteMeta | null = null;
+  if (rawNote !== null && rawNote !== undefined) {
+    if (!isObject(rawNote)) return null;
+    const noteType = typeof rawNote.type === 'string' ? rawNote.type : '';
+    const noteSize = typeof rawNote.size === 'number' ? rawNote.size : 0;
+    const durationMs = typeof rawNote.durationMs === 'number' ? rawNote.durationMs : 0;
+    if (
+      !noteType.startsWith('audio/') ||
+      !Number.isFinite(noteSize) ||
+      noteSize <= 0 ||
+      noteSize > MAX_NOTE_BYTES ||
+      !Number.isFinite(durationMs) ||
+      durationMs <= 0 ||
+      durationMs > 61_000
+    ) {
+      return null;
+    }
+    validNote = {
+      name: typeof rawNote.name === 'string' ? rawNote.name.slice(0, 200) : 'voice note',
+      type: noteType,
+      size: noteSize,
+      durationMs,
+    };
+  }
+  return {
+    meta: {
+      name,
+      type,
+      size,
+      ...(typeof value.photoId === 'string' ? { photoId: value.photoId } : {}),
+      note: validNote,
+    },
+    noteMeta: validNote,
+  };
+}
 
 abstract class BaseTransfer {
   protected readonly options: CommonOptions;
@@ -144,6 +242,7 @@ abstract class BaseTransfer {
   private connectTimer: number | null = null;
   protected authTimer: number | null = null;
   private disconnectTimer: number | null = null;
+  private closedReported = false;
 
   protected constructor(options: CommonOptions) {
     this.options = options;
@@ -152,25 +251,41 @@ abstract class BaseTransfer {
   abstract start(): Promise<void>;
 
   close(): void {
+    if (this.finished) return;
     this.finished = true;
     this.clearTimers();
     if (this.channel) {
       this.channel.onmessage = null;
       this.channel.onopen = null;
       this.channel.onclose = null;
-      this.channel.close();
+      try {
+        this.channel.close();
+      } catch {
+        // Best effort.
+      }
       this.channel = null;
     }
     if (this.pc) {
       this.pc.onicecandidate = null;
       this.pc.ondatachannel = null;
       this.pc.onconnectionstatechange = null;
-      this.pc.close();
+      try {
+        this.pc.close();
+      } catch {
+        // Best effort.
+      }
       this.pc = null;
     }
+    this.reportClosed();
   }
 
-  protected fail(message: string): void {
+  private reportClosed(): void {
+    if (this.closedReported) return;
+    this.closedReported = true;
+    this.options.callbacks.onClosed?.();
+  }
+
+  protected fail(message: string, direction: PayloadDirection = 'primary'): void {
     if (this.finished) return;
     this.finished = true;
     this.clearTimers();
@@ -182,7 +297,8 @@ abstract class BaseTransfer {
     }
     this.channel = null;
     this.pc = null;
-    this.options.callbacks.onError(message);
+    this.options.callbacks.onError(message, direction);
+    this.reportClosed();
   }
 
   protected preparePeerConnection(): RTCPeerConnection {
@@ -330,6 +446,11 @@ abstract class BaseTransfer {
     channel.onmessage = (event) => this.handleChannelMessage(event.data);
   }
 
+  protected sendControl(message: unknown): void {
+    if (this.channel?.readyState !== 'open') return;
+    this.channel.send(JSON.stringify(message));
+  }
+
   private async sendAuthentication(): Promise<void> {
     const channel = this.channel;
     const { transferId, localPeerId, remotePeerId } = this.options;
@@ -393,10 +514,11 @@ abstract class BaseTransfer {
 
   protected abstract onChannelOpen(): void;
   protected abstract onAuthenticated(): void;
+  protected abstract onControlMessage(message: Record<string, unknown>): void;
+  protected abstract onBinaryMessage(data: ArrayBuffer): void;
 
   private sendReady(): void {
-    if (this.channel?.readyState !== 'open') return;
-    this.channel.send(JSON.stringify({ kind: 'auth-ready', transferId: this.options.transferId }));
+    this.sendControl({ kind: 'auth-ready', transferId: this.options.transferId });
   }
 
   protected handleChannelMessage(data: unknown): void {
@@ -420,14 +542,11 @@ abstract class BaseTransfer {
         });
         return;
       }
-      this.handleProtocolMessage(message);
+      if (isObject(message)) this.onControlMessage(message);
       return;
     }
-    this.handleBinaryMessage(data);
+    if (data instanceof ArrayBuffer) this.onBinaryMessage(data);
   }
-
-  protected handleProtocolMessage(_message: unknown): void {}
-  protected handleBinaryMessage(_data: unknown): void {}
 
   protected clearConnectTimer(): void {
     if (this.connectTimer !== null) {
@@ -457,12 +576,95 @@ abstract class BaseTransfer {
   }
 }
 
+interface PayloadSender {
+  sendPayload(direction: PayloadDirection, payload: PayloadOptions): Promise<void>;
+}
+
+async function streamPayload(
+  channel: RTCDataChannel,
+  transferId: string,
+  direction: PayloadDirection,
+  payload: PayloadOptions,
+  onProgress: (sent: number, total: number) => void,
+  isFinished: () => boolean,
+  fail: (message: string, direction: PayloadDirection) => void,
+): Promise<void> {
+  const photoBuffer = await payload.photo.arrayBuffer();
+  const noteBuffer = payload.note ? await payload.note.blob.arrayBuffer() : null;
+  const photoSize = photoBuffer.byteLength;
+  const total = photoSize + (noteBuffer?.byteLength ?? 0);
+
+  channel.send(
+    JSON.stringify({
+      kind: 'payload-meta',
+      transferId,
+      direction,
+      name: payload.meta.name,
+      type: payload.meta.type,
+      size: payload.meta.size,
+      photoId: payload.meta.photoId,
+      note: noteMeta(payload.note),
+    }),
+  );
+
+  let sent = 0;
+  let inactivityTimer = window.setTimeout(() => {
+    fail('The transfer stalled.', direction);
+  }, TRANSFER_INACTIVITY_MS);
+
+  const sendBuffer = async (buffer: ArrayBuffer): Promise<void> => {
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      if (channel.readyState !== 'open') throw new Error('channel closed');
+      while (channel.bufferedAmount > HIGH_WATER_MARK && channel.readyState === 'open') {
+        await wait(12);
+        if (isFinished()) return;
+      }
+      const end = Math.min(offset + CHUNK_SIZE, buffer.byteLength);
+      channel.send(buffer.slice(offset, end));
+      sent += end - offset;
+      offset = end;
+      window.clearTimeout(inactivityTimer);
+      inactivityTimer = window.setTimeout(() => {
+        fail('The transfer stalled.', direction);
+      }, TRANSFER_INACTIVITY_MS);
+      onProgress(sent, total);
+      if (offset % (CHUNK_SIZE * 8) === 0) await wait(0);
+    }
+  };
+
+  try {
+    await sendBuffer(photoBuffer);
+    if (noteBuffer) await sendBuffer(noteBuffer);
+    window.clearTimeout(inactivityTimer);
+    if (isFinished()) return;
+    channel.send(
+      JSON.stringify({
+        kind: 'payload-complete',
+        transferId,
+        direction,
+      }),
+    );
+  } catch {
+    window.clearTimeout(inactivityTimer);
+    throw new Error('The direct connection dropped during the transfer.');
+  }
+}
+
 export class SenderTransfer extends BaseTransfer {
   private readonly senderOptions: SenderOptions;
   private ackTimer: number | null = null;
   private peerReady = false;
   private sending = false;
   private readyTimer: number | null = null;
+  private primaryAcked = false;
+  private peerContribution = false;
+  private reciprocalMeta: { meta: PhotoMeta; noteMeta: NoteMeta | null } | null = null;
+  private reciprocalChunks: ArrayBuffer[] = [];
+  private reciprocalNoteChunks: ArrayBuffer[] = [];
+  private reciprocalPhotoBytes = 0;
+  private reciprocalNoteBytes = 0;
+  private reciprocalCompleted = false;
 
   constructor(options: SenderOptions) {
     super(options);
@@ -473,6 +675,10 @@ export class SenderTransfer extends BaseTransfer {
     if (this.readyTimer !== null) {
       window.clearTimeout(this.readyTimer);
       this.readyTimer = null;
+    }
+    if (this.ackTimer !== null) {
+      window.clearTimeout(this.ackTimer);
+      this.ackTimer = null;
     }
     super.close();
   }
@@ -573,121 +779,220 @@ export class SenderTransfer extends BaseTransfer {
         }
       }, 10_000);
     }
-    this.maybeSendPhoto();
+    this.maybeSendPrimary();
   }
 
-  private maybeSendPhoto(): void {
+  private maybeSendPrimary(): void {
     if (this.sending || !this.peerAuthenticated || !this.peerReady) return;
     this.sending = true;
     if (this.readyTimer !== null) {
       window.clearTimeout(this.readyTimer);
       this.readyTimer = null;
     }
-    void this.sendPhoto();
+    void this.sendPrimary();
   }
 
-  protected handleProtocolMessage(message: unknown): void {
-    if (!message || typeof message !== 'object') return;
-    const kind = (message as { kind?: unknown }).kind;
+  protected onControlMessage(message: Record<string, unknown>): void {
+    const kind = message.kind;
     if (kind === 'auth-ready') {
       this.peerReady = true;
-      this.maybeSendPhoto();
+      this.maybeSendPrimary();
+      return;
+    }
+    if (kind === 'reciprocal-presence') {
+      this.peerContribution = message.present === true;
+      this.options.callbacks.onPeerContribution?.(this.peerContribution);
+      if (this.primaryAcked && !this.peerContribution) this.finish();
       return;
     }
     if (kind === 'ack') {
-      if (!this.peerAuthenticated) return;
-      if (this.ackTimer !== null) {
-        window.clearTimeout(this.ackTimer);
-        this.ackTimer = null;
+      if (message.direction === 'primary') {
+        this.onPrimaryAck();
+      } else if (message.direction === 'reciprocal') {
+        this.onReciprocalAck();
       }
-      if (this.finished) return;
-      this.deliveryCompleted = true;
-      void this.emitDiagnostics(true);
-      if (this.readyTimer !== null) {
-        window.clearTimeout(this.readyTimer);
-        this.readyTimer = null;
-      }
-      this.options.callbacks.onPhase(
-        'complete',
-        this.senderOptions.meta.size,
-        this.senderOptions.meta.size,
-      );
-      this.options.callbacks.onSenderComplete();
-      window.setTimeout(() => this.close(), 250);
+      return;
+    }
+    if (kind === 'payload-meta' && message.direction === 'reciprocal') {
+      this.onReciprocalMeta(message);
+      return;
+    }
+    if (kind === 'payload-complete' && message.direction === 'reciprocal') {
+      void this.onReciprocalComplete();
     }
   }
 
-  private async sendPhoto(): Promise<void> {
+  protected onBinaryMessage(data: ArrayBuffer): void {
+    if (!this.reciprocalMeta || this.reciprocalCompleted) return;
+    const { meta, noteMeta: upcomingNote } = this.reciprocalMeta;
+    if (this.reciprocalPhotoBytes + data.byteLength <= meta.size) {
+      this.reciprocalChunks.push(data);
+      this.reciprocalPhotoBytes += data.byteLength;
+      this.options.callbacks.onPhase(
+        'progress',
+        this.reciprocalPhotoBytes + this.reciprocalNoteBytes,
+        meta.size + (upcomingNote?.size ?? 0),
+      );
+      return;
+    }
+    const remainingPhoto = meta.size - this.reciprocalPhotoBytes;
+    if (remainingPhoto > 0) {
+      this.reciprocalChunks.push(data.slice(0, remainingPhoto));
+      this.reciprocalPhotoBytes = meta.size;
+      data = data.slice(remainingPhoto);
+    }
+    if (!upcomingNote) return;
+    if (this.reciprocalNoteBytes + data.byteLength > upcomingNote.size) {
+      this.fail('The reciprocal voice note arrived with an unexpected size.', 'reciprocal');
+      return;
+    }
+    this.reciprocalNoteChunks.push(data);
+    this.reciprocalNoteBytes += data.byteLength;
+    this.options.callbacks.onPhase(
+      'progress',
+      this.reciprocalPhotoBytes + this.reciprocalNoteBytes,
+      meta.size + upcomingNote.size,
+    );
+  }
+
+  private onPrimaryAck(): void {
+    if (!this.peerAuthenticated || this.primaryAcked) return;
+    this.primaryAcked = true;
+    this.deliveryCompleted = true;
+    if (this.ackTimer !== null) {
+      window.clearTimeout(this.ackTimer);
+      this.ackTimer = null;
+    }
+    void this.emitDiagnostics(true);
+    this.options.callbacks.onPhase(
+      'complete',
+      this.senderOptions.meta.size + (this.senderOptions.note?.size ?? 0),
+      this.senderOptions.meta.size + (this.senderOptions.note?.size ?? 0),
+    );
+    void Promise.resolve(this.options.callbacks.onSenderComplete()).catch(() => {
+      // The caller reports storage errors separately.
+    });
+    if (!this.peerContribution) this.finish();
+  }
+
+  private onReciprocalMeta(message: Record<string, unknown>): void {
+    if (!this.peerAuthenticated || this.reciprocalMeta) return;
+    if (!this.peerContribution) {
+      this.peerContribution = true;
+      this.options.callbacks.onPeerContribution?.(true);
+    }
+    const validated = validateMeta(message);
+    if (!validated) {
+      this.fail('The other browser sent an invalid reciprocal photo.', 'reciprocal');
+      return;
+    }
+    this.reciprocalMeta = validated;
+    this.reciprocalCompleted = false;
+    this.options.callbacks.onPhase('progress', 0, validated.meta.size + (validated.noteMeta?.size ?? 0));
+  }
+
+  private async onReciprocalComplete(): Promise<void> {
+    if (!this.reciprocalMeta || this.reciprocalCompleted) return;
+    const { meta, noteMeta: receivedNote } = this.reciprocalMeta;
+    if (this.reciprocalPhotoBytes !== meta.size) {
+      this.fail('The reciprocal photo arrived incomplete.', 'reciprocal');
+      return;
+    }
+    if (receivedNote && this.reciprocalNoteBytes !== receivedNote.size) {
+      this.fail('The reciprocal voice note arrived incomplete.', 'reciprocal');
+      return;
+    }
+    this.reciprocalCompleted = true;
+    const photo = new Blob(this.reciprocalChunks, { type: meta.type });
+    const note: VoiceNoteAttachment | null =
+      receivedNote && this.reciprocalNoteChunks.length > 0
+        ? {
+            blob: new Blob(this.reciprocalNoteChunks, { type: receivedNote.type }),
+            name: receivedNote.name,
+            type: receivedNote.type,
+            size: receivedNote.size,
+            durationMs: receivedNote.durationMs,
+          }
+        : null;
+    const { photoIdFor } = await import('./media');
+    const photoId = await photoIdFor(photo);
+    try {
+      await this.options.callbacks.onReciprocalComplete?.({
+        photo,
+        meta: { ...meta, note: receivedNote },
+        note,
+        photoId,
+      });
+    } finally {
+      this.sendControl({
+        kind: 'ack',
+        transferId: this.options.transferId,
+        direction: 'reciprocal',
+      });
+      try {
+        this.options.callbacks.onReciprocalAcked?.({
+          photo,
+          meta: { ...meta, note: receivedNote },
+          note,
+          photoId,
+        });
+      } catch {
+        // Reporting is best effort and never blocks the ACK.
+      }
+    }
+  }
+
+  private onReciprocalAck(): void {
+    if (!this.reciprocalCompleted) return;
+    this.finish();
+  }
+
+  private finish(): void {
+    window.setTimeout(() => this.close(), 250);
+  }
+
+  private async sendPrimary(): Promise<void> {
     const channel = this.channel;
     if (!channel || channel.readyState !== 'open') {
       this.fail('The direct connection closed before delivery.');
       return;
     }
-    const { meta, photo } = this.senderOptions;
-    let buffer: ArrayBuffer;
+    const payload = {
+      photo: this.senderOptions.photo,
+      meta: this.senderOptions.meta,
+      note: this.senderOptions.note,
+    };
     try {
-      buffer = await photo.arrayBuffer();
-    } catch {
-      this.fail('The photo could not be read from this browser.');
-      return;
-    }
-
-    channel.send(
-      JSON.stringify({
-        kind: 'photo-meta',
-        transferId: this.options.transferId,
-        name: meta.name,
-        type: meta.type,
-        size: meta.size,
-      }),
-    );
-
-    let sent = 0;
-    let inactivityTimer = window.setTimeout(() => {
-      if (!this.finished) this.fail('The transfer stalled.');
-    }, TRANSFER_INACTIVITY_MS);
-
-    try {
-      while (sent < buffer.byteLength && !this.finished) {
-        if (channel.readyState !== 'open') {
-          throw new Error('channel closed');
-        }
-        while (channel.bufferedAmount > HIGH_WATER_MARK && channel.readyState === 'open') {
-          await wait(12);
-          if (this.finished) return;
-        }
-        const end = Math.min(sent + CHUNK_SIZE, buffer.byteLength);
-        channel.send(buffer.slice(sent, end));
-        sent = end;
-        window.clearTimeout(inactivityTimer);
-        inactivityTimer = window.setTimeout(() => {
-          if (!this.finished) this.fail('The transfer stalled.');
-        }, TRANSFER_INACTIVITY_MS);
-        this.options.callbacks.onPhase('progress', sent, meta.size);
-        if (sent % (CHUNK_SIZE * 8) === 0) {
-          await wait(0);
-        }
-      }
-      window.clearTimeout(inactivityTimer);
+      await streamPayload(
+        channel,
+        this.options.transferId,
+        'primary',
+        payload,
+        (sent, total) => this.options.callbacks.onPhase('progress', sent, total),
+        () => this.finished,
+        (message, direction) => this.fail(message, direction),
+      );
       if (this.finished) return;
-      channel.send(JSON.stringify({ kind: 'photo-complete', transferId: this.options.transferId }));
       this.ackTimer = window.setTimeout(() => {
-        if (!this.finished) this.fail('The other browser did not confirm the photo.');
+        if (!this.finished && !this.primaryAcked) {
+          this.fail('The other browser did not confirm the photo.');
+        }
       }, ACK_TIMEOUT_MS);
-    } catch {
-      window.clearTimeout(inactivityTimer);
-      this.fail('The direct connection dropped during the transfer.');
+    } catch (error) {
+      this.fail(
+        error instanceof Error ? error.message : 'The transfer could not be sent.',
+      );
     }
   }
 }
 
 export class ReceiverTransfer extends BaseTransfer {
   private readonly receiverOptions: ReceiverOptions;
-  private expectedMeta: PhotoMeta | null = null;
-  private received = 0;
-  private chunks: ArrayBuffer[] = [];
+  private incoming: IncomingPayload | null = null;
   private receiverInactivityTimer: number | null = null;
   private completed = false;
+  private contributionAcked = false;
+  private sendingContribution = false;
 
   constructor(options: ReceiverOptions) {
     super(options);
@@ -730,59 +1035,191 @@ export class ReceiverTransfer extends BaseTransfer {
   }
 
   protected onAuthenticated(): void {
-    this.options.callbacks.onPhase('connecting', 0, this.expectedMeta?.size ?? 0);
+    this.sendControl({
+      kind: 'reciprocal-presence',
+      transferId: this.options.transferId,
+      present: Boolean(this.receiverOptions.contribution),
+    });
+    this.options.callbacks.onPhase('connecting', 0, 0);
     this.resetInactivity();
   }
 
-  protected handleProtocolMessage(message: unknown): void {
-    if (!message || typeof message !== 'object') return;
-    const data = message as Record<string, unknown>;
-    if (data.kind === 'photo-meta') {
-      if (!this.peerAuthenticated || this.expectedMeta) return;
-      const name = typeof data.name === 'string' ? data.name.slice(0, 200) : 'photo';
-      const type = typeof data.type === 'string' ? data.type : 'application/octet-stream';
-      const size = typeof data.size === 'number' && Number.isFinite(data.size) ? data.size : 0;
-      if (!type.startsWith('image/') || size <= 0 || size > MAX_PHOTO_BYTES) {
+  protected onControlMessage(message: Record<string, unknown>): void {
+    if (message.kind === 'payload-meta' && message.direction === 'primary') {
+      if (!this.peerAuthenticated || this.incoming) return;
+      const validated = validateMeta(message);
+      if (!validated) {
         this.fail('The other browser sent an invalid photo.');
         return;
       }
-      this.expectedMeta = { name, type, size };
+      this.incoming = {
+        direction: 'primary',
+        meta: validated.meta,
+        noteMeta: validated.noteMeta,
+        chunks: [],
+        noteChunks: [],
+        photoBytes: 0,
+        noteBytes: 0,
+        completed: false,
+      };
       this.resetInactivity();
-      this.options.callbacks.onPhase('progress', 0, size);
+      this.options.callbacks.onPhase(
+        'progress',
+        0,
+        validated.meta.size + (validated.noteMeta?.size ?? 0),
+      );
       return;
     }
-
-    if (data.kind === 'photo-complete') {
-      if (!this.peerAuthenticated || !this.expectedMeta || this.completed) return;
-      if (this.received !== this.expectedMeta.size) {
-        this.fail('The photo arrived incomplete.');
-        return;
-      }
-      this.completed = true;
-      this.deliveryCompleted = true;
-      this.clearReceiverTimer();
-      void this.emitDiagnostics(true);
-      const blob = new Blob(this.chunks, { type: this.expectedMeta.type });
-      this.channel?.send(
-        JSON.stringify({ kind: 'ack', transferId: this.options.transferId }),
-      );
-      this.options.callbacks.onPhase('complete', this.received, this.expectedMeta.size);
-      this.options.callbacks.onReceiverComplete(blob, this.expectedMeta);
-      window.setTimeout(() => this.close(), 1_000);
+    if (message.kind === 'payload-complete' && message.direction === 'primary') {
+      void this.finishPrimary();
+      return;
+    }
+    if (message.kind === 'ack' && message.direction === 'reciprocal') {
+      if (!this.sendingContribution) return;
+      this.contributionAcked = true;
+      this.onContributionAcked();
+      return;
     }
   }
 
-  protected handleBinaryMessage(data: unknown): void {
-    if (!this.peerAuthenticated || !this.expectedMeta || this.completed) return;
-    if (!(data instanceof ArrayBuffer)) return;
-    if (this.received + data.byteLength > this.expectedMeta.size) {
-      this.fail('The photo arrived with an unexpected size.');
+  protected onBinaryMessage(data: ArrayBuffer): void {
+    const incoming = this.incoming;
+    if (!this.peerAuthenticated || !incoming || incoming.completed) return;
+    if (incoming.photoBytes + data.byteLength <= incoming.meta.size) {
+      incoming.chunks.push(data);
+      incoming.photoBytes += data.byteLength;
+      this.resetInactivity();
+      this.options.callbacks.onPhase(
+        'progress',
+        incoming.photoBytes + incoming.noteBytes,
+        incoming.meta.size + (incoming.noteMeta?.size ?? 0),
+      );
       return;
     }
-    this.chunks.push(data);
-    this.received += data.byteLength;
+    const remainingPhoto = incoming.meta.size - incoming.photoBytes;
+    if (remainingPhoto > 0) {
+      incoming.chunks.push(data.slice(0, remainingPhoto));
+      incoming.photoBytes = incoming.meta.size;
+      data = data.slice(remainingPhoto);
+    }
+    if (!incoming.noteMeta) return;
+    if (incoming.noteBytes + data.byteLength > incoming.noteMeta.size) {
+      this.fail('The voice note arrived with an unexpected size.');
+      return;
+    }
+    incoming.noteChunks.push(data);
+    incoming.noteBytes += data.byteLength;
     this.resetInactivity();
-    this.options.callbacks.onPhase('progress', this.received, this.expectedMeta.size);
+    this.options.callbacks.onPhase(
+      'progress',
+      incoming.photoBytes + incoming.noteBytes,
+      incoming.meta.size + incoming.noteMeta.size,
+    );
+  }
+
+  private async finishPrimary(): Promise<void> {
+    const incoming = this.incoming;
+    if (!incoming || this.completed || !this.peerAuthenticated) return;
+    if (incoming.photoBytes !== incoming.meta.size) {
+      this.fail('The photo arrived incomplete.');
+      return;
+    }
+    if (incoming.noteMeta && incoming.noteBytes !== incoming.noteMeta.size) {
+      this.fail('The voice note arrived incomplete.');
+      return;
+    }
+    this.completed = true;
+    this.clearReceiverTimer();
+    void this.emitDiagnostics(true);
+    const photo = new Blob(incoming.chunks, { type: incoming.meta.type });
+    const note: VoiceNoteAttachment | null =
+      incoming.noteMeta && incoming.noteChunks.length > 0
+        ? {
+            blob: new Blob(incoming.noteChunks, { type: incoming.noteMeta.type }),
+            name: incoming.noteMeta.name,
+            type: incoming.noteMeta.type,
+            size: incoming.noteMeta.size,
+            durationMs: incoming.noteMeta.durationMs,
+          }
+        : null;
+    const { photoIdFor } = await import('./media');
+    const photoId = await photoIdFor(photo);
+    try {
+      await this.options.callbacks.onReceiverComplete({
+        photo,
+        meta: { ...incoming.meta, note: incoming.noteMeta },
+        note,
+        photoId,
+      });
+    } catch {
+      this.fail('The photo could not be stored on this browser.');
+      return;
+    }
+    // The ACK is sent only after local persistence succeeded.
+    this.sendControl({
+      kind: 'ack',
+      transferId: this.options.transferId,
+      direction: 'primary',
+    });
+    this.deliveryCompleted = true;
+    try {
+      this.options.callbacks.onReceiverAcked?.({
+        photo,
+        meta: { ...incoming.meta, note: incoming.noteMeta },
+        note,
+        photoId,
+      });
+    } catch {
+      // Reporting is best effort and never blocks the ACK.
+    }
+    this.options.callbacks.onPhase(
+      'complete',
+      incoming.photoBytes + incoming.noteBytes,
+      incoming.meta.size + (incoming.noteMeta?.size ?? 0),
+    );
+    if (this.receiverOptions.contribution) {
+      void this.sendContribution();
+    } else {
+      window.setTimeout(() => this.close(), 400);
+    }
+  }
+
+  private async sendContribution(): Promise<void> {
+    if (this.sendingContribution) return;
+    const contribution = this.receiverOptions.contribution;
+    const channel = this.channel;
+    if (!contribution || !channel || channel.readyState !== 'open') return;
+    this.sendingContribution = true;
+    try {
+      await streamPayload(
+        channel,
+        this.options.transferId,
+        'reciprocal',
+        contribution,
+        (sent, total) => this.options.callbacks.onPhase('progress', sent, total),
+        () => this.finished,
+        (message, direction) => this.fail(message, direction),
+      );
+      window.setTimeout(() => {
+        if (!this.finished && !this.contributionAcked) {
+          this.fail('The other browser did not confirm your reciprocal photo.', 'reciprocal');
+        }
+      }, ACK_TIMEOUT_MS);
+    } catch (error) {
+      this.fail(
+        error instanceof Error ? error.message : 'Your reciprocal photo could not be sent.',
+        'reciprocal',
+      );
+    }
+  }
+
+  private onContributionAcked(): void {
+    try {
+      this.options.callbacks.onContributionAcked?.();
+    } catch {
+      // Reporting is best effort.
+    }
+    window.setTimeout(() => this.close(), 250);
   }
 
   private resetInactivity(): void {

@@ -24,6 +24,12 @@ export class MemoryCircleStore implements CircleStore {
     }
   }
 
+  async remove(circleId: CircleId, ids: readonly string[]): Promise<void> {
+    const bucket = this.circles.get(circleId);
+    if (!bucket) return;
+    for (const id of ids) bucket.delete(id);
+  }
+
   async listCircles(): Promise<CircleId[]> {
     return [...this.circles.keys()].sort(compareStrings);
   }
@@ -128,6 +134,15 @@ export class IndexedDbCircleStore implements CircleStore {
       };
       store.put(row);
     }
+    await transactionToPromise(tx);
+  }
+
+  async remove(circleId: CircleId, ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const db = await this.open();
+    const tx = db.transaction('records', 'readwrite');
+    const store = tx.objectStore('records');
+    for (const id of ids) store.delete(`${circleId}\u0000${id}`);
     await transactionToPromise(tx);
   }
 

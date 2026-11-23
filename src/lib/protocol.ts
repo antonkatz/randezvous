@@ -120,6 +120,55 @@ export interface SignalCircleRelayed {
   message: unknown;
 }
 
+/** Generic, already-signed app metadata (possession, audio consent). */
+export interface SignalAppRelay {
+  type: 'app:relay';
+  to: string;
+  message: unknown;
+  /** When true the server holds the notice for an offline human. */
+  queue?: boolean;
+}
+
+export interface SignalAppRelayed {
+  type: 'app:relay';
+  fromId: string;
+  message: unknown;
+  queuedId?: string;
+}
+
+export interface SignalAppAck {
+  type: 'app:ack';
+  queuedId: string;
+}
+
+/** A signed circle rendezvous invite. The server stores only this notice. */
+export interface CircleRendezvousInvite {
+  id: string;
+  circleId: string;
+  fromId: string;
+  fromName: string;
+  recipients: string[];
+  /** The signed Plan record, opaque to the server. */
+  plan: unknown;
+  scheduledAt: number;
+  createdAt: number;
+}
+
+export interface SignalCircleRendezvousCreate {
+  type: 'circle:rendezvous:create';
+  invite: CircleRendezvousInvite;
+}
+
+export interface SignalCircleRendezvousCreated {
+  type: 'circle:rendezvous:created';
+  id: string;
+}
+
+export interface SignalCircleRendezvousNotice {
+  type: 'circle:rendezvous:notice';
+  invite: CircleRendezvousInvite;
+}
+
 export type ClientSignalMessage =
   | SignalHello
   | SignalIdentityUpdate
@@ -132,7 +181,10 @@ export type ClientSignalMessage =
   | SignalRendezvousCreate
   | SignalRendezvousAck
   | SignalRtc
-  | SignalCircleRelay;
+  | SignalCircleRelay
+  | SignalAppRelay
+  | SignalAppAck
+  | SignalCircleRendezvousCreate;
 
 export interface PresenceEntry {
   id: string;
@@ -239,6 +291,9 @@ export type ServerSignalMessage =
   | SignalRendezvousNotice
   | SignalRtcRelay
   | SignalCircleRelayed
+  | SignalAppRelayed
+  | SignalCircleRendezvousCreated
+  | SignalCircleRendezvousNotice
   | SignalError;
 
 export type RawSignalMessage = ClientSignalMessage | ServerSignalMessage;

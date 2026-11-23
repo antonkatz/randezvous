@@ -121,9 +121,11 @@ describe('circle invitations', () => {
       at: 5_000,
     });
     const plan = await makePlan(ana, {
+      circleId,
       rendezvousId: 'r-secret',
       scheduledAt: 100_000,
       invitees: [baz.selfKey],
+      createdAt: 50_000,
     });
     const attendance = await makeAttendance(ana, {
       rendezvousId: 'r-secret',

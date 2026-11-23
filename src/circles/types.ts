@@ -60,16 +60,38 @@ export interface BanVoteRecord {
 }
 
 /**
- * Rendezvous records deliberately have no circleId. One rendezvous counts in
- * every circle where the relevant attendees are current members.
+ * Plans are scoped to one circle. Canonicality is one plan per circle and
+ * local calendar day, chosen by signed `createdAt` and then record id.
  */
 export interface PlanRecord {
   type: 'Plan';
+  circleId: CircleId;
   rendezvousId: RendezvousId;
   scheduledAt: number;
   organizer: PublicKeyId;
   /** Strictly ascending public-key ids. */
   invitees: PublicKeyId[];
+  createdAt: number;
+  sig: string;
+}
+
+/** An optional inclusive scheduling window for a circle. */
+export interface WindowRecord {
+  type: 'Window';
+  circleId: CircleId;
+  start: number;
+  end: number;
+  author: PublicKeyId;
+  createdAt: number;
+  sig: string;
+}
+
+/** A later clear marker removes the window for plans signed after it. */
+export interface WindowClearRecord {
+  type: 'WindowClear';
+  circleId: CircleId;
+  author: PublicKeyId;
+  createdAt: number;
   sig: string;
 }
 
@@ -93,6 +115,8 @@ export type CircleRecord =
   | LeaveRecord
   | BanVoteRecord
   | PlanRecord
+  | WindowRecord
+  | WindowClearRecord
   | AttendanceRecord;
 
 export type CircleRecordType = CircleRecord['type'];
@@ -110,13 +134,24 @@ export interface StoredCircleRecord {
 
 export function isCircleScopedRecord(
   record: CircleRecord,
-): record is CircleCreatedRecord | InviteRecord | JoinRecord | LeaveRecord | BanVoteRecord {
+): record is
+  | CircleCreatedRecord
+  | InviteRecord
+  | JoinRecord
+  | LeaveRecord
+  | BanVoteRecord
+  | PlanRecord
+  | WindowRecord
+  | WindowClearRecord {
   return (
     record.type === 'CircleCreated' ||
     record.type === 'Invite' ||
     record.type === 'Join' ||
     record.type === 'Leave' ||
-    record.type === 'BanVote'
+    record.type === 'BanVote' ||
+    record.type === 'Plan' ||
+    record.type === 'Window' ||
+    record.type === 'WindowClear'
   );
 }
 
@@ -139,6 +174,9 @@ export function recordAuthor(record: CircleRecord): PublicKeyId {
       return record.voter;
     case 'Plan':
       return record.organizer;
+    case 'Window':
+    case 'WindowClear':
+      return record.author;
     case 'Attendance':
       return record.attendee;
   }
@@ -155,7 +193,10 @@ export function recordTimestamp(record: CircleRecord): number {
     case 'BanVote':
       return record.at;
     case 'Plan':
-      return record.scheduledAt;
+      return record.createdAt;
+    case 'Window':
+    case 'WindowClear':
+      return record.createdAt;
     case 'Attendance':
       return record.joinedAt;
   }
@@ -186,6 +227,8 @@ export interface Friends {
 export interface CircleStore {
   load(circleId: CircleId): Promise<StoredCircleRecord[]>;
   append(circleId: CircleId, records: readonly StoredCircleRecord[]): Promise<void>;
+  /** Remove records that a later cross-record rule invalidated. */
+  remove?(circleId: CircleId, ids: readonly string[]): Promise<void>;
   listCircles(): Promise<CircleId[]>;
 }
 

@@ -118,9 +118,11 @@ describe('circle sync', () => {
     await bazStore.append(circleId, records);
 
     const plan = await makePlan(ana, {
+      circleId,
       rendezvousId: 'sync-r1',
       scheduledAt,
       invitees: [baz.selfKey],
+      createdAt: scheduledAt - 1_000,
     });
     const anaAttendance = await makeAttendance(ana, {
       rendezvousId: 'sync-r1',
@@ -213,9 +215,11 @@ describe('circle sync', () => {
     }
 
     const planWithBaz = await makePlan(ana, {
+      circleId,
       rendezvousId: 'gossip-ab',
       scheduledAt,
       invitees: [baz.selfKey],
+      createdAt: scheduledAt - 1_000,
     });
     const withBaz = [
       planWithBaz,
@@ -236,6 +240,8 @@ describe('circle sync', () => {
       rendezvousId: 'gossip-ac',
       scheduledAt: scheduledAt + 60_000,
       invitees: [cy.selfKey],
+      circleId,
+      createdAt: scheduledAt - 1_000,
     });
     const withCy = [
       planWithCy,
@@ -256,6 +262,8 @@ describe('circle sync', () => {
       rendezvousId: 'gossip-outsider',
       scheduledAt: scheduledAt + 120_000,
       invitees: [outsider.selfKey],
+      circleId,
+      createdAt: scheduledAt - 1_000,
     });
     const withOutsider = [
       planWithOutsider,
@@ -301,8 +309,11 @@ describe('circle sync', () => {
     const bazIds = ids(await bazStore.load(circleId));
     expect(bazIds).toContain(planWithBaz.id);
     expect(bazIds).toContain(planWithCy.id);
-    expect(bazIds).not.toContain(planWithOutsider.id);
-    for (const entry of [...withOutsider]) {
+    // A signed plan is circle-scoped metadata: later members and plans naming
+    // a non-member still converge on the same canonical history. Attendance
+    // with fewer than two current members stays private.
+    expect(bazIds).toContain(planWithOutsider.id);
+    for (const entry of withOutsider.slice(1)) {
       expect(bazIds).not.toContain(entry.id);
     }
   });
@@ -367,9 +378,11 @@ describe('circle sync', () => {
     ).toBe(false);
 
     const planWithCy = await makePlan(ana, {
+      circleId,
       rendezvousId: 'policy-r1',
       scheduledAt,
       invitees: [cy.selfKey],
+      createdAt: scheduledAt - 1_000,
     });
     expect(
       canSendRecord({ ...base, entry: planWithCy, peerKey: baz.selfKey }),
@@ -382,12 +395,14 @@ describe('circle sync', () => {
     const outsiderIdentity = outsider.identities[0];
     if (!outsiderIdentity) throw new Error('outsider missing');
     const planWithOutsider = await makePlan(ana, {
+      circleId,
       rendezvousId: 'policy-r2',
       scheduledAt,
       invitees: [outsiderIdentity.selfKey],
+      createdAt: scheduledAt - 1_000,
     });
     expect(
       canSendRecord({ ...base, entry: planWithOutsider, peerKey: baz.selfKey }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

@@ -5,15 +5,23 @@ import {
   CircleSync,
   IndexedDbCircleStore,
   acceptCircleInvite,
+  activePrompts,
+  activeWindowRecord,
   availableInvitees,
+  canonicalPlans,
+  clearCircleWindow,
   computeCircleStats,
+  createAttendanceRecord,
   createBrowserCircleIdentity,
   createCircle,
   createCircleInvite,
+  createCirclePlan,
+  createCircleWindow,
   createRelayPeerChannel,
   deriveMemberView,
   isCircleInviteMessage,
   mergeCircleInviteAcceptance,
+  mergeRecords,
   rankCircles,
   sendCircleInvite,
   sendCircleInviteAcceptance,
@@ -24,6 +32,7 @@ import {
   type MemberView,
   type PeerChannel,
   type RankedCircle,
+  type StoredCircleRecord,
 } from '../../circles';
 import {
   CircleBar,
@@ -32,22 +41,22 @@ import {
 } from '../../circles/ui';
 import { displayName, normalizeName } from '../crypto';
 import { formatCountdown, handoffPhase } from '../handoff';
+import { formatDuration, MAX_VOICE_NOTE_MS } from '../media';
 import { RendezvousClient } from '../client';
 import { RendezvousStore } from '../store';
 import { wallPhotoWidth } from './wall';
 import type {
   AppointmentEvent,
+  AudioSnapshot,
   ClientNotice,
   Human,
+  PossessionView,
   RendezvousSnapshot,
+  StoredPrint,
   StoredRendezvous,
   TransferEvent,
+  VoiceNoteAttachment,
 } from '../types';
-
-const DEFAULT_HERO_EYEBROW = 'one photograph, one moment';
-const DEFAULT_HERO_TITLE = 'Some photographs<br><em>should arrive later.</em>';
-const DEFAULT_HERO_LEDE =
-  'Choose a human. Choose a moment. The photograph stays in this browser until you are both here — then it crosses directly, browser to browser.';
 
 const TEMPLATE = `
 <style>${styles}</style>
@@ -59,29 +68,34 @@ const TEMPLATE = `
   </p>
 
   <header class="topbar">
-    <div class="add-area" id="add-area">
-      <button class="add-human" id="add-human" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="invite-popover">
-        <span class="add-glyph" aria-hidden="true">+</span>
-        <span>add human</span>
-      </button>
-      <section class="invite-popover" id="invite-popover" role="dialog" aria-label="Add a human" hidden>
-        <button class="popover-close" id="invite-close" type="button" aria-label="Close">×</button>
-        <p class="popover-kicker">a link with a key inside</p>
-        <h2>Add a human.</h2>
-        <p class="invite-copy">Send this to one person. Their browser and yours become permanently linked, and will find each other whenever you’re both here.</p>
-        <label class="invite-label" for="invite-link">your invitation</label>
-        <div class="link-row">
-          <input class="invite-link" id="invite-link" readonly value="creating your link…">
-          <button class="copy-link" id="copy-link" type="button">copy</button>
-        </div>
-        <p class="invite-fineprint">A live connection is never left open. This link is a standing invitation. Remove the human to revoke it.</p>
-      </section>
+    <div class="add-slot" id="add-slot">
+      <div class="add-area" id="add-area">
+        <button class="add-human" id="add-human" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="invite-popover">
+          <span class="add-glyph" aria-hidden="true">+</span>
+          <span>add human</span>
+        </button>
+        <section class="invite-popover" id="invite-popover" role="dialog" aria-label="Add a human" hidden>
+          <button class="popover-close" id="invite-close" type="button" aria-label="Close">×</button>
+          <p class="popover-kicker">a link with a key inside</p>
+          <h2>Add a human.</h2>
+          <p class="invite-copy">Send this to one person. Their browser and yours become permanently linked, and will find each other whenever you’re both here.</p>
+          <label class="invite-label" for="invite-link">your invitation</label>
+          <div class="link-row">
+            <input class="invite-link" id="invite-link" readonly value="creating your link…">
+            <button class="copy-link" id="copy-link" type="button">copy</button>
+          </div>
+          <p class="invite-fineprint">A live connection is never left open. This link is a standing invitation. Remove the human to revoke it.</p>
+        </section>
+      </div>
     </div>
 
     <div class="name-area">
       <label class="sr-only" for="code-name">Code name</label>
-      <input class="code-name" id="code-name" placeholder="Code Name" maxlength="32" autocomplete="off" spellcheck="false" disabled>
-      <span class="name-hint">this is how you appear</span>
+      <span class="code-name-wrap">
+        <input class="code-name" id="code-name" placeholder="Code Name" maxlength="32" autocomplete="off" spellcheck="false" disabled>
+        <span class="code-name-ghost" aria-hidden="true">Code Name<span class="code-caret"></span></span>
+      </span>
+      <span class="name-hint">this is how you appear to others</span>
     </div>
 
     <div class="diag-area" id="diag-area">
@@ -110,14 +124,13 @@ const TEMPLATE = `
   <main class="stage">
     <div class="orbit" aria-hidden="true"></div>
     <div class="hero">
-      <p class="eyebrow" id="hero-eyebrow">${DEFAULT_HERO_EYEBROW}</p>
-      <h1 id="hero-title">${DEFAULT_HERO_TITLE}</h1>
-      <p class="lede" id="hero-lede">${DEFAULT_HERO_LEDE}</p>
+      <p class="eyebrow" id="hero-eyebrow" hidden></p>
+      <h1 id="hero-title" hidden></h1>
+      <p class="lede" id="hero-lede" hidden></p>
       <button class="cta" id="set-rendezvous" type="button">
-        <span class="cta-label">Set a rendezvous</span>
+        <span class="cta-label">set a rendezvous</span>
         <span class="cta-arrow" aria-hidden="true">↗</span>
       </button>
-      <p class="cta-note">this is a meeting, not a delivery</p>
     </div>
   </main>
 
@@ -142,7 +155,7 @@ const TEMPLATE = `
 
   <footer class="footer">
     <span class="footer-brand">rendezvous <span>✳</span></span>
-    <span class="footer-center"><span class="footer-mark" aria-hidden="true"></span> photo bytes never touch a server</span>
+    <span class="footer-center"><span class="footer-mark" aria-hidden="true"></span> the photograph crosses directly, browser to browser</span>
     <span>v0.1 · instant hero</span>
   </footer>
 </div>
@@ -184,6 +197,25 @@ const TEMPLATE = `
           <input id="photo-input" type="file" accept="image/*" hidden>
           <p class="photo-caption" id="photo-caption" hidden><span id="photo-name"></span><span id="photo-size"></span></p>
           <p class="field-error" id="photo-error" hidden></p>
+          <div class="voice-note" id="composer-note">
+            <p class="voice-note-label">voice note <span>optional · up to 1:00</span></p>
+            <div class="voice-note-idle" id="composer-note-idle">
+              <button class="note-action" id="composer-note-add" type="button" disabled>＋ add a voice note</button>
+            </div>
+            <div class="voice-note-recording" id="composer-note-recording" hidden>
+              <span class="note-dot" aria-hidden="true"></span>
+              <span class="note-time" id="composer-note-time">0:00</span>
+              <button class="note-action" id="composer-note-stop" type="button">stop</button>
+              <button class="note-action quiet" id="composer-note-discard" type="button">discard</button>
+            </div>
+            <div class="voice-note-attached" id="composer-note-attached" hidden>
+              <audio id="composer-note-audio" controls preload="metadata"></audio>
+              <span class="note-duration" id="composer-note-duration"></span>
+              <button class="note-action quiet" id="composer-note-remove" type="button">remove</button>
+            </div>
+            <p class="note-help">A private voice note. It travels with the photo and is not recorded by Rendezvous.</p>
+            <p class="field-error" id="composer-note-error" hidden></p>
+          </div>
         </div>
 
         <div>
@@ -315,12 +347,120 @@ const TEMPLATE = `
     <div class="photo-viewer-image-wrap">
       <img class="photo-viewer-image" id="photo-viewer-image" alt="Shared photograph">
     </div>
+    <div class="voice-note-attached viewer-note" id="viewer-note" hidden>
+      <audio id="viewer-note-audio" controls preload="metadata"></audio>
+      <span class="note-duration" id="viewer-note-duration"></span>
+    </div>
+    <section class="possession" id="viewer-possession" hidden>
+      <div class="possession-head">
+        <h3>known copies delivered by Rendezvous</h3>
+        <button class="note-action" id="possession-check" type="button">check now</button>
+      </div>
+      <ul class="possession-list" id="possession-list"></ul>
+      <p class="possession-note">Best effort only. Downloads, screenshots, and copies sent through other apps are not listed, and a delivered copy can never be remotely recalled.</p>
+    </section>
     <div class="photo-viewer-actions">
+      <button class="viewer-button" id="photo-share" type="button" hidden>Share again</button>
       <button class="viewer-button" id="photo-delete" type="button">Delete locally</button>
       <a class="viewer-button" id="photo-download" href="#" download>Save to device</a>
     </div>
   </div>
 </dialog>
+
+<dialog class="modal contribution-modal" id="contribution-dialog" aria-labelledby="contribution-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <p class="modal-kicker">your side of the meeting</p>
+        <h2 id="contribution-title">Add your photo</h2>
+      </div>
+      <button class="modal-close" id="contribution-close" type="button" aria-label="Close">×</button>
+    </div>
+    <p class="contribution-copy" id="contribution-copy"></p>
+    <button class="photo-drop" id="contribution-drop" type="button" aria-label="Choose a photograph">
+      <img class="photo-preview" id="contribution-preview" alt="" hidden>
+      <span class="photo-empty" id="contribution-empty">
+        <span class="plus-ring" aria-hidden="true">+</span>
+        <span>choose a photograph</span>
+        <small>it stays in this browser until you meet</small>
+      </span>
+      <span class="photo-reselect" id="contribution-reselect" hidden>change</span>
+    </button>
+    <input id="contribution-input" type="file" accept="image/*" hidden>
+    <p class="photo-caption" id="contribution-caption" hidden><span id="contribution-name"></span><span id="contribution-size"></span></p>
+    <p class="field-error" id="contribution-error" hidden></p>
+    <div class="voice-note" id="contribution-note">
+      <p class="voice-note-label">voice note <span>optional · up to 1:00</span></p>
+      <div class="voice-note-idle" id="contribution-note-idle">
+        <button class="note-action" id="contribution-note-add" type="button" disabled>＋ add a voice note</button>
+      </div>
+      <div class="voice-note-recording" id="contribution-note-recording" hidden>
+        <span class="note-dot" aria-hidden="true"></span>
+        <span class="note-time" id="contribution-note-time">0:00</span>
+        <button class="note-action" id="contribution-note-stop" type="button">stop</button>
+        <button class="note-action quiet" id="contribution-note-discard" type="button">discard</button>
+      </div>
+      <div class="voice-note-attached" id="contribution-note-attached" hidden>
+        <audio id="contribution-note-audio" controls preload="metadata"></audio>
+        <span class="note-duration" id="contribution-note-duration"></span>
+        <button class="note-action quiet" id="contribution-note-remove" type="button">remove</button>
+      </div>
+      <p class="note-help">Nothing is recorded until you press record. The note is not sent to a server.</p>
+      <p class="field-error" id="contribution-note-error" hidden></p>
+    </div>
+    <div class="rv-actions">
+      <button class="back-button" id="contribution-remove" type="button" hidden>Remove my photo</button>
+      <button class="primary" id="contribution-save" type="button" disabled>Add to the rendezvous</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="live-modal" id="live-dialog" aria-labelledby="live-title">
+  <div class="live-scene">
+    <div class="live-head">
+      <p class="live-kicker">live rendezvous</p>
+      <button class="live-minimise" id="live-minimise" type="button" aria-label="Minimise the live rendezvous">minimise</button>
+    </div>
+    <h2 class="live-title" id="live-title">
+      <span id="live-self">You</span>
+      <em>&</em>
+      <span id="live-peer">them</span>
+    </h2>
+    <p class="live-moment" id="live-moment"></p>
+    <p class="live-state" id="live-state" aria-live="polite"></p>
+    <div class="live-contributions" id="live-contributions"></div>
+    <div class="live-audio">
+      <button class="live-audio-start" id="live-start-audio" type="button">
+        <span class="live-mic" aria-hidden="true"></span>
+        <span>start audio 1min</span>
+        <small>1:00</small>
+      </button>
+      <div class="live-audio-controls" id="live-audio-controls" hidden>
+        <span class="live-countdown" id="live-countdown">1:00</span>
+        <button class="live-control" id="live-mute" type="button">mute</button>
+        <button class="live-control live-end" id="live-end" type="button">end</button>
+      </div>
+      <div class="live-consent" id="live-consent" hidden>
+        <p><span id="live-consent-name">They</span> asks for one live minute. Nothing is recorded. Your microphone is live for at most sixty seconds.</p>
+        <button class="primary" id="live-allow" type="button">Allow a minute</button>
+        <button class="back-button" id="live-not-now" type="button">Not now</button>
+      </div>
+      <p class="live-audio-message" id="live-audio-message" aria-live="polite"></p>
+    </div>
+    <div class="live-actions">
+      <button class="back-button" id="live-close" type="button">back to the wall</button>
+    </div>
+  </div>
+</dialog>
+
+<div class="audio-strip" id="audio-strip" hidden>
+  <span class="strip-dot" aria-hidden="true"></span>
+  <span class="strip-name" id="audio-strip-name"></span>
+  <span class="strip-time" id="audio-strip-time">1:00</span>
+  <button class="strip-button" id="audio-strip-open" type="button">open</button>
+  <button class="strip-button" id="audio-strip-mute" type="button">mute</button>
+  <button class="strip-button strip-end" id="audio-strip-end" type="button">end</button>
+</div>
 `;
 
 function pad(value: number): string {
@@ -436,9 +576,29 @@ export class RendezvousApp extends HTMLElement {
   private selectedHumanId: string | null = null;
   private photo: File | null = null;
   private photoUrl: string | null = null;
+  private composerNote: VoiceNoteAttachment | null = null;
+  private composerNoteUrl: string | null = null;
+  private resharePrint: StoredPrint | null = null;
+  private recorder: MediaRecorder | null = null;
+  private recorderChunks: Blob[] = [];
+  private recorderStartedAt = 0;
+  private recorderTimer: number | null = null;
+  private recorderLimit: number | null = null;
+  private recorderMode: 'composer' | 'contribution' | null = null;
+  private contributionRecordId: string | null = null;
+  private contributionPhoto: File | null = null;
+  private contributionPhotoUrl: string | null = null;
+  private contributionNote: VoiceNoteAttachment | null = null;
+  private contributionNoteUrl: string | null = null;
+  private liveDismissed = new Set<string>();
+  private liveRecordId: string | null = null;
+  private liveCloseTimer: number | null = null;
+  private audioStripOpen = false;
   private activeHumanId: string | null = null;
   private verificationRequest = 0;
   private viewerRecordId: string | null = null;
+  private viewerPrintId: string | null = null;
+  private viewerPhotoId: string | null = null;
   private viewerUrl: string | null = null;
   private deleteArmed = false;
   private deleteTimer: number | null = null;
@@ -473,6 +633,11 @@ export class RendezvousApp extends HTMLElement {
     if (this.diagnosticsOpen && !path.includes(this.$('#diag-area'))) {
       this.closeDiagnostics();
     }
+  };
+
+  private readonly onVisibilityChange = (): void => {
+    if (document.visibilityState !== 'visible') return;
+    void this.circleSync?.refresh();
   };
 
   private readonly onDocumentKeyDown = (event: KeyboardEvent): void => {
@@ -510,6 +675,7 @@ export class RendezvousApp extends HTMLElement {
     this.initialized = false;
     document.removeEventListener('pointerdown', this.onDocumentPointerDown, true);
     document.removeEventListener('keydown', this.onDocumentKeyDown);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.wallResizeObserver?.disconnect();
     this.wallResizeObserver = null;
     if (this.countdownTimer !== null) window.clearInterval(this.countdownTimer);
@@ -517,6 +683,13 @@ export class RendezvousApp extends HTMLElement {
     if (this.nameSaveTimer !== null) window.clearTimeout(this.nameSaveTimer);
     if (this.copyResetTimer !== null) window.clearTimeout(this.copyResetTimer);
     if (this.deleteTimer !== null) window.clearTimeout(this.deleteTimer);
+    if (this.liveCloseTimer !== null) window.clearTimeout(this.liveCloseTimer);
+    this.liveCloseTimer = null;
+    this.stopRecorder(true);
+    if (this.composerNoteUrl) URL.revokeObjectURL(this.composerNoteUrl);
+    this.composerNoteUrl = null;
+    if (this.contributionNoteUrl) URL.revokeObjectURL(this.contributionNoteUrl);
+    this.contributionNoteUrl = null;
     for (const unsubscribe of this.subscriptions) unsubscribe();
     this.subscriptions = [];
     for (const handle of this.toasts.values()) {
@@ -591,6 +764,14 @@ export class RendezvousApp extends HTMLElement {
       this.client.on('transfer', (event) => {
         this.handleTransfer(event);
         this.emitHostEvent('rendezvous:transfer', event);
+      }),
+      this.client.on('audio', (event) => {
+        this.renderAudio(event.audio);
+        this.emitHostEvent('rendezvous:audio', event);
+      }),
+      this.client.on('circleRendezvous', (event) => {
+        void this.handleCircleRendezvousEvent(event.invite);
+        this.emitHostEvent('rendezvous:circle-rendezvous', event);
       }),
     );
     this.renderEmptyState();
@@ -708,6 +889,15 @@ export class RendezvousApp extends HTMLElement {
       dashboard.addEventListener('circle-invite-decline', () =>
         this.clearPendingCircleInvite(),
       );
+      dashboard.addEventListener('circle-plan-request', (event) =>
+        void this.setCirclePlan(event),
+      );
+      dashboard.addEventListener('circle-window-request', (event) =>
+        void this.setCircleWindow(event),
+      );
+      dashboard.addEventListener('circle-window-clear', (event) =>
+        void this.clearCircleGatheringWindow(event),
+      );
       this.circleDashboard = dashboard;
     }
 
@@ -780,6 +970,12 @@ export class RendezvousApp extends HTMLElement {
       },
     );
     dashboard.stats = computeCircleStats(records, view, Date.now(), { circleId });
+    dashboard.plans = canonicalPlans(records, circleId, view.timezone, view.members);
+    const windowEntry = activeWindowRecord(records, circleId, Date.now());
+    dashboard.window =
+      windowEntry?.record.type === 'Window'
+        ? { start: windowEntry.record.start, end: windowEntry.record.end }
+        : null;
     this.activeCircleId = circleId;
     this.activeCircleView = view;
     this.renderCircleBar();
@@ -889,25 +1085,41 @@ export class RendezvousApp extends HTMLElement {
 
     if (message.type === 'circle-invite/offer') {
       const bundle = message.bundle;
-      if (
-        bundle.inviter !== peerKey ||
-        bundle.invitee !== identity.selfKey
-      ) {
-        return;
-      }
+      if (bundle.inviter !== peerKey || bundle.invitee !== identity.selfKey) return;
       const circleName = this.circleNameFromBundle(bundle);
       const human = this.state?.humans.find((entry) => entry.id === peerKey);
-      this.pendingCircleInvite = bundle;
-      dashboard.inviteCircleName = circleName;
-      dashboard.inviteInviterName = human?.name ?? peerKey;
-      dashboard.pendingInvite = bundle;
-      const dialog = this.$<HTMLDialogElement>('#circle-dialog');
-      if (!dialog.open) dialog.showModal();
-      this.showToast({
-        tone: 'info',
-        title: 'Circle invitation',
-        message: `${human?.name || 'A human'} invited you to ${circleName}.`,
-      });
+      try {
+        await this.prepareCircles();
+        const freshIdentity = this.circleIdentity;
+        const store = this.circleStore;
+        if (!freshIdentity || !store) throw new Error('The circle store is not ready.');
+        const acceptance = await acceptCircleInvite({
+          identity: freshIdentity,
+          bundle,
+          at: Date.now(),
+          friends: this.circleFriends,
+        });
+        await store.append(bundle.circleId, acceptance.records);
+        const peer = this.circlePeers.get(bundle.inviter);
+        if (peer) await sendCircleInviteAcceptance(peer.channel, acceptance);
+        await this.reloadCircles();
+        await this.selectCircle(bundle.circleId);
+        void this.circleSync?.refresh();
+        this.showToast({
+          tone: 'success',
+          title: 'Circle joined.',
+          message: `${human?.name ? displayName(human.name) : 'A human'} added you to ${circleName}.`,
+        });
+      } catch (error) {
+        this.showToast({
+          tone: 'warning',
+          title: 'A circle invitation was ignored.',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'The invitation did not pass the signed membership chain.',
+        });
+      }
       return;
     }
 
@@ -1051,7 +1263,7 @@ export class RendezvousApp extends HTMLElement {
       if (this.activeCircleId === acceptance.circleId) {
         await this.selectCircle(acceptance.circleId);
       }
-      void this.circleSync?.refresh();
+      await this.circleSync?.refresh();
       const human = this.state?.humans.find((entry) => entry.id === acceptance.invitee);
       this.showToast({
         tone: 'success',
@@ -1071,6 +1283,185 @@ export class RendezvousApp extends HTMLElement {
     await this.reloadCircles();
     if (this.activeCircleId === circleId) {
       await this.selectCircle(circleId);
+    }
+  }
+
+  private async setCirclePlan(event: Event): Promise<void> {
+    const detail = (event as CustomEvent<{ circleId?: string; scheduledAt?: number }>).detail;
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    const dashboard = this.circleDashboard;
+    if (!identity || !store || !dashboard || !detail?.circleId || !detail.scheduledAt) return;
+    try {
+      const records = await store.load(detail.circleId);
+      const view = deriveMemberView(records, identity.selfKey, this.circleFriends, {}, {
+        circleId: detail.circleId,
+      });
+      if (!view.members.includes(identity.selfKey)) {
+        throw new Error('You are not a current member of this circle.');
+      }
+      const created = await createCirclePlan({
+        identity,
+        circleId: detail.circleId,
+        scheduledAt: detail.scheduledAt,
+        invitees: view.members.filter((member) => member !== identity.selfKey),
+        createdAt: Date.now(),
+        records,
+      });
+      await store.append(detail.circleId, [created.plan]);
+      const recipients = view.members.filter((member) => member !== identity.selfKey);
+      if (recipients.length > 0) {
+        const plan = created.plan.record;
+        if (plan.type === 'Plan') {
+          this.client?.publishCircleRendezvousInvite({
+            id: `ri_${(crypto.randomUUID?.() ?? String(Date.now())).replace(/-/gu, '')}`,
+            circleId: detail.circleId,
+            recipients,
+            plan: created.plan,
+            scheduledAt: plan.scheduledAt,
+          });
+        }
+      }
+      await this.reloadCircles();
+      await this.selectCircle(detail.circleId);
+      void this.circleSync?.refresh();
+      this.showToast({
+        tone: created.canonical ? 'success' : 'info',
+        title: created.canonical ? 'Circle rendezvous set.' : 'An earlier plan is canonical.',
+        message: created.canonical
+          ? 'The first signed plan for that local day is the shared moment.'
+          : 'Your plan is kept as history. The earliest signed plan still wins.',
+      });
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'The circle rendezvous was not set.',
+        message: error instanceof Error ? error.message : 'The plan could not be signed.',
+      });
+    }
+  }
+
+  private async setCircleWindow(event: Event): Promise<void> {
+    const detail = (event as CustomEvent<{ circleId?: string; start?: number; end?: number }>).detail;
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    if (!identity || !store || !detail?.circleId || !detail.start || !detail.end) return;
+    try {
+      const record = await createCircleWindow({
+        identity,
+        circleId: detail.circleId,
+        start: detail.start,
+        end: detail.end,
+        createdAt: Date.now(),
+      });
+      await store.append(detail.circleId, [record]);
+      await this.reloadCircles();
+      await this.selectCircle(detail.circleId);
+      void this.circleSync?.refresh();
+      this.showToast({
+        tone: 'success',
+        title: 'Gathering window set.',
+        message: 'New circle plans must fall inside it. Earlier valid plans stay untouched.',
+      });
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'The window was not set.',
+        message: error instanceof Error ? error.message : 'The window could not be signed.',
+      });
+    }
+  }
+
+  private async clearCircleGatheringWindow(event: Event): Promise<void> {
+    const detail = (event as CustomEvent<{ circleId?: string }>).detail;
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    if (!identity || !store || !detail?.circleId) return;
+    try {
+      const record = await clearCircleWindow({
+        identity,
+        circleId: detail.circleId,
+        createdAt: Date.now(),
+      });
+      await store.append(detail.circleId, [record]);
+      await this.reloadCircles();
+      await this.selectCircle(detail.circleId);
+      void this.circleSync?.refresh();
+      this.showToast({
+        tone: 'info',
+        title: 'Window cleared.',
+        message: 'New circle plans are unconstrained again.',
+      });
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'The window was not cleared.',
+        message: error instanceof Error ? error.message : 'The clear record could not be signed.',
+      });
+    }
+  }
+
+  private async handleCircleRendezvousEvent(raw: unknown): Promise<void> {
+    if (!raw || typeof raw !== 'object') return;
+    const invite = raw as {
+      fromId?: unknown;
+      circleId?: unknown;
+      recipients?: unknown;
+      plan?: unknown;
+    };
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    if (
+      !identity ||
+      !store ||
+      typeof invite.circleId !== 'string' ||
+      typeof invite.fromId !== 'string' ||
+      !Array.isArray(invite.recipients) ||
+      !invite.recipients.includes(identity.selfKey) ||
+      !invite.plan ||
+      typeof invite.plan !== 'object'
+    ) {
+      return;
+    }
+    if (!this.state?.humans.some((human) => human.id === invite.fromId)) return;
+    try {
+      const entry = invite.plan as StoredCircleRecord;
+      const existing = await store.load(invite.circleId);
+      const view = deriveMemberView(existing, identity.selfKey, this.circleFriends, {}, {
+        circleId: invite.circleId,
+      });
+      if (
+        !view.members.includes(identity.selfKey) ||
+        !view.members.includes(invite.fromId)
+      ) {
+        return;
+      }
+      const merged = await mergeRecords(identity, existing, [entry], {
+        circleId: invite.circleId,
+      });
+      if (merged.added.length === 0 && merged.removed.length === 0) {
+        if (merged.rejected.length > 0) {
+          console.warn('[circles] rejected rendezvous invite', merged.rejected[0]);
+        }
+        return;
+      }
+      if (merged.removed.length > 0) {
+        await store.remove?.(invite.circleId, merged.removed);
+      }
+      await store.append(invite.circleId, merged.added);
+      await this.reloadCircles();
+      if (this.activeCircleId === invite.circleId) {
+        await this.selectCircle(invite.circleId);
+      }
+      void this.circleSync?.refresh();
+      const human = this.state?.humans.find((candidate) => candidate.id === invite.fromId);
+      this.showToast({
+        tone: 'info',
+        title: 'A circle rendezvous arrived.',
+        message: `${human ? displayName(human.name) : 'A member'} set a shared moment.`,
+      });
+    } catch (error) {
+      console.warn('[circles] circle rendezvous invite failed', error);
     }
   }
 
@@ -1120,6 +1511,69 @@ export class RendezvousApp extends HTMLElement {
     this.$('#confirm-remove').addEventListener('click', () => void this.confirmHumanRemoval());
     this.$('#photo-viewer-close').addEventListener('click', () => this.closePhotoViewer());
     this.$('#photo-delete').addEventListener('click', () => void this.deleteViewedPhoto());
+    this.$('#photo-share').addEventListener('click', () => this.shareAgain());
+    this.$('#possession-check').addEventListener('click', () => void this.checkPossession());
+    this.$('#composer-note-add').addEventListener('click', () => void this.startRecorder('composer'));
+    this.$('#composer-note-stop').addEventListener('click', () => this.stopRecorder(false));
+    this.$('#composer-note-discard').addEventListener('click', () => {
+      this.stopRecorder(true);
+      this.setComposerNote(null);
+    });
+    this.$('#composer-note-remove').addEventListener('click', () => this.setComposerNote(null));
+    this.$('#contribution-note-add').addEventListener('click', () => void this.startRecorder('contribution'));
+    this.$('#contribution-note-stop').addEventListener('click', () => this.stopRecorder(false));
+    this.$('#contribution-note-discard').addEventListener('click', () => {
+      this.stopRecorder(true);
+      this.setContributionNote(null);
+    });
+    this.$('#contribution-note-remove').addEventListener('click', () => this.setContributionNote(null));
+    this.$('#contribution-close').addEventListener('click', () => this.closeContribution());
+    this.$('#contribution-save').addEventListener('click', () => void this.saveContribution());
+    this.$('#contribution-remove').addEventListener('click', () => void this.removeContribution());
+    this.$('#contribution-drop').addEventListener('click', () =>
+      this.$<HTMLInputElement>('#contribution-input').click(),
+    );
+    this.$('#contribution-input').addEventListener('change', (event) => {
+      const input = event.currentTarget as HTMLInputElement;
+      const file = input.files?.[0];
+      if (file) this.setContributionPhoto(file);
+      input.value = '';
+    });
+    this.$('#contribution-dialog').addEventListener('click', (event) => {
+      if (event.target === this.$('#contribution-dialog')) this.closeContribution();
+    });
+    this.$('#contribution-dialog').addEventListener('close', () => {
+      this.stopRecorder(true);
+      this.contributionRecordId = null;
+    });
+    this.$('#live-close').addEventListener('click', () => this.closeLive());
+    this.$('#live-minimise').addEventListener('click', () => this.closeLive());
+    this.$('#live-start-audio').addEventListener('click', () => void this.startAudio());
+    this.$('#live-allow').addEventListener('click', () => void this.client?.respondAudioMinute(true));
+    this.$('#live-not-now').addEventListener('click', () => void this.client?.respondAudioMinute(false));
+    this.$('#live-mute').addEventListener('click', () => this.client?.toggleAudioMute());
+    this.$('#live-end').addEventListener('click', () => this.client?.endAudioMinute());
+    this.$('#audio-strip-open').addEventListener('click', () => {
+      if (this.state?.audio.rendezvousId) this.openLive(this.state.audio.rendezvousId, true);
+    });
+    this.$('#audio-strip-mute').addEventListener('click', () => this.client?.toggleAudioMute());
+    this.$('#audio-strip-end').addEventListener('click', () => this.client?.endAudioMinute());
+    this.$('#live-dialog').addEventListener('click', (event) => {
+      if (event.target === this.$('#live-dialog')) this.closeLive();
+    });
+    this.$('#live-dialog').addEventListener('close', () => {
+      if (this.liveRecordId) this.liveDismissed.add(this.liveRecordId);
+      this.renderAudio(this.state?.audio ?? {
+        rendezvousId: null,
+        peerId: null,
+        peerName: '',
+        phase: 'idle',
+        muted: false,
+        remoteMuted: false,
+        remainingMs: 0,
+        message: null,
+      });
+    });
     this.$('#rendezvous-dialog').addEventListener('click', (event) => {
       if (event.target === this.$('#rendezvous-dialog')) {
         this.$<HTMLDialogElement>('#rendezvous-dialog').close();
@@ -1199,11 +1653,19 @@ export class RendezvousApp extends HTMLElement {
 
   private renderEmptyState(): void {
     const humans = this.$('#humans-list');
-    humans.replaceChildren();
-    const empty = document.createElement('p');
-    empty.className = 'humans-empty';
-    empty.textContent = 'No humans yet. The door is at the top left.';
-    humans.append(empty);
+    let empty = humans.querySelector<HTMLElement>('.humans-empty');
+    if (!empty) {
+      humans.replaceChildren();
+      empty = document.createElement('div');
+      empty.className = 'humans-empty';
+      const copy = document.createElement('span');
+      copy.className = 'humans-empty-copy';
+      copy.textContent = 'No humans yet.';
+      empty.append(copy);
+      humans.append(empty);
+    }
+    const addArea = this.$('#add-area');
+    if (addArea.parentElement !== empty) empty.append(addArea);
   }
 
   private render(snapshot: RendezvousSnapshot): void {
@@ -1220,6 +1682,8 @@ export class RendezvousApp extends HTMLElement {
     this.renderHumans(snapshot);
     this.syncCirclePeers();
     this.renderWall(snapshot);
+    this.renderAudio(snapshot.audio);
+    this.maybeOpenLive(snapshot);
     if (this.activeHumanId) this.refreshHumanDialog(snapshot);
     if (this.rvStep === 1 && this.$<HTMLDialogElement>('#rendezvous-dialog').open) {
       this.renderHumanOptions(snapshot);
@@ -1238,10 +1702,13 @@ export class RendezvousApp extends HTMLElement {
     const next = pending.find((record) => record.scheduledFor >= now) ?? pending[0];
 
     if (!next) {
-      eyebrow.textContent = DEFAULT_HERO_EYEBROW;
-      title.innerHTML = DEFAULT_HERO_TITLE;
+      eyebrow.hidden = true;
+      eyebrow.textContent = '';
+      title.hidden = true;
+      title.replaceChildren();
       title.removeAttribute('aria-label');
-      lede.textContent = DEFAULT_HERO_LEDE;
+      lede.hidden = true;
+      lede.textContent = '';
       return;
     }
 
@@ -1255,7 +1722,9 @@ export class RendezvousApp extends HTMLElement {
           ? 'now'
           : 'still open';
 
+    eyebrow.hidden = false;
     eyebrow.textContent = `next rendezvous · ${person}`;
+    title.hidden = false;
     title.replaceChildren();
     const value = document.createElement('span');
     value.className = 'hero-countdown';
@@ -1268,6 +1737,7 @@ export class RendezvousApp extends HTMLElement {
       'aria-label',
       `${main}. ${formatMoment(next.scheduledFor)}. ${person}.`,
     );
+    lede.hidden = false;
     lede.textContent =
       phase === 'scheduled'
         ? 'The handoff opens five minutes early. Both browsers need to be here.'
@@ -1348,7 +1818,6 @@ export class RendezvousApp extends HTMLElement {
 
   private renderHumans(snapshot: RendezvousSnapshot): void {
     const list = this.$('#humans-list');
-    list.replaceChildren();
     this.$('#humans-count').textContent =
       snapshot.humans.length === 0
         ? 'none yet'
@@ -1357,6 +1826,9 @@ export class RendezvousApp extends HTMLElement {
       this.renderEmptyState();
       return;
     }
+    if (this.inviteOpen) this.closeInvite();
+    this.$('#add-slot').append(this.$('#add-area'));
+    list.replaceChildren();
     for (const human of snapshot.humans) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -1403,12 +1875,12 @@ export class RendezvousApp extends HTMLElement {
     }
   }
 
-  private photoUrlFor(record: StoredRendezvous): string | null {
-    if (!record.photo) return null;
-    const key = `${record.id}:${record.deliveredAt ?? 'pending'}`;
+  private photoUrlFor(print: StoredPrint): string | null {
+    if (!print.photo) return null;
+    const key = `${print.id}:${print.deliveredAt}`;
     const existing = this.objectUrls.get(key);
     if (existing) return existing;
-    const url = URL.createObjectURL(record.photo.blob);
+    const url = URL.createObjectURL(print.photo.blob);
     this.objectUrls.set(key, url);
     return url;
   }
@@ -1425,12 +1897,10 @@ export class RendezvousApp extends HTMLElement {
     const wrap = this.$('#wall-wrap');
     const board = this.$('#wall-board');
     const next = this.$('#wall-next');
-    const delivered = snapshot.rendezvous
-      .filter((record) => record.status === 'delivered' && Boolean(record.photo))
-      .sort((a, b) => {
-        const arrival = (b.deliveredAt ?? b.scheduledFor) - (a.deliveredAt ?? a.scheduledFor);
-        return arrival !== 0 ? arrival : a.id.localeCompare(b.id);
-      });
+    const delivered = snapshot.prints.slice().sort((a, b) => {
+      const arrival = b.deliveredAt - a.deliveredAt;
+      return arrival !== 0 ? arrival : a.id.localeCompare(b.id);
+    });
     const pending = snapshot.rendezvous
       .filter((record) => record.status !== 'delivered')
       .sort((a, b) => a.scheduledFor - b.scheduledFor);
@@ -1460,6 +1930,9 @@ export class RendezvousApp extends HTMLElement {
     for (const record of pending) {
       const human = humans.get(record.peerId);
       const person = displayName(record.peerName || human?.name || '');
+      const phase = handoffPhase(record.scheduledFor);
+      const wrapRow = document.createElement('div');
+      wrapRow.className = 'next-row';
       const card = document.createElement('button');
       card.type = 'button';
       card.className = 'next-card';
@@ -1475,7 +1948,6 @@ export class RendezvousApp extends HTMLElement {
       const state = document.createElement('span');
       state.className = 'next-card-state';
       const needsPerson = !human?.online;
-      const phase = handoffPhase(record.scheduledFor);
       state.textContent =
         record.status === 'transferring'
           ? 'moving directly'
@@ -1494,31 +1966,64 @@ export class RendezvousApp extends HTMLElement {
                   : needsPerson
                     ? `still open · waiting for ${person}`
                     : 'still open · connecting';
+      const contribution = document.createElement('span');
+      contribution.className = 'next-card-contribution';
+      if (record.direction === 'incoming') {
+        contribution.textContent = `your photo · ${record.contribution ? 'added' : 'not added'}`;
+      } else if (record.reciprocal) {
+        contribution.textContent = `${person}’s photo · received`;
+      } else if (record.sessionStartedAt) {
+        contribution.textContent = `${person}’s photo · not added`;
+      }
       copy.append(title, state);
+      if (contribution.textContent) copy.append(contribution);
       const arrow = document.createElement('span');
       arrow.className = 'next-card-arrow';
       arrow.textContent = '↗';
       card.append(time, copy, arrow);
       card.setAttribute('aria-label', `Open ${person} · ${formatMoment(record.scheduledFor)} · ${state.textContent}`);
       card.addEventListener('click', () => this.openHuman(record.peerId));
-      next.append(card);
+      wrapRow.append(card);
+
+      if (
+        record.direction === 'incoming' &&
+        !record.contribution &&
+        !record.sessionStartedAt &&
+        record.status !== 'transferring'
+      ) {
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.className = 'next-action';
+        add.textContent = 'add a photo';
+        add.addEventListener('click', () => this.openContribution(record.id));
+        wrapRow.append(add);
+      }
+      if (phase !== 'scheduled' && human?.online) {
+        const live = document.createElement('button');
+        live.type = 'button';
+        live.className = 'next-action live-action';
+        live.textContent = 'live';
+        live.addEventListener('click', () => this.openLive(record.id, true));
+        wrapRow.append(live);
+      }
+      next.append(wrapRow);
     }
 
-    delivered.forEach((record, index) => {
-      const human = humans.get(record.peerId);
-      const person = displayName(record.peerName || human?.name || '');
+    delivered.forEach((print, index) => {
+      const human = humans.get(print.peerId);
+      const person = displayName(print.peerName || human?.name || '');
       const rank = index + 1;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'wall-photo';
-      button.dataset.wallId = record.id;
+      button.dataset.wallId = print.id;
       button.dataset.wallRank = String(rank);
       button.style.width = '160px';
       button.setAttribute('aria-label', `Open photograph ranked ${rank} from ${person}`);
       const frame = document.createElement('span');
       frame.className = 'wall-photo-frame';
-      const url = this.photoUrlFor(record);
-      if (url) liveKeys.add(`${record.id}:${record.deliveredAt ?? 'pending'}`);
+      const url = this.photoUrlFor(print);
+      if (url) liveKeys.add(`${print.id}:${print.deliveredAt}`);
       if (url) {
         const image = document.createElement('img');
         image.className = 'wall-photo-image';
@@ -1533,13 +2038,19 @@ export class RendezvousApp extends HTMLElement {
       rankLabel.textContent = String(rank).padStart(2, '0');
       const personLabel = document.createElement('span');
       personLabel.className = 'wall-person';
-      personLabel.textContent = `${record.direction === 'incoming' ? 'from' : 'to'} ${person}`;
+      personLabel.textContent = `${print.direction === 'incoming' ? 'from' : 'to'} ${person}`;
       const date = document.createElement('span');
       date.className = 'wall-date';
-      date.textContent = formatShortDay(record.deliveredAt ?? record.scheduledFor);
+      date.textContent = formatShortDay(print.deliveredAt);
       caption.append(rankLabel, personLabel, date);
+      if (print.photo.note) {
+        const note = document.createElement('span');
+        note.className = 'wall-note-badge';
+        note.textContent = `◉ ${formatDuration(print.photo.note.durationMs)}`;
+        caption.append(note);
+      }
       button.append(frame, caption);
-      button.addEventListener('click', () => this.openPhotoViewer(record));
+      button.addEventListener('click', () => this.openPhotoViewer(print));
       board.append(button);
     });
 
@@ -1564,6 +2075,305 @@ export class RendezvousApp extends HTMLElement {
     for (const photo of board.querySelectorAll<HTMLElement>('.wall-photo')) {
       const rank = Number(photo.dataset.wallRank ?? '1');
       photo.style.width = `${wallPhotoWidth(rank, width)}px`;
+    }
+  }
+
+  private notePrefix(mode: 'composer' | 'contribution'): string {
+    return mode === 'composer' ? 'composer-note' : 'contribution-note';
+  }
+
+  private noteValue(mode: 'composer' | 'contribution'): VoiceNoteAttachment | null {
+    return mode === 'composer' ? this.composerNote : this.contributionNote;
+  }
+
+  private noteUrl(mode: 'composer' | 'contribution'): string | null {
+    return mode === 'composer' ? this.composerNoteUrl : this.contributionNoteUrl;
+  }
+
+  private setNoteUrl(
+    mode: 'composer' | 'contribution',
+    url: string | null,
+  ): void {
+    if (mode === 'composer') {
+      if (this.composerNoteUrl) URL.revokeObjectURL(this.composerNoteUrl);
+      this.composerNoteUrl = url;
+    } else {
+      if (this.contributionNoteUrl) URL.revokeObjectURL(this.contributionNoteUrl);
+      this.contributionNoteUrl = url;
+    }
+  }
+
+  private setComposerNote(note: VoiceNoteAttachment | null): void {
+    this.composerNote = note;
+    this.setNoteUrl('composer', note ? URL.createObjectURL(note.blob) : null);
+    this.renderNote('composer');
+  }
+
+  private setContributionNote(note: VoiceNoteAttachment | null): void {
+    this.contributionNote = note;
+    this.setNoteUrl(
+      'contribution',
+      note ? URL.createObjectURL(note.blob) : null,
+    );
+    this.renderNote('contribution');
+  }
+
+  private renderNote(mode: 'composer' | 'contribution'): void {
+    const prefix = this.notePrefix(mode);
+    const note = this.noteValue(mode);
+    const url = this.noteUrl(mode);
+    const idle = this.$<HTMLElement>(`#${prefix}-idle`);
+    const recording = this.$<HTMLElement>(`#${prefix}-recording`);
+    const attached = this.$<HTMLElement>(`#${prefix}-attached`);
+    const audio = this.$<HTMLAudioElement>(`#${prefix}-audio`);
+    const duration = this.$<HTMLElement>(`#${prefix}-duration`);
+    const add = this.$<HTMLButtonElement>(`#${prefix}-add`);
+    idle.hidden = recording.hidden === false || Boolean(note);
+    attached.hidden = !note;
+    recording.hidden = this.recorderMode !== mode;
+    add.disabled = mode === 'composer' ? !this.photo : !this.contributionPhoto;
+    if (note && url) {
+      if (audio.src !== url) audio.src = url;
+      duration.textContent = formatDuration(note.durationMs);
+    } else {
+      audio.removeAttribute('src');
+      duration.textContent = '';
+    }
+  }
+
+  private async startRecorder(mode: 'composer' | 'contribution'): Promise<void> {
+    if (this.recorder) return;
+    const prefix = this.notePrefix(mode);
+    const error = this.$<HTMLElement>(`#${prefix}-error`);
+    error.hidden = true;
+    if (
+      typeof MediaRecorder === 'undefined' ||
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices?.getUserMedia
+    ) {
+      error.textContent = 'This browser cannot record a voice note. The photo is unaffected.';
+      error.hidden = false;
+      return;
+    }
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+        video: false,
+      });
+    } catch {
+      error.textContent =
+        'Microphone permission was denied. You can still send the photograph without a note.';
+      error.hidden = false;
+      return;
+    }
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+    const mimeType = candidates.find((type) => MediaRecorder.isTypeSupported(type));
+    let recorder: MediaRecorder;
+    try {
+      recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+    } catch {
+      stream.getTracks().forEach((track) => track.stop());
+      error.textContent = 'This browser cannot record a voice note. The photo is unaffected.';
+      error.hidden = false;
+      return;
+    }
+    this.recorder = recorder;
+    this.recorderMode = mode;
+    this.recorderChunks = [];
+    this.recorderStartedAt = Date.now();
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) this.recorderChunks.push(event.data);
+    };
+    recorder.onstop = () => {
+      this.finalizeRecorder(mode, stream, recorder.mimeType || mimeType || 'audio/webm');
+    };
+    recorder.start(250);
+    this.recorderTimer = window.setInterval(() => {
+      const elapsed = Math.min(MAX_VOICE_NOTE_MS, Date.now() - this.recorderStartedAt);
+      this.$<HTMLElement>(`#${prefix}-time`).textContent = formatDuration(elapsed);
+    }, 200);
+    this.recorderLimit = window.setTimeout(() => this.stopRecorder(false), MAX_VOICE_NOTE_MS);
+    this.renderNote(mode);
+    this.$<HTMLButtonElement>(`#${prefix}-stop`).focus();
+  }
+
+  private finalizeRecorder(
+    mode: 'composer' | 'contribution',
+    stream: MediaStream,
+    mimeType: string,
+  ): void {
+    const elapsed = Math.min(MAX_VOICE_NOTE_MS, Date.now() - this.recorderStartedAt);
+    const discard = this.recorderDiscard;
+    const chunks = this.recorderChunks;
+    this.recorder = null;
+    this.recorderMode = null;
+    this.recorderChunks = [];
+    this.recorderDiscard = false;
+    if (this.recorderTimer !== null) {
+      window.clearInterval(this.recorderTimer);
+      this.recorderTimer = null;
+    }
+    if (this.recorderLimit !== null) {
+      window.clearTimeout(this.recorderLimit);
+      this.recorderLimit = null;
+    }
+    stream.getTracks().forEach((track) => track.stop());
+    if (!discard && chunks.length > 0) {
+      const blob = new Blob(chunks, { type: mimeType });
+      const extension = mimeType.includes('ogg') ? 'ogg' : 'webm';
+      const note: VoiceNoteAttachment = {
+        blob,
+        name: `voice-note.${extension}`,
+        type: mimeType,
+        size: blob.size,
+        durationMs: Math.max(1, elapsed),
+      };
+      if (mode === 'composer') this.setComposerNote(note);
+      else this.setContributionNote(note);
+    } else {
+      this.renderNote(mode);
+    }
+  }
+
+  private recorderDiscard = false;
+
+  private stopRecorder(discard: boolean): void {
+    const recorder = this.recorder;
+    if (!recorder) return;
+    this.recorderDiscard = discard;
+    try {
+      if (recorder.state !== 'inactive') recorder.stop();
+    } catch {
+      this.recorder = null;
+      this.recorderMode = null;
+    }
+  }
+
+  private openContribution(rendezvousId: string): void {
+    const record = this.state?.rendezvous.find((entry) => entry.id === rendezvousId);
+    if (!record || record.direction !== 'incoming') return;
+    this.contributionRecordId = rendezvousId;
+    this.contributionPhoto = null;
+    if (this.contributionPhotoUrl) URL.revokeObjectURL(this.contributionPhotoUrl);
+    this.contributionPhotoUrl = null;
+    this.setContributionNote(null);
+    const preview = this.$<HTMLImageElement>('#contribution-preview');
+    preview.hidden = true;
+    preview.removeAttribute('src');
+    this.$('#contribution-empty').hidden = false;
+    this.$('#contribution-reselect').hidden = true;
+    this.$('#contribution-caption').hidden = true;
+    this.$('#contribution-drop').classList.remove('has-photo');
+    this.$('#contribution-error').hidden = true;
+    this.$('#contribution-remove').hidden = !record.contribution;
+    this.$('#contribution-copy').textContent =
+      `${displayName(record.peerName)} set this rendezvous. Your photo is optional and stays in this browser until you are both here.`;
+    const save = this.$<HTMLButtonElement>('#contribution-save');
+    save.disabled = true;
+    save.textContent = record.contribution ? 'Replace my photo' : 'Add to the rendezvous';
+    if (record.contribution) {
+      this.setContributionPhoto(
+        new File([record.contribution.blob], record.contribution.name || 'photograph', {
+          type: record.contribution.type,
+        }),
+      );
+      if (record.contribution.note) this.setContributionNote(record.contribution.note);
+      save.textContent = 'Replace my photo';
+    }
+    const dialog = this.$<HTMLDialogElement>('#contribution-dialog');
+    if (!dialog.open) dialog.showModal();
+    this.renderNote('contribution');
+  }
+
+  private closeContribution(): void {
+    const dialog = this.$<HTMLDialogElement>('#contribution-dialog');
+    if (dialog.open) dialog.close();
+    this.stopRecorder(true);
+    if (this.contributionPhotoUrl) URL.revokeObjectURL(this.contributionPhotoUrl);
+    this.contributionPhotoUrl = null;
+    this.contributionPhoto = null;
+    this.contributionRecordId = null;
+    this.setContributionNote(null);
+  }
+
+  private setContributionPhoto(file: File): void {
+    const error = this.$<HTMLElement>('#contribution-error');
+    if (!file.type.startsWith('image/')) {
+      error.textContent = 'That file is not an image.';
+      error.hidden = false;
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      error.textContent = 'That photograph is larger than 25 MB.';
+      error.hidden = false;
+      return;
+    }
+    error.hidden = true;
+    if (this.contributionPhotoUrl) URL.revokeObjectURL(this.contributionPhotoUrl);
+    this.contributionPhoto = file;
+    this.contributionPhotoUrl = URL.createObjectURL(file);
+    const preview = this.$<HTMLImageElement>('#contribution-preview');
+    preview.src = this.contributionPhotoUrl;
+    preview.hidden = false;
+    this.$('#contribution-empty').hidden = true;
+    this.$('#contribution-reselect').hidden = false;
+    this.$('#contribution-drop').classList.add('has-photo');
+    this.$('#contribution-caption').hidden = false;
+    this.$('#contribution-name').textContent = file.name || 'photograph';
+    this.$('#contribution-size').textContent = formatBytes(file.size);
+    this.$<HTMLButtonElement>('#contribution-save').disabled = false;
+    this.renderNote('contribution');
+  }
+
+  private async saveContribution(): Promise<void> {
+    const id = this.contributionRecordId;
+    const photo = this.contributionPhoto;
+    const client = this.client;
+    if (!id || !photo || !client) return;
+    const button = this.$<HTMLButtonElement>('#contribution-save');
+    button.disabled = true;
+    button.textContent = 'Adding…';
+    try {
+      await client.setContribution({
+        rendezvousId: id,
+        photo,
+        fileName: photo.name,
+        note: this.contributionNote,
+      });
+      this.closeContribution();
+      this.showToast({
+        tone: 'success',
+        title: 'Your photo is ready.',
+        message: 'It stays here until you are both online for the handoff.',
+      });
+    } catch (error) {
+      this.$<HTMLElement>('#contribution-error').textContent =
+        error instanceof Error ? error.message : 'Your photo could not be added.';
+      this.$<HTMLElement>('#contribution-error').hidden = false;
+      button.disabled = false;
+      button.textContent = 'Add to the rendezvous';
+    }
+  }
+
+  private async removeContribution(): Promise<void> {
+    const id = this.contributionRecordId;
+    const client = this.client;
+    if (!id || !client) return;
+    try {
+      await client.removeContribution(id);
+      this.closeContribution();
+      this.showToast({
+        tone: 'info',
+        title: 'Your photo was removed.',
+        message: 'The rendezvous is still set.',
+      });
+    } catch (error) {
+      this.$<HTMLElement>('#contribution-error').textContent =
+        error instanceof Error ? error.message : 'Your photo could not be removed.';
+      this.$<HTMLElement>('#contribution-error').hidden = false;
     }
   }
 
@@ -1665,10 +2475,23 @@ export class RendezvousApp extends HTMLElement {
     }
   }
 
-  private openRendezvous(): void {
+  private openRendezvous(print?: StoredPrint): void {
     if (!this.state?.ready) return;
     const dialog = this.$<HTMLDialogElement>('#rendezvous-dialog');
     this.resetRendezvousFlow();
+    this.resharePrint = print ?? null;
+    if (print) {
+      const file = new File([print.photo.blob], print.photo.name || 'photograph', {
+        type: print.photo.type,
+      });
+      this.setPhoto(file);
+      if (print.photo.note) this.setComposerNote(print.photo.note);
+      this.$('#rv-title').textContent = 'Share again';
+      this.$('.modal-kicker').textContent = 'reusing this photograph from your wall';
+    } else {
+      this.$('#rv-title').textContent = 'Set a rendezvous';
+      this.$('.modal-kicker').textContent = 'a photograph for later';
+    }
     this.renderHumanOptions(this.state);
     this.$<HTMLInputElement>('#rv-time').value = nextDefaultTime();
     this.updateTimeReadout();
@@ -1683,9 +2506,12 @@ export class RendezvousApp extends HTMLElement {
   private resetRendezvousFlow(): void {
     this.rvStep = 1;
     this.selectedHumanId = null;
+    this.resharePrint = null;
+    this.stopRecorder(true);
     if (this.photoUrl) URL.revokeObjectURL(this.photoUrl);
     this.photoUrl = null;
     this.photo = null;
+    this.setComposerNote(null);
     const photoPreview = this.$<HTMLImageElement>('#photo-preview');
     photoPreview.hidden = true;
     photoPreview.removeAttribute('src');
@@ -1818,6 +2644,7 @@ export class RendezvousApp extends HTMLElement {
     this.$('#photo-caption').hidden = false;
     this.$('#photo-name').textContent = file.name || 'photograph';
     this.$('#photo-size').textContent = formatBytes(file.size);
+    this.$<HTMLButtonElement>('#composer-note-add').disabled = false;
     this.updateStepOneState();
   }
 
@@ -1917,6 +2744,8 @@ export class RendezvousApp extends HTMLElement {
         humanId: this.selectedHumanId,
         photo: this.photo,
         fileName: this.photo.name,
+        photoId: this.resharePrint?.photoId,
+        note: this.composerNote,
         scheduledFor: resolved.timestamp,
       });
       this.showDone(record);
@@ -2054,25 +2883,102 @@ export class RendezvousApp extends HTMLElement {
     }
   }
 
-  private openPhotoViewer(record: StoredRendezvous): void {
-    if (!record.photo) return;
+  private openPhotoViewer(print: StoredPrint): void {
+    if (!print.photo) return;
     this.releaseViewerUrl();
-    this.viewerRecordId = record.id;
-    this.viewerUrl = URL.createObjectURL(record.photo.blob);
+    this.viewerPrintId = print.id;
+    this.viewerPhotoId = print.photoId;
+    this.viewerUrl = URL.createObjectURL(print.photo.blob);
     this.$<HTMLImageElement>('#photo-viewer-image').src = this.viewerUrl;
     this.$('#photo-viewer-title').textContent =
-      record.direction === 'incoming' ? `From ${escapePunctuation(record.peerName)}.` : `For ${escapePunctuation(record.peerName)}.`;
+      print.direction === 'incoming' ? `From ${escapePunctuation(print.peerName)}.` : `For ${escapePunctuation(print.peerName)}.`;
     this.$('#photo-viewer-sub').textContent =
-      `${formatBytes(record.photo.size)} · ${formatMoment(record.deliveredAt ?? record.scheduledFor)} · stays on this browser`;
+      `${formatBytes(print.photo.size)} · ${formatMoment(print.deliveredAt)} · stays on this browser`;
     const download = this.$<HTMLAnchorElement>('#photo-download');
     download.href = this.viewerUrl;
-    download.download = record.photo.name || 'photograph';
+    download.download = print.photo.name || 'photograph';
     const del = this.$<HTMLButtonElement>('#photo-delete');
     del.textContent = 'Delete locally';
     del.disabled = false;
     this.deleteArmed = false;
+    const share = this.$<HTMLButtonElement>('#photo-share');
+    share.hidden = print.direction !== 'outgoing';
+    const note = this.$<HTMLElement>('#viewer-note');
+    const noteAudio = this.$<HTMLAudioElement>('#viewer-note-audio');
+    if (print.photo.note) {
+      note.hidden = false;
+      noteAudio.src = URL.createObjectURL(print.photo.note.blob);
+      this.$('#viewer-note-duration').textContent = formatDuration(
+        print.photo.note.durationMs,
+      );
+    } else {
+      note.hidden = true;
+      noteAudio.removeAttribute('src');
+      this.$('#viewer-note-duration').textContent = '';
+    }
+    this.renderPossessionInventory(print.direction === 'outgoing' ? print.photoId : null);
     const dialog = this.$<HTMLDialogElement>('#photo-dialog');
     if (!dialog.open) dialog.showModal();
+  }
+
+  private renderPossessionInventory(photoId: string | null): void {
+    const section = this.$<HTMLElement>('#viewer-possession');
+    const list = this.$<HTMLElement>('#possession-list');
+    const check = this.$<HTMLButtonElement>('#possession-check');
+    list.replaceChildren();
+    if (!photoId) {
+      section.hidden = true;
+      check.disabled = true;
+      return;
+    }
+    section.hidden = false;
+    const entries = (this.state?.possessions ?? []).filter(
+      (entry) => entry.photoId === photoId,
+    );
+    if (entries.length === 0) {
+      const item = document.createElement('li');
+      item.className = 'possession-empty';
+      item.textContent = 'No confirmed copies yet. A claim arrives after a recipient stores the photo.';
+      list.append(item);
+      check.disabled = true;
+      return;
+    }
+    check.disabled = !entries.some((entry) => entry.online && entry.state === 'held');
+    for (const entry of entries) {
+      const human = this.state?.humans.find((candidate) => candidate.id === entry.holder);
+      const item = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'possession-name';
+      name.textContent = human ? displayName(human.name) : entry.holder.slice(0, 10);
+      const state = document.createElement('span');
+      state.className = 'possession-state';
+      state.dataset.state = entry.connected ? entry.state : 'removed';
+      if (!entry.connected) {
+        state.textContent = `not connected · last known ${entry.state === 'held' ? 'copy' : 'deleted'}`;
+      } else if (entry.state === 'released') {
+        state.textContent = `${entry.copies} cop${entry.copies === 1 ? 'y' : 'ies'} · deleted ${formatMoment(entry.at)}`;
+      } else if (entry.confirmedNow) {
+        state.textContent = `${entry.copies} cop${entry.copies === 1 ? 'y' : 'ies'} · confirmed now`;
+      } else {
+        state.textContent = `${entry.copies} cop${entry.copies === 1 ? 'y' : 'ies'} · ${entry.online ? 'connected' : 'offline'} · last confirmed ${formatMoment(entry.updatedAt)}`;
+      }
+      item.append(name, state);
+      list.append(item);
+    }
+  }
+
+  private async checkPossession(): Promise<void> {
+    const photoId = this.viewerPhotoId;
+    if (!photoId || !this.client) return;
+    const checked = await this.client.requestPossessionCheck(photoId);
+    this.showToast({
+      tone: checked > 0 ? 'info' : 'warning',
+      title: checked > 0 ? 'Fresh check requested.' : 'No holder is connected.',
+      message:
+        checked > 0
+          ? 'A signed answer updates the inventory when it arrives.'
+          : 'An offline holder can only be shown as last confirmed.',
+    });
   }
 
   private closePhotoViewer(): void {
@@ -2085,13 +2991,21 @@ export class RendezvousApp extends HTMLElement {
     if (this.viewerUrl) URL.revokeObjectURL(this.viewerUrl);
     this.viewerUrl = null;
     this.viewerRecordId = null;
+    this.viewerPrintId = null;
+    this.viewerPhotoId = null;
+    const noteAudio = this.root.querySelector<HTMLAudioElement>('#viewer-note-audio');
+    if (noteAudio) {
+      noteAudio.pause();
+      if (noteAudio.src) URL.revokeObjectURL(noteAudio.src);
+      noteAudio.removeAttribute('src');
+    }
     if (this.deleteTimer !== null) window.clearTimeout(this.deleteTimer);
     this.deleteTimer = null;
     this.deleteArmed = false;
   }
 
   private async deleteViewedPhoto(): Promise<void> {
-    if (!this.client || !this.viewerRecordId) return;
+    if (!this.client || !this.viewerPrintId) return;
     const button = this.$<HTMLButtonElement>('#photo-delete');
     if (!this.deleteArmed) {
       this.deleteArmed = true;
@@ -2103,15 +3017,204 @@ export class RendezvousApp extends HTMLElement {
       }, 4000);
       return;
     }
-    const id = this.viewerRecordId;
+    const id = this.viewerPrintId;
     this.closePhotoViewer();
     try {
-      await this.client.deleteRendezvous(id);
+      await this.client.deletePrint(id);
     } catch {
       this.showToast({
         tone: 'error',
         title: 'The photograph was not deleted.',
         message: 'Rendezvous could not update local storage.',
+      });
+    }
+  }
+
+  private shareAgain(): void {
+    const print = this.viewerPrintId && this.client?.getPrint(this.viewerPrintId);
+    if (!print) return;
+    this.closePhotoViewer();
+    this.openRendezvous(print);
+  }
+
+  private renderAudio(audio: AudioSnapshot): void {
+    const strip = this.$<HTMLElement>('#audio-strip');
+    const dialog = this.$<HTMLDialogElement>('#live-dialog');
+    const live = audio.phase === 'live';
+    strip.hidden = !live || dialog.open;
+    this.$('#audio-strip-name').textContent = audio.peerName
+      ? `one minute with ${displayName(audio.peerName)}`
+      : 'one live minute';
+    this.$('#audio-strip-time').textContent = formatDuration(audio.remainingMs);
+    this.$('#audio-strip-mute').textContent = audio.muted ? 'unmute' : 'mute';
+    if (audio.phase === 'incoming' && audio.rendezvousId) {
+      this.openLive(audio.rendezvousId, false);
+    }
+    if (dialog.open) this.renderLive();
+  }
+
+  private maybeOpenLive(snapshot: RendezvousSnapshot): void {
+    const audioRecord = snapshot.audio.rendezvousId;
+    if (
+      audioRecord &&
+      (snapshot.audio.phase === 'live' ||
+        snapshot.audio.phase === 'connecting' ||
+        snapshot.audio.phase === 'incoming' ||
+        snapshot.audio.phase === 'requesting')
+    ) {
+      this.openLive(audioRecord, false);
+      return;
+    }
+    const candidate = snapshot.rendezvous
+      .filter((record) => {
+        if (record.status === 'delivered') return false;
+        const human = snapshot.humans.find((entry) => entry.id === record.peerId);
+        return Boolean(human?.online) && handoffPhase(record.scheduledFor) !== 'scheduled';
+      })
+      .sort((a, b) => a.scheduledFor - b.scheduledFor)[0];
+    if (!candidate) return;
+    if (this.liveDismissed.has(candidate.id)) return;
+    this.openLive(candidate.id, false);
+  }
+
+  private openLive(rendezvousId: string, userAction: boolean): void {
+    if (userAction) this.liveDismissed.delete(rendezvousId);
+    this.liveRecordId = rendezvousId;
+    const dialog = this.$<HTMLDialogElement>('#live-dialog');
+    this.renderLive();
+    if (!dialog.open) {
+      dialog.show();
+      window.setTimeout(() => this.$<HTMLButtonElement>('#live-start-audio').focus(), 30);
+    }
+  }
+
+  private closeLive(): void {
+    const dialog = this.$<HTMLDialogElement>('#live-dialog');
+    if (this.liveRecordId) this.liveDismissed.add(this.liveRecordId);
+    if (this.liveCloseTimer !== null) {
+      window.clearTimeout(this.liveCloseTimer);
+      this.liveCloseTimer = null;
+    }
+    if (dialog.open) dialog.close();
+    this.renderAudio(this.state?.audio ?? {
+      rendezvousId: null,
+      peerId: null,
+      peerName: '',
+      phase: 'idle',
+      muted: false,
+      remoteMuted: false,
+      remainingMs: 0,
+      message: null,
+    });
+  }
+
+  private renderLive(): void {
+    const id = this.liveRecordId;
+    const record = this.state?.rendezvous.find((entry) => entry.id === id);
+    if (!record) {
+      this.$('#live-close').click?.();
+      return;
+    }
+    const human = this.state?.humans.find((entry) => entry.id === record.peerId);
+    const audio = this.state?.audio;
+    const person = displayName(record.peerName || human?.name || '');
+    this.$('#live-self').textContent = displayName(this.state?.identity.name ?? '');
+    this.$('#live-peer').textContent = person;
+    this.$('#live-moment').textContent = formatMoment(record.scheduledFor);
+    const phase = handoffPhase(record.scheduledFor);
+    const state =
+      record.status === 'delivered'
+        ? 'delivered and stored locally'
+        : record.status === 'transferring'
+          ? 'moving directly'
+          : record.status === 'connecting'
+            ? 'connecting directly'
+            : record.status === 'failed'
+              ? 'the last attempt failed · retrying while you are both here'
+              : !human?.online
+                ? `waiting for ${person}`
+                : phase === 'open-early'
+                  ? 'both here · the handoff is open early'
+                  : phase === 'due'
+                    ? 'both here · the handoff is due'
+                    : 'still open · both here';
+    this.$('#live-state').textContent = state;
+
+    const contributions = this.$('#live-contributions');
+    contributions.replaceChildren();
+    const own = document.createElement('p');
+    own.className = 'live-contribution';
+    own.textContent = `your photo · ${record.photo ? 'added' : record.contribution ? 'added' : 'waiting'}`;
+    const theirs = document.createElement('p');
+    theirs.className = 'live-contribution';
+    theirs.textContent =
+      `${person}’s photo · ${
+        record.direction === 'incoming'
+          ? record.photo
+            ? 'received'
+            : 'waiting'
+          : record.reciprocal
+            ? 'received'
+            : 'not added'
+      }`;
+    contributions.append(own, theirs);
+
+    const start = this.$<HTMLButtonElement>('#live-start-audio');
+    const controls = this.$<HTMLElement>('#live-audio-controls');
+    const consent = this.$<HTMLElement>('#live-consent');
+    const message = this.$<HTMLElement>('#live-audio-message');
+    const isAudioForThis = audio?.rendezvousId === record.id;
+    const live = isAudioForThis && audio?.phase === 'live';
+    const incoming = isAudioForThis && audio?.phase === 'incoming';
+    const busy =
+      isAudioForThis &&
+      (audio?.phase === 'requesting' || audio?.phase === 'connecting');
+    const used = Boolean(record.audioWindowUsedAt);
+    start.hidden = live || incoming || busy;
+    controls.hidden = !live;
+    consent.hidden = !incoming;
+    start.disabled = used || !human?.online || phase === 'scheduled';
+    start.setAttribute(
+      'aria-label',
+      used ? 'the minute is over' : 'start audio 1min',
+    );
+    if (used && !live) {
+      start.disabled = true;
+      start.querySelector('span:nth-child(2)')!.textContent = 'the minute is over';
+    } else {
+      start.querySelector('span:nth-child(2)')!.textContent = 'start audio 1min';
+    }
+    this.$('#live-countdown').textContent = formatDuration(audio?.remainingMs ?? 60_000);
+    this.$('#live-mute').textContent = audio?.muted ? 'unmute' : 'mute';
+    this.$('#live-consent-name').textContent = person;
+    const audioMessage = isAudioForThis ? audio?.message ?? '' : '';
+    message.textContent = audioMessage;
+    message.hidden = !audioMessage;
+
+    if (this.liveCloseTimer !== null) {
+      window.clearTimeout(this.liveCloseTimer);
+      this.liveCloseTimer = null;
+    }
+    if (record.status === 'delivered' && !live) {
+      this.liveCloseTimer = window.setTimeout(() => {
+        this.liveCloseTimer = null;
+        const current = this.state?.rendezvous.find((entry) => entry.id === record.id);
+        if (current?.status === 'delivered' && this.state?.audio.phase !== 'live') {
+          this.closeLive();
+        }
+      }, 1_500);
+    }
+  }
+
+  private async startAudio(): Promise<void> {
+    if (!this.liveRecordId || !this.client) return;
+    try {
+      await this.client.requestAudioMinute(this.liveRecordId);
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'The minute did not start.',
+        message: error instanceof Error ? error.message : 'Try again when you are both here.',
       });
     }
   }
@@ -2132,6 +3235,10 @@ export class RendezvousApp extends HTMLElement {
       'transfer-failed': 'The handoff stopped.',
       'handshake-failed': 'The handshake did not verify.',
       'transfer-delivered': 'Delivered.',
+      'audio-ended': 'The minute is over.',
+      'audio-declined': 'A minute, asked.',
+      'audio-error': 'The live minute did not start.',
+      'possession-updated': 'The inventory changed.',
       'signal-replaced': 'Another window is here.',
       'server-error': 'Signal trouble.',
       'photo-too-large': 'That photo is too large.',
@@ -2198,11 +3305,13 @@ export class RendezvousApp extends HTMLElement {
       this.showToast({
         tone: 'success',
         title: `A photograph from ${person}.`,
-        message: `${record.photo ? formatBytes(record.photo.size) + ' · ' : ''}${formatMoment(record.deliveredAt ?? Date.now())}`,
+        message: `${record.photo ? formatBytes(record.photo.size) + ' · ' : ''}${formatMoment(record.deliveredAt ?? Date.now())}${record.photo?.note ? ` · voice note ${formatDuration(record.photo.note.durationMs)}` : ''}`,
         actionLabel: 'Open',
         action: () => {
-          const current = this.state?.rendezvous.find((entry) => entry.id === record.id) ?? record;
-          this.openPhotoViewer(current);
+          const print = this.state?.prints.find(
+            (entry) => entry.appointmentId === record.id,
+          );
+          if (print) this.openPhotoViewer(print);
         },
         photoUrl,
         persistent: false,
@@ -2212,12 +3321,62 @@ export class RendezvousApp extends HTMLElement {
     }
   }
 
+  private async recordCircleAttendance(rendezvousId: string): Promise<void> {
+    const record = this.state?.rendezvous.find((entry) => entry.id === rendezvousId);
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    if (!record || !identity || !store) return;
+    for (const circleId of await store.listCircles()) {
+      try {
+        const records = await store.load(circleId);
+        const view = deriveMemberView(records, identity.selfKey, this.circleFriends, {}, {
+          circleId,
+        });
+        if (!view.members.includes(identity.selfKey) || !view.members.includes(record.peerId)) {
+          continue;
+        }
+        const plan = canonicalPlans(records, circleId, view.timezone, view.members).find((entry) => {
+          const planRecord = entry.canonical.record;
+          return (
+            planRecord.type === 'Plan' &&
+            Math.abs(planRecord.scheduledAt - record.scheduledFor) <= 5 * 60_000
+          );
+        });
+        if (!plan || plan.canonical.record.type !== 'Plan') continue;
+        const planRecord = plan.canonical.record;
+        const already = records.some(
+          (entry) =>
+            entry.record.type === 'Attendance' &&
+            entry.record.attendee === identity.selfKey &&
+            entry.record.rendezvousId === planRecord.rendezvousId,
+        );
+        if (already) continue;
+        const promptId = activePrompts(Date.now(), view.timezone).day.id;
+        const attendance = await createAttendanceRecord({
+          identity,
+          rendezvousId: planRecord.rendezvousId,
+          scheduledAt: planRecord.scheduledAt,
+          joinedAt: Date.now(),
+          swappedWith: [record.peerId],
+          promptId,
+        });
+        await store.append(circleId, [attendance]);
+        void this.circleSync?.refresh();
+        await this.reloadCircles();
+        if (this.activeCircleId === circleId) await this.selectCircle(circleId);
+      } catch (error) {
+        console.warn('[circles] attendance was not recorded', error);
+      }
+    }
+  }
+
   private handleTransfer(event: TransferEvent): void {
     if (event.phase === 'complete') {
       if (!this.celebrated.has(event.rendezvousId)) {
         this.celebrated.add(event.rendezvousId);
         this.celebrateDelivery();
       }
+      void this.recordCircleAttendance(event.rendezvousId);
       const toastId = this.transferToastIds.get(event.rendezvousId);
       if (toastId) {
         const handle = this.toasts.get(toastId);

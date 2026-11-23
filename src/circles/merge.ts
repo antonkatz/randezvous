@@ -1,4 +1,5 @@
 import { canonicalString, compareStrings, verifyStoredRecord } from './canonical';
+import { planOutsideWindow } from './plans';
 import type { CircleId, Identity, StoredCircleRecord } from './types';
 import { isCircleScopedRecord } from './types';
 
@@ -12,6 +13,8 @@ export interface MergeResult {
   records: StoredCircleRecord[];
   /** Ids that were not present in the verified existing set. */
   added: StoredCircleRecord[];
+  /** Existing ids that the merged set no longer accepts. */
+  removed: string[];
   /** Invalid or conflicting inputs. Deduplicated and deterministic. */
   rejected: MergeRejection[];
 }
@@ -123,15 +126,31 @@ export async function mergeRecords(
     await consider(entry, isExisting);
   }
 
+  // Cross-record rule: a signed plan outside the window active at its signed
+  // creation time never participates in history or canonical selection.
+  if (options.circleId !== undefined) {
+    const all = [...valid.values()].map(({ entry }) => entry);
+    for (const entry of all) {
+      if (entry.record.type !== 'Plan') continue;
+      if (entry.record.circleId !== options.circleId) continue;
+      if (!planOutsideWindow(entry.record, all)) continue;
+      valid.delete(entry.id);
+      reject(entry.id, 'plan falls outside the active circle time window');
+    }
+  }
+
   const records = [...valid.values()]
     .map(({ entry }) => entry)
     .sort((a, b) => compareStrings(a.id, b.id));
   const added = records.filter((entry) => !existingIds.has(entry.id));
+  const removed = [...existingIds]
+    .filter((id) => !valid.has(id))
+    .sort(compareStrings);
   const rejected = [...rejectedByKey.values()].sort((a, b) =>
     compareStrings(rejectionKey(a), rejectionKey(b)),
   );
 
-  return { records, added, rejected };
+  return { records, added, removed, rejected };
 }
 
 /** Merge an arbitrary number of sets, left to right. */
@@ -140,7 +159,7 @@ export async function mergeRecordSets(
   sets: readonly (readonly StoredCircleRecord[])[],
   options: MergeOptions = {},
 ): Promise<MergeResult> {
-  let result: MergeResult = { records: [], added: [], rejected: [] };
+  let result: MergeResult = { records: [], added: [], removed: [], rejected: [] };
   for (const set of sets) {
     result = await mergeRecords(identity, result.records, set, options);
   }

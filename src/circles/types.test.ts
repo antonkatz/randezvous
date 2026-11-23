@@ -94,9 +94,11 @@ describe('record helpers', () => {
       at: 5,
     });
     const plan = await makePlan(ana, {
+      circleId: 'c-test',
       rendezvousId: 'r1',
       scheduledAt: 6,
       invitees: [baz.selfKey],
+      createdAt: 6,
     });
     const attendance = await makeAttendance(baz, {
       rendezvousId: 'r1',
@@ -126,9 +128,11 @@ describe('record helpers', () => {
     const identity = (await createTestIdentities(1)).identities[0];
     if (!identity) throw new Error('identity missing');
     const plan = await makePlan(identity, {
+      circleId: 'c-test',
       rendezvousId: 'r1',
       scheduledAt: 1,
       invitees: [],
+      createdAt: 0,
     });
     const circle = await makeCircleCreated(identity, {
       circleId: 'c1',
@@ -137,7 +141,7 @@ describe('record helpers', () => {
       createdAt: 1,
     });
     expect(isRendezvousRecord(plan.record)).toBe(true);
-    expect(isCircleScopedRecord(plan.record)).toBe(false);
+    expect(isCircleScopedRecord(plan.record)).toBe(true);
     expect(isCircleScopedRecord(circle.record)).toBe(true);
     expect(isRendezvousRecord(circle.record)).toBe(false);
   });

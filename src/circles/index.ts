@@ -5,6 +5,7 @@ export * from './merge';
 export * from './membership';
 export * from './invitations';
 export * from './rendezvous';
+export * from './plans';
 export * from './time';
 export * from './prompts';
 export * from './stats';

@@ -210,10 +210,12 @@ export async function makePlan(
 ): Promise<StoredCircleRecord> {
   return signRecord(organizer, {
     type: 'Plan',
+    circleId: input.circleId,
     rendezvousId: input.rendezvousId,
     scheduledAt: input.scheduledAt,
     organizer: organizer.selfKey,
     invitees: [...new Set(input.invitees ?? [])].sort(),
+    createdAt: input.createdAt,
   });
 }
 

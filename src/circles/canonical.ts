@@ -11,6 +11,8 @@ import type {
   PlanRecord,
   StoredCircleRecord,
   UnsignedCircleRecord,
+  WindowRecord,
+  WindowClearRecord,
 } from './types';
 import { recordAuthor } from './types';
 
@@ -26,7 +28,9 @@ const ALLOWED_KEYS: Record<CircleRecordType, readonly string[]> = {
   Join: ['type', 'circleId', 'member', 'at', 'sig'],
   Leave: ['type', 'circleId', 'member', 'at', 'sig'],
   BanVote: ['type', 'circleId', 'voter', 'target', 'vote', 'at', 'sig'],
-  Plan: ['type', 'rendezvousId', 'scheduledAt', 'organizer', 'invitees', 'sig'],
+  Plan: ['type', 'circleId', 'rendezvousId', 'scheduledAt', 'organizer', 'invitees', 'createdAt', 'sig'],
+  Window: ['type', 'circleId', 'start', 'end', 'author', 'createdAt', 'sig'],
+  WindowClear: ['type', 'circleId', 'author', 'createdAt', 'sig'],
   Attendance: [
     'type',
     'rendezvousId',
@@ -46,6 +50,8 @@ const RECORD_TYPES = new Set<CircleRecordType>([
   'Leave',
   'BanVote',
   'Plan',
+  'Window',
+  'WindowClear',
   'Attendance',
 ]);
 
@@ -241,12 +247,31 @@ export function recordProblem(record: unknown, requireSignature = true): string 
     }
     case 'Plan': {
       const value = record as unknown as Partial<PlanRecord>;
+      if (!isNonEmptyId(value.circleId)) return 'circleId must be a non-empty id';
       if (!isNonEmptyId(value.rendezvousId)) {
         return 'rendezvousId must be a non-empty id';
       }
       if (!isTimestamp(value.scheduledAt)) return 'scheduledAt must be a UTC timestamp';
       if (!isNonEmptyId(value.organizer)) return 'organizer must be a public-key id';
+      if (!isTimestamp(value.createdAt)) return 'createdAt must be a UTC timestamp';
       return stringListProblem(value.invitees, 'invitees');
+    }
+    case 'Window': {
+      const value = record as unknown as Partial<WindowRecord>;
+      if (!isNonEmptyId(value.circleId)) return 'circleId must be a non-empty id';
+      if (!isNonEmptyId(value.author)) return 'author must be a public-key id';
+      if (!isTimestamp(value.createdAt)) return 'createdAt must be a UTC timestamp';
+      if (!isTimestamp(value.start)) return 'start must be a UTC timestamp';
+      if (!isTimestamp(value.end)) return 'end must be a UTC timestamp';
+      if (value.start >= value.end) return 'window start must precede its end';
+      return null;
+    }
+    case 'WindowClear': {
+      const value = record as unknown as Partial<WindowClearRecord>;
+      if (!isNonEmptyId(value.circleId)) return 'circleId must be a non-empty id';
+      if (!isNonEmptyId(value.author)) return 'author must be a public-key id';
+      if (!isTimestamp(value.createdAt)) return 'createdAt must be a UTC timestamp';
+      return null;
     }
     case 'Attendance': {
       const value = record as unknown as Partial<AttendanceRecord>;

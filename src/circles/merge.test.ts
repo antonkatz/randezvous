@@ -137,10 +137,12 @@ describe('merge rejection', () => {
     const { signRecord } = await import('./canonical');
     const valid = await signRecord(ana, {
       type: 'Plan',
+      circleId: 'c-test',
       rendezvousId: 'r1',
       scheduledAt: 100,
       organizer: ana.selfKey,
       invitees: [ana.selfKey, baz.selfKey].sort(),
+      createdAt: 99,
     });
     const plan = valid.record as Extract<CircleRecord, { type: 'Plan' }>;
     const invalid: StoredCircleRecord = {

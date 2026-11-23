@@ -18,13 +18,20 @@ export type { HandoffPhase } from './handoff';
 export type {
   AppointmentEvent,
   AppointmentPhase,
+  AudioEvent,
+  AudioPhase,
+  AudioSnapshot,
   ClientNotice,
   CircleRelayEvent,
+  CircleRendezvousEvent,
+  ContributionInput,
   Human,
   IceFamilyCounts,
   IpFamily,
   NoticeCode,
   PhotoAttachment,
+  PossessionState,
+  PossessionView,
   PublicIdentity,
   RendezvousClientEvents,
   RendezvousClientOptions,
@@ -35,9 +42,23 @@ export type {
   SignalNetworkInfo,
   SignalStatus,
   StoredHuman,
+  StoredPossession,
+  StoredPrint,
   StoredRendezvous,
   TransferDiagnostics,
   TransferEvent,
+  VoiceNoteAttachment,
 } from './types';
-export type { JoinRequest, RendezvousNotice, RtcSignalPayload } from './protocol';
-export { MAX_PHOTO_BYTES } from './rtc';
+export type {
+  CircleRendezvousInvite,
+  JoinRequest,
+  RendezvousNotice,
+  RtcSignalPayload,
+} from './protocol';
+export { MAX_PHOTO_BYTES, MAX_NOTE_BYTES } from './rtc';
+export {
+  MAX_VOICE_NOTE_BYTES,
+  MAX_VOICE_NOTE_MS,
+  formatDuration,
+  photoIdFor,
+} from './media';

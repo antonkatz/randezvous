@@ -9,9 +9,9 @@ This repository contains the reference app, the reusable package, and a small st
 
 - **Spec:** [`docs/SPEC.md`](docs/SPEC.md) — user stories, visual design stories, architecture, protocol, threat model, IPv6/TURN assumptions, and the future peer-as-signaller path.
 - **Circles:** [`src/circles/README.md`](src/circles/README.md) — client-side group membership, signed invitations, sync, and the six circle-stats ratios.
-- **UI:** encapsulated `<rendezvous-app>` custom element with a live hero countdown to the next rendezvous, a cumulative ranked photo wall, and a short confetti celebration when a photo completes its handoff.
+- **UI:** encapsulated `<rendezvous-app>` custom element with a live hero countdown, a cumulative ranked photo wall, reciprocal photo contributions, optional photo voice notes, local re-sharing, a live rendezvous screen, one-minute live voice, a per-photo possession inventory, and a short confetti celebration when a photo completes its handoff.
 - **Client:** headless `RendezvousClient` with snapshots and typed events.
-- **Server:** WebSocket bootstrap for authenticated presence, appointment notices, invite relay, revocation, and WebRTC signalling. It never stores photo bytes.
+- **Server:** WebSocket bootstrap for authenticated presence, appointment notices, opaque circle metadata relay, expiring circle rendezvous invites, signed possession/consent notices, invite relay, revocation, and WebRTC signalling. It never stores photo or voice-note bytes.
 
 ## Run locally
 
@@ -38,7 +38,7 @@ npm run dev:web      # UI only
 npm run dev:signal   # signalling server only
 npm run build        # typecheck, app, library, and server builds
 npm start            # serve dist/ + WebSocket signalling on :8787
-npm test             # crypto/invite unit tests
+npm test             # unit tests: crypto, invites, circles, plans
 npm run test:e2e     # production build + Playwright end-to-end tests
 ```
 
@@ -59,7 +59,7 @@ The app has a small, round **`+ circle`** button at the lower left of the window
 - open a circle page showing monthly kept, weekly participation, season pairs, daily run, the weekly prompt and all-time progress;
 - see members who are not yet direct humans.
 
-Circle creation, local statistics, invitations, and circle sync are wired through the existing authenticated signalling server as opaque metadata relay. The server does not store or verify circle records. Delivery is online-only: both humans must be connected, and an offline invitation is not queued. The signed invitation API and UI are in `src/circles/`; see [`src/circles/README.md`](src/circles/README.md).
+Circle creation, canonical daily plans, an optional signed gathering window, local statistics, auto-accepted invitations, and circle sync are wired through the existing authenticated signalling server as opaque metadata relay. The server does not store or verify circle records. Membership and sync delivery is online-only; a valid circle rendezvous invite is the one circle notice that waits for an offline member, and only until its scheduled time. The signed circle API and UI are in `src/circles/`; see [`src/circles/README.md`](src/circles/README.md).
 
 ## Try it on your phone
 

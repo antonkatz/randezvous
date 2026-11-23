@@ -124,7 +124,7 @@ const STYLES = `
   color: var(--paper-bright, #faf6ed);
   background: var(--ink, #151310);
   border-color: var(--ink, #151310);
-  box-shadow: 0 0 0 3px var(--accent-wash, #efc4b5);
+  box-shadow: 0 0 0 3px var(--accent-wash, #d8d0ea);
 }
 
 @media (max-width: 720px) {

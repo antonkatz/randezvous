@@ -99,10 +99,12 @@ describe('record signing and verification', () => {
     await expect(
       signRecord(ana, {
         type: 'Plan',
+        circleId: 'c-test',
         rendezvousId: 'r-1',
         scheduledAt: 100,
         organizer: ana.selfKey,
         invitees: ['z', 'a'],
+        createdAt: 99,
       }),
     ).rejects.toThrow(/sorted/u);
 
