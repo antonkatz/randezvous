@@ -5,10 +5,20 @@ export {
 } from './client';
 export { defineRendezvousApp, RendezvousApp } from './ui/rendezvous-app';
 export { deriveVerificationWords, displayName, normalizeName } from './crypto';
+export {
+  HANDOFF_WINDOW_MS,
+  handoffClosesAt,
+  handoffOpensAt,
+  handoffPhase,
+  isHandoffEligible,
+  isHandoffOnTime,
+} from './handoff';
+export type { HandoffPhase } from './handoff';
 export type {
   AppointmentEvent,
   AppointmentPhase,
   ClientNotice,
+  CircleRelayEvent,
   Human,
   IceFamilyCounts,
   IpFamily,

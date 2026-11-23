@@ -12,6 +12,7 @@ import {
   signText,
   base64UrlToBytes,
 } from './crypto';
+import { handoffPhase, isHandoffEligible } from './handoff';
 import {
   buildInviteUrl,
   clearInviteFromUrl,
@@ -118,7 +119,9 @@ export class RendezvousClient {
   private ticker: number | null = null;
   private messageChain: Promise<void> = Promise.resolve();
   private processingDue = false;
+  private openNotified = new Set<string>();
   private dueNotified = new Set<string>();
+  private lateNotified = new Set<string>();
   private revokedInvites = new Set<string>();
   private announcedThisSession = new Set<string>();
   private announceInFlight = new Set<string>();
@@ -199,6 +202,25 @@ export class RendezvousClient {
       humans: [...this.humans.values()].sort((a, b) => a.addedAt - b.addedAt),
       rendezvous: sortRendezvous(this.rendezvous.values()).map(cloneRecord),
     };
+  }
+
+  /** Send an opaque signed circle message to one direct human. */
+  sendCircleMessage(peerId: string, message: unknown): boolean {
+    if (!this.identity || !this.humans.has(peerId)) return false;
+    return (
+      this.transport?.send({
+        type: 'circle:relay',
+        to: peerId,
+        message,
+      }) ?? false
+    );
+  }
+
+  /** Listen for circle messages from direct humans. */
+  onCircleMessage(
+    listener: (fromId: string, message: unknown) => void,
+  ): () => void {
+    return this.on('circle', (event) => listener(event.fromId, event.message));
   }
 
   private emitState(): void {
@@ -340,7 +362,7 @@ export class RendezvousClient {
     const now = Date.now();
     for (const record of stored) {
       if (record.status === 'connecting' || record.status === 'transferring') {
-        record.status = record.scheduledFor <= now ? 'waiting' : 'scheduled';
+        record.status = isHandoffEligible(record.scheduledFor, now) ? 'waiting' : 'scheduled';
         record.error = null;
         await this.store.putRendezvous(record);
       }
@@ -539,6 +561,10 @@ export class RendezvousClient {
       case 'rendezvous:notice':
         await this.handleRendezvousNotice(message.rendezvous);
         return;
+      case 'circle:relay':
+        if (!this.humans.has(message.fromId)) return;
+        this.emit('circle', { fromId: message.fromId, message: message.message });
+        return;
       case 'rtc':
         await this.handleRtcSignal(message.fromId, message.transferId, message.payload);
         return;
@@ -710,7 +736,7 @@ export class RendezvousClient {
         peerName: human.name || notice.fromName,
         createdAt: notice.createdAt,
         scheduledFor: notice.scheduledFor,
-        status: notice.scheduledFor <= Date.now() ? 'waiting' : 'scheduled',
+        status: isHandoffEligible(notice.scheduledFor) ? 'waiting' : 'scheduled',
         photo: null,
         announcedAt: null,
         lastAttemptAt: null,
@@ -728,8 +754,9 @@ export class RendezvousClient {
     this.emitState();
 
     if (!record.deliveredAt) {
-      if (record.scheduledFor <= Date.now()) {
-        this.notifyDue(record);
+      if (isHandoffEligible(record.scheduledFor)) {
+        this.notifyOpen(record);
+        if (record.scheduledFor <= Date.now()) this.notifyDue(record);
       } else if (isNew && !this.announcedThisSession.has(record.id)) {
         this.announcedThisSession.add(record.id);
         this.emit('appointment', { rendezvous: cloneRecord(record), phase: 'announced' });
@@ -904,15 +931,25 @@ export class RendezvousClient {
     try {
       for (const record of sortRendezvous(this.rendezvous.values())) {
         if (isDelivered(record)) continue;
-        const due = record.scheduledFor <= now;
+        const phase = handoffPhase(record.scheduledFor, now);
+        const eligible = phase !== 'scheduled';
         const human = this.humans.get(record.peerId);
         const bothOnline =
           this.signalStatus === 'online' &&
           Boolean(human?.online) &&
           !this.activeTransfers.has(record.id);
 
+        if (eligible) {
+          if (this.notifyOpen(record)) changed = true;
+          if (phase !== 'open-early' && this.notifyDue(record)) changed = true;
+        }
+        if (phase === 'still-open' && !this.lateNotified.has(record.id)) {
+          this.lateNotified.add(record.id);
+          changed = true;
+        }
+
         if (record.direction === 'incoming') {
-          const nextStatus: RendezvousStatus = due ? 'waiting' : 'scheduled';
+          const nextStatus: RendezvousStatus = eligible ? 'waiting' : 'scheduled';
           if (record.status === 'scheduled' || record.status === 'waiting') {
             if (record.status !== nextStatus && !this.activeTransfers.has(record.id)) {
               record.status = nextStatus;
@@ -920,11 +957,10 @@ export class RendezvousClient {
               changed = true;
             }
           }
-          if (due) this.notifyDue(record);
           continue;
         }
 
-        if (!due) {
+        if (!eligible) {
           if (record.status !== 'scheduled') {
             record.status = 'scheduled';
             await this.store.putRendezvous(record);
@@ -933,7 +969,6 @@ export class RendezvousClient {
           continue;
         }
 
-        this.notifyDue(record);
         if (!record.announcedAt) {
           this.announce(record);
         }
@@ -1004,10 +1039,18 @@ export class RendezvousClient {
     await transfer.start();
   }
 
-  private notifyDue(record: StoredRendezvous): void {
-    if (isDelivered(record) || this.dueNotified.has(record.id)) return;
+  private notifyOpen(record: StoredRendezvous): boolean {
+    if (isDelivered(record) || this.openNotified.has(record.id)) return false;
+    this.openNotified.add(record.id);
+    this.emit('appointment', { rendezvous: cloneRecord(record), phase: 'open' });
+    return true;
+  }
+
+  private notifyDue(record: StoredRendezvous): boolean {
+    if (isDelivered(record) || this.dueNotified.has(record.id)) return false;
     this.dueNotified.add(record.id);
     this.emit('appointment', { rendezvous: cloneRecord(record), phase: 'due' });
+    return true;
   }
 
   private async addHuman(

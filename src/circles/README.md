@@ -282,6 +282,7 @@ Import the UI separately: `import { defineCircleStatsElements } from '@instanthe
 - `<circle-create-form>`: name + IANA timezone; validates locally and emits `circle-create` with `{ name, timezone }`.
 - `<circle-stats-page>`: six progress bars, value/target, “as you see this circle”, “as of last sync”, `unconnectedToYou` list, and optional `inviteCandidates` with an invite action.
 - `<circle-stats-list>`: circles ordered by local score with progress rings and light rank numbers. Rows emit `circle-select`.
+- `<circle-bar>`: persistent bottom navigation with `+ circle` pinned left and one circular button per circle. It emits `circle-add` and `circle-open` with `{ circleId }`; the host owns the active circle.
 - `<circle-invite-card>`: a consent surface for a received `CircleInviteBundle`; it never signs by itself.
 - `presentation.ts`: pure formatting and draft-validation helpers.
 
@@ -340,7 +341,7 @@ dashboard.addEventListener('circle-create', async (event) => {
 
 For `circle-select`, load that circle, set `dashboard.stats`, `dashboard.view` and `dashboard.inviteCandidates`. For `circle-invite-request`, call `createCircleInvite` and send the bundle. For `circle-invite-accept`, call `acceptCircleInvite`, append the returned records and send the acceptance back.
 
-The existing `<rendezvous-app>` mounts a **circular `+ circle` button** at the lower left. It opens `<circle-dashboard>` in a dark dialog, and creation plus local listing/stats work today. Invitation delivery is still not wired into the app because the current app does not expose a direct `PeerChannel`, and this task excluded changing WebRTC/signalling/TURN. The in-app invite-candidate list is therefore intentionally empty until that transport exists; the API, dashboard and invitation card are ready for it.
+The existing `<rendezvous-app>` mounts a persistent bottom `<circle-bar>` with **`+ circle` pinned left** and one circular button per circle. Choosing `+ circle` opens the create flow; choosing a circle opens that circle’s dashboard. Creation and local listing/stats work today. Invitation delivery is still not wired into the app because the current app does not expose a direct `PeerChannel`, and this task excluded changing WebRTC/signalling/TURN. The in-app invite-candidate list is therefore intentionally empty until that transport exists; the API, dashboard and invitation card are ready for it.
 
 ## Tests
 
@@ -369,7 +370,7 @@ The suite covers canonical encoding, merge laws and rejections, window edges wit
 | `leaderboard.ts` | local mean-of-ratios ranking |
 | `adapters.ts` | existing P-256 identity, human friends, key directory |
 | `testing.ts` | Web-Crypto test identities and peer/store fakes |
-| `ui/` | framework-free page, list and invitation card |
+| `ui/` | framework-free circle bar, page, list, create form and invitation card |
 
 ## Non-goals
 

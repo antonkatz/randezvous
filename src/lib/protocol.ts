@@ -107,6 +107,19 @@ export interface SignalRtc {
   payload: RtcSignalPayload;
 }
 
+/** Opaque, already-signed circle metadata. The server relays, never verifies. */
+export interface SignalCircleRelay {
+  type: 'circle:relay';
+  to: string;
+  message: unknown;
+}
+
+export interface SignalCircleRelayed {
+  type: 'circle:relay';
+  fromId: string;
+  message: unknown;
+}
+
 export type ClientSignalMessage =
   | SignalHello
   | SignalIdentityUpdate
@@ -118,7 +131,8 @@ export type ClientSignalMessage =
   | SignalInviteReject
   | SignalRendezvousCreate
   | SignalRendezvousAck
-  | SignalRtc;
+  | SignalRtc
+  | SignalCircleRelay;
 
 export interface PresenceEntry {
   id: string;
@@ -217,6 +231,7 @@ export type ServerSignalMessage =
   | SignalRendezvousCreated
   | SignalRendezvousNotice
   | SignalRtcRelay
+  | SignalCircleRelayed
   | SignalError;
 
 export type RawSignalMessage = ClientSignalMessage | ServerSignalMessage;

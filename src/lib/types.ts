@@ -143,11 +143,17 @@ export interface ClientNotice {
   rendezvousId?: string;
 }
 
-export type AppointmentPhase = 'announced' | 'due' | 'received';
+export type AppointmentPhase = 'announced' | 'open' | 'due' | 'received';
 
 export interface AppointmentEvent {
   rendezvous: StoredRendezvous;
   phase: AppointmentPhase;
+}
+
+export interface CircleRelayEvent {
+  fromId: string;
+  /** Opaque signed circle-sync or circle-invitation message. */
+  message: unknown;
 }
 
 export interface TransferEvent {
@@ -165,6 +171,7 @@ export interface RendezvousClientEvents {
   notice: ClientNotice;
   appointment: AppointmentEvent;
   transfer: TransferEvent;
+  circle: CircleRelayEvent;
 }
 
 export interface RendezvousClientOptions {

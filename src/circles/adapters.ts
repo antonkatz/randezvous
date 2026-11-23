@@ -7,7 +7,7 @@ import {
   verifyDomain,
 } from '../lib/crypto';
 import type { StoredHuman, StoredIdentity } from '../lib/types';
-import type { Friends, Identity, PublicKeyId } from './types';
+import type { Friends, Identity, PeerChannel, PublicKeyId } from './types';
 
 export const CIRCLE_RECORD_SIGNATURE_DOMAIN = 'rendezvous/circle-record/v1';
 
@@ -99,4 +99,36 @@ export function isUsablePublicKey(publicKey: string): boolean {
   } catch {
     return false;
   }
+}
+
+
+/** Minimal host transport for server-relayed, already-signed circle messages. */
+export interface CircleRelayTransport {
+  sendCircleMessage(peerKey: PublicKeyId, message: unknown): boolean;
+  onCircleMessage(
+    listener: (fromPeerKey: PublicKeyId, message: unknown) => void,
+  ): () => void;
+}
+
+/**
+ * Adapt the host's existing authenticated metadata relay (for this app, the
+ * signalling server) to the PeerChannel interface used by CircleSync and
+ * invitations. The relay is untrusted; records are verified locally.
+ */
+export function createRelayPeerChannel(
+  transport: CircleRelayTransport,
+  peerKey: PublicKeyId,
+): PeerChannel {
+  return {
+    peerKey,
+    send(message) {
+      transport.sendCircleMessage(peerKey, message);
+    },
+    onMessage(handler) {
+      return transport.onCircleMessage((fromPeerKey, message) => {
+        if (fromPeerKey !== peerKey) return;
+        void handler(message);
+      });
+    },
+  };
 }

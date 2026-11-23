@@ -38,6 +38,7 @@
   --serif: 'Instrument Serif', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia,
     serif;
   --mono: 'SFMono-Regular', 'Cascadia Mono', 'Roboto Mono', Menlo, Consolas, monospace;
+  --circle-bar-clearance: 92px;
   display: block;
   min-height: 100svh;
   color: var(--ink);
@@ -98,6 +99,7 @@ button:disabled {
   min-height: 100svh;
   display: flex;
   flex-direction: column;
+  padding-bottom: calc(var(--circle-bar-clearance) + env(safe-area-inset-bottom));
   overflow: hidden;
   isolation: isolate;
   background:
@@ -2230,7 +2232,7 @@ dialog.photo-dialog::backdrop {
 .toast-region {
   position: fixed;
   right: 22px;
-  bottom: 22px;
+  bottom: calc(var(--circle-bar-clearance) + 8px);
   z-index: 80;
   display: flex;
   flex-direction: column;
@@ -2770,7 +2772,7 @@ dialog.photo-dialog::backdrop {
 
   .toast-region {
     right: 14px;
-    bottom: calc(14px + env(safe-area-inset-bottom));
+    bottom: calc(var(--circle-bar-clearance) + env(safe-area-inset-bottom) + 6px);
     width: calc(100vw - 28px);
     gap: 6px;
   }
@@ -2869,65 +2871,6 @@ dialog.photo-dialog::backdrop {
 
 /* ─── Circles ───────────────────────────────────────────── */
 
-.circle-fab {
-  position: fixed;
-  left: 26px;
-  bottom: 26px;
-  z-index: 70;
-  width: 72px;
-  height: 72px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0;
-  background: var(--ink);
-  color: #fffaf0;
-  border: 1px solid var(--ink);
-  border-radius: 50%;
-  box-shadow: 6px 6px 0 rgba(21, 19, 16, 0.16);
-  transition:
-    transform 160ms ease,
-    box-shadow 160ms ease,
-    background 160ms ease,
-    opacity 160ms ease;
-}
-
-.circle-fab::after {
-  content: '';
-  position: absolute;
-  inset: 5px;
-  border: 1px solid rgba(255, 250, 240, 0.3);
-  border-radius: 50%;
-  pointer-events: none;
-}
-
-.circle-fab-plus {
-  margin-top: 2px;
-  font-size: 29px;
-  font-weight: 300;
-  line-height: 1;
-}
-
-.circle-fab-label {
-  font-family: var(--mono);
-  font-size: 7px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.circle-fab:hover {
-  background: #24211c;
-  transform: translate(-1px, -1px);
-  box-shadow: 8px 8px 0 rgba(21, 19, 16, 0.13);
-}
-
-.circle-fab:active {
-  transform: translate(2px, 2px);
-  box-shadow: 2px 2px 0 rgba(21, 19, 16, 0.2);
-}
-
 dialog.circle-dialog {
   width: min(980px, calc(100vw - 34px));
   max-width: none;
@@ -2997,22 +2940,45 @@ circle-dashboard {
 }
 
 @media (max-width: 720px) {
-  .circle-fab {
-    left: 14px;
-    bottom: calc(14px + env(safe-area-inset-bottom));
-    width: 60px;
-    height: 60px;
-  }
-
-  .circle-fab-plus {
-    font-size: 24px;
-  }
-
-  .circle-fab-label {
-    font-size: 6px;
-  }
-
   .circle-dialog-head {
     padding: 9px 11px 0;
+  }
+}
+
+/* ─── Delivery celebration ──────────────────────────────── */
+
+.confetti-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -16px;
+  left: var(--x);
+  width: var(--size);
+  height: calc(var(--size) * 0.45);
+  background: var(--color);
+  border-radius: 1px;
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: confetti-fall var(--duration) cubic-bezier(0.18, 0.65, 0.35, 1) var(--delay)
+    forwards;
+}
+
+@keyframes confetti-fall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -20px, 0) rotate(0deg);
+  }
+  12% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--drift), 105vh, 0) rotate(calc(var(--rotate) + 720deg));
   }
 }

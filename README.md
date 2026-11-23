@@ -9,7 +9,7 @@ This repository contains the reference app, the reusable package, and a small st
 
 - **Spec:** [`docs/SPEC.md`](docs/SPEC.md) — user stories, visual design stories, architecture, protocol, threat model, IPv6/TURN assumptions, and the future peer-as-signaller path.
 - **Circles:** [`src/circles/README.md`](src/circles/README.md) — client-side group membership, signed invitations, sync, and the six circle-stats ratios.
-- **UI:** encapsulated `<rendezvous-app>` custom element with a cumulative, ranked photo wall.
+- **UI:** encapsulated `<rendezvous-app>` custom element with a cumulative, ranked photo wall and a short confetti celebration when a photo completes its handoff.
 - **Client:** headless `RendezvousClient` with snapshots and typed events.
 - **Server:** WebSocket bootstrap for authenticated presence, appointment notices, invite relay, revocation, and WebRTC signalling. It never stores photo bytes.
 

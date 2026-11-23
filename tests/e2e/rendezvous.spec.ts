@@ -128,22 +128,26 @@ test('links two browsers, matches verification words, and hands off a photo only
         canvas.toBlob((value) => (value ? resolve(value) : reject(new Error('No blob'))), 'image/png');
       });
       const file = new File([blob], 'rendezvous-e2e.png', { type: 'image/png' });
+      const scheduledFor = Date.now() + 5_000;
       const record = await app.clientInstance.scheduleRendezvous({
         humanId: humanId!,
         photo: file,
         fileName: file.name,
-        scheduledFor: Date.now() + 5_000,
+        scheduledFor,
       });
-      return { id: record.id, size: blob.size };
+      return { id: record.id, size: blob.size, scheduledFor };
     },
     { humanId: humanId! },
   );
   expect(scheduled.size).toBeGreaterThan(100_000);
 
-  // Before the meeting, both sides know it is scheduled but nothing crossed.
-  await expect.poll(async () => (await snapshot(baz)).rendezvous[0]?.status).toBe('scheduled');
-  expect((await snapshot(baz)).rendezvous[0]?.photo).toBeNull();
-
+  // Five minutes ahead is already inside the early handoff window, so both
+  // present browsers connect immediately instead of waiting for the clock.
+  await baz.waitForFunction(
+    () => Boolean(document.querySelector('rendezvous-app')?.shadowRoot?.querySelector('.confetti-layer')),
+    undefined,
+    { timeout: 30_000 },
+  );
   await expect
     .poll(async () => (await snapshot(ana)).rendezvous[0]?.status, { timeout: 30_000 })
     .toBe('delivered');
@@ -153,6 +157,7 @@ test('links two browsers, matches verification words, and hands off a photo only
   const received = (await snapshot(baz)).rendezvous[0];
   expect(received?.photo?.size).toBe(scheduled.size);
   expect(received?.photo?.type).toBe('image/png');
+  expect(received?.deliveredAt).toBeLessThan(scheduled.scheduledFor);
   const diagnostics = await ana.evaluate(() => {
     const app = document.querySelector('rendezvous-app') as unknown as {
       clientInstance: {
@@ -240,6 +245,11 @@ test('waits when the recipient is offline and completes when they return', async
 
   const humanId = (await snapshot(ana)).humans[0]?.id;
   expect(humanId).toBeTruthy();
+
+  // Close the recipient first so the early window cannot start a transfer.
+  await baz.close();
+  await expect.poll(async () => (await snapshot(ana)).humans[0]?.online).toBe(false);
+
   const record = await ana.evaluate(
     async ({ humanId }) => {
       const app = document.querySelector('rendezvous-app') as unknown as {
@@ -265,9 +275,6 @@ test('waits when the recipient is offline and completes when they return', async
     { humanId: humanId! },
   );
 
-  await baz.close();
-  await expect.poll(async () => (await snapshot(ana)).humans[0]?.online).toBe(false);
-  await ana.waitForTimeout(5_000);
   await expect
     .poll(async () => (await snapshot(ana)).rendezvous.find((entry) => entry.id === record.id)?.status)
     .toBe('waiting');

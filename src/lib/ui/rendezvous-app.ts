@@ -2,22 +2,36 @@ import styles from './styles.css?inline';
 import instantHeroMark from './instanthero-mark.svg?raw';
 import {
   CircleKeyDirectory,
+  CircleSync,
   IndexedDbCircleStore,
+  acceptCircleInvite,
+  availableInvitees,
   computeCircleStats,
   createBrowserCircleIdentity,
   createCircle,
+  createCircleInvite,
+  createRelayPeerChannel,
   deriveMemberView,
-  friendsFromHumans,
+  isCircleInviteMessage,
+  mergeCircleInviteAcceptance,
   rankCircles,
+  sendCircleInvite,
+  sendCircleInviteAcceptance,
+  type CircleInviteBundle,
   type CircleStats,
   type Friends as CircleFriends,
   type Identity as CircleIdentity,
+  type MemberView,
+  type PeerChannel,
+  type RankedCircle,
 } from '../../circles';
 import {
+  CircleBar,
   CircleDashboard,
   defineCircleStatsElements,
 } from '../../circles/ui';
 import { displayName, normalizeName } from '../crypto';
+import { handoffPhase } from '../handoff';
 import { RendezvousClient } from '../client';
 import { RendezvousStore } from '../store';
 import { wallPhotoWidth } from './wall';
@@ -122,17 +136,14 @@ const TEMPLATE = `
     <div class="wall-board" id="wall-board"></div>
   </section>
 
-  <button class="circle-fab" id="circle-fab" type="button" aria-haspopup="dialog" aria-controls="circle-dialog" aria-label="Create a circle" title="Create a circle">
-    <span class="circle-fab-plus" aria-hidden="true">+</span>
-    <span class="circle-fab-label" aria-hidden="true">circle</span>
-  </button>
-
   <footer class="footer">
     <span class="footer-brand">rendezvous <span>✳</span></span>
     <span class="footer-center"><span class="footer-mark" aria-hidden="true"></span> photo bytes never touch a server</span>
     <span>v0.1 · instant hero</span>
   </footer>
 </div>
+
+<circle-bar id="circle-bar"></circle-bar>
 
 <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="false"></div>
 
@@ -410,6 +421,7 @@ export class RendezvousApp extends HTMLElement {
   private objectUrls = new Map<string, string>();
   private toasts = new Map<string, ToastHandle>();
   private transferToastIds = new Map<string, string>();
+  private celebrated = new Set<string>();
   private toastSequence = 0;
   private nameSaveTimer: number | null = null;
   private copyResetTimer: number | null = null;
@@ -433,6 +445,9 @@ export class RendezvousApp extends HTMLElement {
   private circleIdentity: CircleIdentity | null = null;
   private circleFriends: CircleFriends | null = null;
   private circleHumans: StoredHuman[] = [];
+  private circleBar: CircleBar | null = null;
+  private circleEntries: readonly RankedCircle[] = [];
+  private activeCircleId: string | null = null;
 
   private readonly onDocumentPointerDown = (event: PointerEvent): void => {
     const path = event.composedPath();
@@ -459,6 +474,7 @@ export class RendezvousApp extends HTMLElement {
   connectedCallback(): void {
     if (this.initialized) return;
     this.initialized = true;
+    defineCircleStatsElements();
     this.root = this.shadowRoot ?? this.attachShadow({ mode: 'open' });
     this.root.innerHTML = TEMPLATE;
     this.bindStaticEvents();
@@ -501,6 +517,9 @@ export class RendezvousApp extends HTMLElement {
     this.circleAppStore = null;
     this.circleStore = null;
     this.circleHumans = [];
+    this.circleBar = null;
+    this.circleEntries = [];
+    this.activeCircleId = null;
   }
 
   private $<T extends Element = HTMLElement>(selector: string): T {
@@ -546,6 +565,7 @@ export class RendezvousApp extends HTMLElement {
     try {
       await this.client.start();
       this.$('#app').classList.remove('is-loading');
+      void this.refreshCircleBar();
     } catch (error) {
       this.showBootError(
         error instanceof Error
@@ -555,13 +575,17 @@ export class RendezvousApp extends HTMLElement {
     }
   }
 
-  private async openCircles(): Promise<void> {
+  private async openCircles(
+    options: { create?: boolean; circleId?: string } = {},
+  ): Promise<void> {
     const dialog = this.$<HTMLDialogElement>('#circle-dialog');
     if (!dialog.open) dialog.showModal();
     try {
       await this.prepareCircles();
       await this.reloadCircles();
-      this.circleDashboard?.showList();
+      if (options.circleId) await this.selectCircle(options.circleId);
+      else if (options.create) this.circleDashboard?.showCreate();
+      else this.circleDashboard?.showList();
     } catch (error) {
       dialog.close();
       this.showToast({
@@ -575,8 +599,16 @@ export class RendezvousApp extends HTMLElement {
     }
   }
 
+  private async refreshCircleBar(): Promise<void> {
+    try {
+      await this.prepareCircles();
+      await this.reloadCircles();
+    } catch {
+      // The bar still offers "+ circle"; opening the dialog will report the error.
+    }
+  }
+
   private async prepareCircles(): Promise<void> {
-    defineCircleStatsElements();
     const storageName = this.getAttribute('storage-name') || 'rendezvous';
     if (!this.circleAppStore) this.circleAppStore = new RendezvousStore(storageName);
     const [storedIdentity, humans] = await Promise.all([
@@ -626,7 +658,24 @@ export class RendezvousApp extends HTMLElement {
       if (!view.members.includes(identity.selfKey)) continue;
       statsList.push(computeCircleStats(records, view, now, { circleId }));
     }
-    dashboard.entries = rankCircles(statsList);
+    this.circleEntries = rankCircles(statsList);
+    if (
+      this.activeCircleId &&
+      !this.circleEntries.some((entry) => entry.circleId === this.activeCircleId)
+    ) {
+      this.activeCircleId = null;
+    }
+    dashboard.entries = this.circleEntries;
+    this.renderCircleBar();
+  }
+
+  private renderCircleBar(): void {
+    if (!this.circleBar) return;
+    this.circleBar.entries = this.circleEntries.map((entry) => ({
+      circleId: entry.circleId,
+      name: entry.stats.name || entry.circleId,
+    }));
+    this.circleBar.activeCircleId = this.activeCircleId;
   }
 
   private async selectCircle(circleId: string): Promise<void> {
@@ -649,6 +698,8 @@ export class RendezvousApp extends HTMLElement {
     dashboard.view = view;
     dashboard.inviteCandidates = [];
     dashboard.stats = computeCircleStats(records, view, Date.now(), { circleId });
+    this.activeCircleId = circleId;
+    this.renderCircleBar();
   }
 
   private async createCircleFromDashboard(event: Event): Promise<void> {
@@ -707,7 +758,13 @@ export class RendezvousApp extends HTMLElement {
     this.$('#copy-link').addEventListener('click', () => void this.copyInviteLink());
     this.$('#signal-button').addEventListener('click', () => this.toggleDiagnostics());
     this.$('#set-rendezvous').addEventListener('click', () => this.openRendezvous());
-    this.$('#circle-fab').addEventListener('click', () => void this.openCircles());
+    const circleBar = this.$<CircleBar>('#circle-bar');
+    circleBar.addEventListener('circle-add', () => void this.openCircles({ create: true }));
+    circleBar.addEventListener('circle-open', (event) => {
+      const detail = (event as CustomEvent<{ circleId?: string }>).detail;
+      if (detail?.circleId) void this.openCircles({ circleId: detail.circleId });
+    });
+    this.circleBar = circleBar;
     this.$('#circle-close').addEventListener('click', () =>
       this.$<HTMLDialogElement>('#circle-dialog').close(),
     );
@@ -1026,16 +1083,25 @@ export class RendezvousApp extends HTMLElement {
       const state = document.createElement('span');
       state.className = 'next-card-state';
       const needsPerson = !human?.online;
+      const phase = handoffPhase(record.scheduledFor);
       state.textContent =
         record.status === 'transferring'
           ? 'moving directly'
           : record.status === 'failed'
             ? 'retrying when both are here'
-            : record.scheduledFor > Date.now()
+            : phase === 'scheduled'
               ? `set · ${formatShortDay(record.scheduledFor)}`
-              : needsPerson
-                ? `waiting for ${person}`
-                : 'both here · connecting';
+              : phase === 'open-early'
+                ? needsPerson
+                  ? `open early · waiting for ${person}`
+                  : 'both here · connecting early'
+                : phase === 'due'
+                  ? needsPerson
+                    ? `waiting for ${person}`
+                    : 'both here · connecting'
+                  : needsPerson
+                    ? `still open · waiting for ${person}`
+                    : 'still open · connecting';
       copy.append(title, state);
       const arrow = document.createElement('span');
       arrow.className = 'next-card-arrow';
@@ -1713,7 +1779,7 @@ export class RendezvousApp extends HTMLElement {
       });
       return;
     }
-    if (event.phase === 'due') {
+    if (event.phase === 'open' || event.phase === 'due') {
       const directionNote =
         record.direction === 'incoming'
           ? human?.online
@@ -1723,10 +1789,13 @@ export class RendezvousApp extends HTMLElement {
             ? `${person} is here. Connecting directly now.`
             : `Waiting for ${person} to come online. The photograph is still with you.`;
       this.showToast({
-        tone: 'warning',
-        title: `It’s time for ${person}.`,
+        tone: event.phase === 'due' ? 'warning' : 'info',
+        title:
+          event.phase === 'due'
+            ? `It’s time for ${person}.`
+            : `The handoff with ${person} is open.`,
         message: directionNote,
-        duration: 10_000,
+        duration: event.phase === 'due' ? 10_000 : 8_000,
       });
       return;
     }
@@ -1751,6 +1820,10 @@ export class RendezvousApp extends HTMLElement {
 
   private handleTransfer(event: TransferEvent): void {
     if (event.phase === 'complete') {
+      if (!this.celebrated.has(event.rendezvousId)) {
+        this.celebrated.add(event.rendezvousId);
+        this.celebrateDelivery();
+      }
       const toastId = this.transferToastIds.get(event.rendezvousId);
       if (toastId) {
         const handle = this.toasts.get(toastId);
@@ -1812,6 +1885,33 @@ export class RendezvousApp extends HTMLElement {
         if (bar) bar.style.width = `${percent}%`;
       }
     }
+  }
+
+  private celebrateDelivery(): void {
+    if (
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return;
+    }
+    const layer = document.createElement('div');
+    layer.className = 'confetti-layer';
+    layer.setAttribute('aria-hidden', 'true');
+    const colors = ['var(--accent)', '#e0a458', '#7ea98a', '#f8f2e7', '#c9553d'];
+    for (let index = 0; index < 44; index += 1) {
+      const piece = document.createElement('span');
+      piece.className = 'confetti-piece';
+      piece.style.setProperty('--x', `${Math.random() * 100}%`);
+      piece.style.setProperty('--delay', `${Math.random() * 180}ms`);
+      piece.style.setProperty('--duration', `${1_600 + Math.random() * 900}ms`);
+      piece.style.setProperty('--rotate', `${Math.random() * 360}deg`);
+      piece.style.setProperty('--drift', `${(Math.random() - 0.5) * 240}px`);
+      piece.style.setProperty('--size', `${6 + Math.random() * 8}px`);
+      piece.style.setProperty('--color', colors[index % colors.length] ?? '#e0a458');
+      layer.append(piece);
+    }
+    this.root.append(layer);
+    window.setTimeout(() => layer.remove(), 3_000);
   }
 
   private showToast(content: ToastContent): string {

@@ -42,6 +42,7 @@ const DATA_FILE =
 const DIST_DIR = resolve(process.cwd(), 'dist');
 const CHALLENGE_TTL_MS = 60_000;
 const MAX_PENDING_RENDEZVOUS_PER_SENDER = 100;
+const MAX_CIRCLE_RELAY_BYTES = 512_000;
 const NETWORK_WARNING = DUAL_STACK
   ? null
   : `The bootstrap server is listening on ${HOST} only. IPv6-only peers may be unable to connect. Configure a dual-stack listener (HOST="::") and a dual-stack reverse proxy.`;
@@ -526,6 +527,38 @@ async function handleMessage(ws: WebSocket, message: ClientSignalMessage): Promi
         store.removeRendezvous(message.id);
         await store.persist();
       }
+      break;
+    }
+    case 'circle:relay': {
+      if (
+        typeof message.to !== 'string' ||
+        !isPeerId(message.to) ||
+        message.to === state.id ||
+        !message.message ||
+        typeof message.message !== 'object'
+      ) {
+        return;
+      }
+      let payloadSize = 0;
+      try {
+        payloadSize = JSON.stringify(message.message).length;
+      } catch {
+        return;
+      }
+      if (payloadSize > MAX_CIRCLE_RELAY_BYTES) return;
+      const target = online.get(message.to);
+      const targetState = target ? clients.get(target) : null;
+      if (!target || !targetState?.authenticated) return;
+      // Only mutual direct humans may exchange circle metadata. The circle
+      // signatures and membership rules decide what is actually accepted.
+      if (!state.subscriptions.has(message.to) || !targetState.subscriptions.has(state.id)) {
+        return;
+      }
+      send(target, {
+        type: 'circle:relay',
+        fromId: state.id,
+        message: message.message,
+      });
       break;
     }
     case 'rtc': {

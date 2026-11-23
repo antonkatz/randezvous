@@ -1,6 +1,6 @@
 # Rendezvous — Product & Technical Specification
 
-**Status:** v0.1 · initial build; voice notes, re-sharing, and one-minute audio are specified for future work. The five-minute early/late handoff window is required behaviour and is pending in the reference client.  
+**Status:** v0.1 · initial build; reciprocal photo contributions, the live rendezvous screen, voice notes, re-sharing, and one-minute audio are specified for future work. The five-minute early/late handoff window and delivery celebration are implemented.
 **Date:** 22 November 2026  
 **Codename:** rendezvous  
 **Package:** `@instanthero/rendezvous`
@@ -18,7 +18,7 @@
 
 ## 1. What this is
 
-> **Implementation note:** v0.1 implements the private browser-to-browser photo handoff, invites, verification, revocation, ranked wall, and diagnostics. The following are **specified future additions and are not in the v0.1 build**: per-photo voice notes, re-sharing a locally held photo, the one-minute live voice window, and the future public-photo re-share layer. They are written here to lock the product behaviour before implementation. The five-minute early/late handoff window (§12) is part of the core meeting model; the current reference client still starts at the scheduled time, so its early-open and five-minute-late behaviour is pending. Circle records, membership, and stats also exist as a separate local module (`src/circles`); their daily canonical rule, auto-accept policy, expiring server-side rendezvous invite, and two-member auto-sync are specified in §3 but are not yet wired into the app.
+> **Implementation note:** v0.1 implements the private browser-to-browser photo handoff, invites, verification, revocation, ranked wall, diagnostics, the five-minute early/late handoff window, and the delivery confetti animation. The following are **specified future additions and are not in the v0.1 build**: reciprocal photo contributions from the non-creator, the live rendezvous screen, per-photo voice notes, re-sharing a locally held photo, the one-minute live voice window, and the future public-photo re-share layer. They are written here to lock the product behaviour before implementation. Circle records, membership, and stats also exist as a separate local module (`src/circles`); their daily canonical rule, auto-accept policy, expiring server-side rendezvous invite, and two-member auto-sync are specified in §3 but are not yet wired into the app.
 
 Rendezvous is a tiny, private photo-sharing service that runs entirely in the browser. Two people link their browsers once, then leave photographs for each other at chosen times. Photos travel directly from browser to browser over WebRTC. There is no photo upload, no media server, and no account in the private path. (A future, separate opt-in public-photo layer is sketched in US-20 and explicitly deferred.)
 
@@ -52,11 +52,13 @@ This distinction drives every flow in this document:
 | **Circle** | A named, private group of linked humans that shares at most one canonical rendezvous per local day. |
 | **Active circle** | The circle currently shown on the main surface, selected from the bottom circle bar. |
 | **Circle invitation** | A signed offer addressed to one public-key identity to join a circle. It is not a bearer link. |
-| **Rendezvous** | A scheduled photo handoff between two humans: one photo, one recipient, one moment. |
+| **Rendezvous** | A scheduled photo handoff between two humans at one moment. The creator contributes a photo; the other human may contribute one reciprocal photo. |
+| **Creator** | The human who sets the rendezvous, chooses its moment, and attaches the first photo. |
+| **Reciprocal contribution** | The optional one photo the non-creator attaches to an existing rendezvous, delivered to the creator at the same meeting. |
 | **Circle rendezvous** | The one shared appointment for a circle on a local calendar day; metadata only. |
 | **Canonical circle rendezvous** | The first valid signed circle rendezvous for that circle and day, by signed creation time and then record ID. |
 | **Circle rendezvous invite** | A circle rendezvous notice delivered to members. The server stores only this circle invite, and only until the scheduled rendezvous time has passed. |
-| **Rendezvous time** | The local date and time chosen by the sender. Stored as an absolute Unix timestamp. |
+| **Rendezvous time** | The local date and time chosen by the creator. Stored as an absolute Unix timestamp. |
 | **Online** | The browser app is open and connected to the signalling server. This is only a presence signal; the direct RTC link is established when the handoff begins. |
 | **Waiting** | The handoff window is open but the handoff cannot happen because one or both browsers are not present. |
 | **Handoff window** | The normal on-time window is `[T − 5 minutes, T + 5 minutes]`. If both humans are online anywhere inside it, they connect and exchange automatically, including when both are already online beforehand. Later arrival does not expire the saved photograph. |
@@ -173,6 +175,7 @@ As a sender, I want to choose one photo, one human, and a time, so that we can m
 - The appointment metadata is sent to the signalling server for store-and-forward delivery to the recipient.
 - The sender may schedule while the signalling server is offline; delivery is retried while the app remains open and on subsequent launches.
 - The completed flow makes the meeting requirement explicit: both browsers must be present.
+- A rendezvous carries at most one photo per participant: the creator’s photo plus an optional reciprocal contribution from the other human (US-10b). The creator’s three-stage flow never waits for a reply.
 - Only one human is selected per direct rendezvous. A circle rendezvous is the group exception: it selects a circle and a shared moment, while each photo transfer remains a direct pairwise handoff.
 
 #### US-7 — The recipient is notified when they return
@@ -184,6 +187,7 @@ As a recipient, I want the appointment to be waiting for me even if I was offlin
 - If the recipient is offline, the notice is queued indefinitely within the retention policy and delivered on their next connection.
 - The notice contains only: appointment ID, sender ID, sender display name, scheduled timestamp, and creation timestamp.
 - The recipient’s client persists the notice locally.
+- The persisted appointment appears in the recipient’s upcoming area and offers **add a photo** for an optional reciprocal contribution (US-10b).
 - An upcoming appointment produces a quiet in-app notice. When the handoff window opens at five minutes before the scheduled time, an online recipient receives a prominent in-app notification; an overdue appointment that is still waiting also shows prominently.
 - The server notice may arrive earlier; the local handoff alert is timed to the open window.
 - If the recipient is online when the appointed time arrives, the client also raises a local “it is time” notification.
@@ -204,6 +208,8 @@ As a sender and recipient, we need to understand when a handoff can actually hap
 - If neither is online, nothing happens. On the next overlap of both browsers after the handoff window opens, the transfer begins.
 - If the transfer is interrupted, it is retried automatically while both remain online. The photo remains on the sender.
 - Success is shown in both UIs only after the recipient has received the complete file and acknowledged it.
+- When both humans are connected, the app presents the live rendezvous screen (US-8b). Dismissing it never pauses or cancels the handoff.
+- If the recipient attached a reciprocal photo (US-10b), the same authenticated session carries both directions; each direction is acknowledged independently.
 - The system never claims a photo was delivered because a time passed or because the server stored a notice.
 - The ±5-minute window is computed locally from the scheduled timestamp; no extra server state or appointment is created.
 - At 5 minutes before the time, if the recipient is online, a “the handoff is open” alert is raised. At the scheduled time, the appointment is labelled as due; it remains labelled “still open” through `T + 5` without blocking a later completion.
@@ -215,6 +221,7 @@ As a recipient, I want to know when a photo actually arrives and be able to view
 - An incoming transfer shows a connected “receiving” state and progress.
 - Completed photos are persisted to the recipient’s IndexedDB.
 - A completed incoming photo raises a notification with an “Open” affordance.
+- A completed handoff triggers a brief confetti celebration in both browsers. It must be non-blocking, must not obscure controls, must fire once per rendezvous, and must be skipped when the user prefers reduced motion.
 - Every delivered photo appears on a persistent photo wall (“the wall”), starting from the first and ordered by arrival.
 - The freshest delivered photo is rank 01; each later-ranked photo is progressively smaller according to a power-law distribution.
 - The wall has generous whitespace below the top menu and is composed as a board, not a horizontal filmstrip.
@@ -599,6 +606,7 @@ Acceptance:
 - In-app toast/card appears at lower-right (desktop) and above the bottom safe-area (mobile).
 - Shows sender name, state, and time. When complete, shows a photo thumbnail, an audio badge if a voice note is attached, “Open”, and “Dismiss”.
 - The opening of the five-minute-early window is announced locally, without pretending the photograph has been delivered.
+- When the transfer completes, a short confetti animation plays once in both browsers; it is visual-only, respects reduced motion, and never blocks the toast or the wall.
 - Does not auto-open a full-screen photo without user action.
 - Multiple notices stack to a small limit and are also retained in the upcoming/archive areas.
 - `aria-live` announces the arrival once.
