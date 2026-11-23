@@ -43,6 +43,14 @@ const DIST_DIR = resolve(process.cwd(), 'dist');
 const CHALLENGE_TTL_MS = 60_000;
 const MAX_PENDING_RENDEZVOUS_PER_SENDER = 100;
 const MAX_CIRCLE_RELAY_BYTES = 512_000;
+// A queued join is retried until the recipient acknowledges it. This heals
+// dropped messages, transient client storage failures, and silently dead
+// mobile sockets that the server still believes are online.
+const JOIN_RETRY_MS = Math.max(
+  1_000,
+  Number(process.env.RENDEZVOUS_JOIN_RETRY_MS ?? 15_000) || 15_000,
+);
+const HEARTBEAT_MS = 30_000;
 const NETWORK_WARNING = DUAL_STACK
   ? null
   : `The bootstrap server is listening on ${HOST} only. IPv6-only peers may be unable to connect. Configure a dual-stack listener (HOST="::") and a dual-stack reverse proxy.`;
@@ -89,6 +97,7 @@ interface ClientState {
 
 const clients = new Map<WebSocket, ClientState>();
 const online = new Map<string, WebSocket>();
+const alive = new WeakMap<WebSocket, boolean>();
 
 function send(ws: WebSocket, message: ServerSignalMessage): boolean {
   if (ws.readyState !== WebSocket.OPEN) return false;
@@ -149,6 +158,11 @@ function broadcastPresence(id: string): void {
     if (!watcher.authenticated || !watcher.subscriptions.has(id)) continue;
     send(watcher.ws, { type: 'presence', peers: [entry] });
   }
+}
+
+function deliverJoin(join: JoinRequest): void {
+  const target = online.get(join.to);
+  if (target) send(target, { type: 'invite:request', join });
 }
 
 function deliverPending(target: ClientState): void {
@@ -365,8 +379,7 @@ async function handleInviteJoin(state: ClientState, join: JoinRequest): Promise<
     await store.persist();
   }
   send(state.ws, { type: 'invite:queued', joinId: join.id });
-  const target = online.get(join.to);
-  if (target) send(target, { type: 'invite:request', join });
+  deliverJoin(join);
 }
 
 function handleContactRemove(
@@ -499,6 +512,14 @@ async function handleMessage(ws: WebSocket, message: ClientSignalMessage): Promi
       if (join?.to === state.id) {
         store.removeJoin(message.joinId);
         await store.persist();
+        const sender = online.get(join.from.id);
+        if (sender) {
+          send(sender, {
+            type: 'invite:accepted',
+            joinId: join.id,
+            humanId: join.to,
+          });
+        }
       }
       break;
     }
@@ -709,6 +730,8 @@ wss.on('connection', (ws, request) => {
     remoteFamily: observedFamily(remoteAddress, request.socket.remoteFamily),
   };
   clients.set(ws, state);
+  alive.set(ws, true);
+  ws.on('pong', () => alive.set(ws, true));
   send(ws, {
     type: 'challenge',
     nonce: state.challenge,
@@ -756,6 +779,31 @@ wss.on('connection', (ws, request) => {
   });
 });
 
+// Re-send unacknowledged joins to online recipients. The recipient acks only
+// after it has persisted the human, so this retries until the link is durable.
+const joinRetryTimer = setInterval(() => {
+  for (const join of store.joins) {
+    deliverJoin(join);
+  }
+}, JOIN_RETRY_MS);
+
+// Detect mobile browsers that disappear without closing their socket: the
+// server keeps thinking they are online and their pending joins never arrive.
+const heartbeatTimer = setInterval(() => {
+  for (const ws of [...wss.clients]) {
+    if (alive.get(ws) === false) {
+      ws.terminate();
+      continue;
+    }
+    alive.set(ws, false);
+    try {
+      ws.ping();
+    } catch {
+      ws.terminate();
+    }
+  }
+}, HEARTBEAT_MS);
+
 await store.load();
 console.log(
   `[store] loaded ${store.joins.length} join(s), ${store.rendezvous.length} rendezvous notice(s)`,
@@ -789,6 +837,8 @@ httpServer.listen(
 
 async function shutdown(signal: string): Promise<void> {
   console.log(`[signal] ${signal}; shutting down`);
+  clearInterval(joinRetryTimer);
+  clearInterval(heartbeatTimer);
   await store.persist().catch(() => undefined);
   httpServer.close();
   wss.close();

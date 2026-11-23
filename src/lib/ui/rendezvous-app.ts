@@ -2122,6 +2122,8 @@ export class RendezvousApp extends HTMLElement {
       'human-joined': 'The door opened.',
       'human-removed': 'Forgotten.',
       'human-removed-remotely': 'A door closed.',
+      'invite-accepted': 'The link is confirmed.',
+      'join-retry': 'The link is still arriving.',
       'invalid-invite': 'That link did not verify.',
       'own-invite': 'That is your own link.',
       'already-human': 'Already linked.',

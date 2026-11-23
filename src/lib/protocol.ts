@@ -176,6 +176,12 @@ export interface SignalInviteRequest {
   join: JoinRequest;
 }
 
+export interface SignalInviteAccepted {
+  type: 'invite:accepted';
+  joinId: string;
+  humanId: string;
+}
+
 export interface SignalInviteRejected {
   type: 'invite:rejected';
   joinId: string;
@@ -225,6 +231,7 @@ export type ServerSignalMessage =
   | SignalPresence
   | SignalInviteQueued
   | SignalInviteRequest
+  | SignalInviteAccepted
   | SignalInviteRejected
   | SignalContactRemoveQueued
   | SignalContactRemoved

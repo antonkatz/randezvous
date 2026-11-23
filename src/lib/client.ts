@@ -127,6 +127,7 @@ export class RendezvousClient {
   private announceInFlight = new Set<string>();
   private announceRetryAt = new Map<string, number>();
   private joinsInFlight = new Set<string>();
+  private joinRetryNotified = new Set<string>();
   private removalsInFlight = new Set<string>();
   private lastSignalStatusWasOnline = false;
   private readonly listeners = new Map<
@@ -539,9 +540,22 @@ export class RendezvousClient {
         await this.applyPresence(message.peers);
         return;
       case 'invite:queued':
+        // Keep both the pending join and the in-flight marker until the
+        // inviter acknowledges it. The marker clears on disconnect, so the
+        // next connection re-sends; the local join clears on accepted/rejected.
+        return;
+      case 'invite:accepted': {
         this.joinsInFlight.delete(message.joinId);
         await this.store.removePendingJoin(message.joinId);
+        const human = this.humans.get(message.humanId);
+        this.notice({
+          tone: 'success',
+          code: 'invite-accepted',
+          message: `${displayName(human?.name ?? '')} accepted your invitation.`,
+          humanId: message.humanId,
+        });
         return;
+      }
       case 'invite:request':
         await this.handleIncomingJoin(message.join);
         return;
@@ -634,45 +648,71 @@ export class RendezvousClient {
       await this.store.addRevokedInvites([inviteHash]);
       return;
     }
+    let verified: Awaited<ReturnType<typeof verifyJoinRequest>>;
     try {
-      const verified = await verifyJoinRequest(join, {
+      verified = await verifyJoinRequest(join, {
         id: identity.id,
         name: identity.name,
         publicKey: identity.publicKey,
       });
-      const existing = this.humans.get(verified.sender.id);
-      if (existing && existing.publicKey !== verified.sender.publicKey) {
-        this.notice({
-          tone: 'error',
-          code: 'key-mismatch',
-          message: `A browser claimed to be ${displayName(existing.name)} with a different key. The connection was refused.`,
-          humanId: existing.id,
-        });
-      } else {
-        const human = await this.addHuman(verified.sender, inviteHash);
-        if (human && !existing) {
-          this.notice({
-            tone: 'success',
-            code: 'human-joined',
-            message: `${displayName(human.name)} is now one of your humans. Compare your verification words.`,
-            humanId: human.id,
-          });
-        }
-      }
     } catch {
       this.notice({
         tone: 'warning',
         code: 'invalid-invite',
         message: 'A connection request used an invitation that could not be verified.',
       });
+      // A valid-but-unverifiable request can never succeed, so acknowledge it
+      // rather than letting the server retry forever.
+      this.transport?.send({ type: 'invite:ack', joinId: join.id });
+      return;
     }
-    // Acknowledging prevents an invalid or already-processed request looping forever.
+
+    const existing = this.humans.get(verified.sender.id);
+    if (existing && existing.publicKey !== verified.sender.publicKey) {
+      this.notice({
+        tone: 'error',
+        code: 'key-mismatch',
+        message: `A browser claimed to be ${displayName(existing.name)} with a different key. The connection was refused.`,
+        humanId: existing.id,
+      });
+      this.transport?.send({ type: 'invite:ack', joinId: join.id });
+      return;
+    }
+
+    try {
+      const human = await this.addHuman(verified.sender, inviteHash);
+      this.joinRetryNotified.delete(join.id);
+      if (human && !existing) {
+        this.notice({
+          tone: 'success',
+          code: 'human-joined',
+          message: `${displayName(human.name)} is now one of your humans. Compare your verification words.`,
+          humanId: human.id,
+        });
+      }
+    } catch (error) {
+      // Do not acknowledge: the server keeps retrying until the human is
+      // actually written. Mobile browsers can fail transiently when storage
+      // is busy or the page is resuming.
+      console.warn('[rendezvous] connection request could not be saved; retrying', error);
+      if (!this.joinRetryNotified.has(join.id)) {
+        this.joinRetryNotified.add(join.id);
+        this.notice({
+          tone: 'warning',
+          code: 'join-retry',
+          message: 'A connection request arrived but could not be saved yet. Rendezvous will retry.',
+          humanId: verified.sender.id,
+        });
+      }
+      return;
+    }
     this.transport?.send({ type: 'invite:ack', joinId: join.id });
   }
 
   private async handleInviteRejected(joinId: string, inviterId: string): Promise<void> {
     await this.store.removePendingJoin(joinId);
     this.joinsInFlight.delete(joinId);
+    this.joinRetryNotified.delete(joinId);
     if (this.humans.has(inviterId)) {
       await this.removeHumanInternal(inviterId, false);
     }
@@ -1169,6 +1209,7 @@ export class RendezvousClient {
     for (const join of joins) {
       if (join.to === humanId) {
         this.joinsInFlight.delete(join.id);
+        this.joinRetryNotified.delete(join.id);
         await this.store.removePendingJoin(join.id);
       }
     }

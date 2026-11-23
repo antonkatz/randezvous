@@ -115,6 +115,7 @@ Environment variables are read from `.env` (see `.env.example`) and from the pro
 | `HOST` / `RENDEZVOUS_HOST` | `::` | Listen address. `::` is dual-stack. |
 | `RENDEZVOUS_IPV6_ONLY` | `false` | Set `true` only for an intentionally IPv6-only listener. |
 | `RENDEZVOUS_DATA_FILE` | `./data/signal-store.json` | Durable queue of joins, removals, and appointment notices. No photo data. |
+| `RENDEZVOUS_JOIN_RETRY_MS` | `15000` | Re-send unacknowledged joins to online invitees at this cadence. |
 | `RENDEZVOUS_ICE_SERVERS` / `ICE_SERVERS` | Google STUN | JSON array of `RTCIceServer` objects. Add a TURN fallback here if needed. |
 | `VITE_SIGNAL_URL` | same origin `/signal` | Build-time client override when the UI is hosted separately from the signal server. |
 

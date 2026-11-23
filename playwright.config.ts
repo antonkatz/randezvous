@@ -19,6 +19,7 @@ export default defineConfig({
     command:
       `rm -rf .rendezvous-test && mkdir -p .rendezvous-test && ` +
       `RENDEZVOUS_HOST=127.0.0.1 PORT=${port} ` +
+      `RENDEZVOUS_JOIN_RETRY_MS=1500 ` +
       `RENDEZVOUS_DATA_FILE=.rendezvous-test/e2e-store.json npm start`,
     url: `http://127.0.0.1:${port}/health`,
     reuseExistingServer: false,

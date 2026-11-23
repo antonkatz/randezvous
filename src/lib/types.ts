@@ -116,6 +116,8 @@ export type NoticeCode =
   | 'human-removed'
   | 'human-removed-remotely'
   | 'invite-queued'
+  | 'invite-accepted'
+  | 'join-retry'
   | 'invalid-invite'
   | 'own-invite'
   | 'already-human'
