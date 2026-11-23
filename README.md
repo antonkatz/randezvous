@@ -1,16 +1,16 @@
-# Randevouz
+# Rendezvous
 
 A private photo handoff between two browsers. Pick a photograph, pick a human, pick a moment. The photo stays on the sender's device until both people are present; then it crosses directly over WebRTC. Delivered photographs accumulate on a ranked wall — freshest first, each next print stepping down on a gentle power-law curve, clustered toward the top left.
 
-> **A randevouz is a scheduled meeting, not a timed delivery.**
-> The signalling server holds only the appointment metadata. The photo moves only while both browsers are open and connected. If one person is missing at the appointed time, the randevouz waits and completes at the next overlap.
+> **A rendezvous is a scheduled meeting, not a timed delivery.**
+> The signalling server holds only the appointment metadata. The photo moves only while both browsers are open and connected. The handoff window opens five minutes early and remains exchange-eligible through five minutes late. If both are already online beforehand, they connect when the window opens; if one person is missing, the rendezvous waits and completes at the next overlap.
 
 This repository contains the reference app, the reusable package, and a small store-and-forward signalling server.
 
 - **Spec:** [`docs/SPEC.md`](docs/SPEC.md) — user stories, visual design stories, architecture, protocol, threat model, IPv6/TURN assumptions, and the future peer-as-signaller path.
 - **Circles:** [`src/circles/README.md`](src/circles/README.md) — client-side group membership, signed invitations, sync, and the six circle-stats ratios.
-- **UI:** encapsulated `<randevouz-app>` custom element with a cumulative, ranked photo wall.
-- **Client:** headless `RandevouzClient` with snapshots and typed events.
+- **UI:** encapsulated `<rendezvous-app>` custom element with a cumulative, ranked photo wall.
+- **Client:** headless `RendezvousClient` with snapshots and typed events.
 - **Server:** WebSocket bootstrap for authenticated presence, appointment notices, invite relay, revocation, and WebRTC signalling. It never stores photo bytes.
 
 ## Run locally
@@ -50,6 +50,17 @@ npx playwright install chromium
 PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium npm run test:e2e
 ```
 
+## Circles
+
+The app has a small, round **`+ circle`** button at the lower left of the window. It opens a dark circles view where you can:
+
+- create a named circle with a browser-detected IANA timezone;
+- see “Your circles” ranked by the six local ratios;
+- open a circle page showing monthly kept, weekly participation, season pairs, daily run, the weekly prompt and all-time progress;
+- see members who are not yet direct humans.
+
+Circle creation and local statistics work now. Invitation delivery and peer-to-peer circle sync are not wired into the app yet: they need a direct authenticated `PeerChannel`, and the current app's WebRTC/signalling layer is intentionally untouched by this module. The signed invitation API and UI are in `src/circles/`; see [`src/circles/README.md`](src/circles/README.md).
+
 ## Try it on your phone
 
 Browsers require HTTPS for Web Crypto, so a plain `http://192.168.x.x:5173` URL on your Wi-Fi will not work. The quickest safe setup is a temporary HTTPS tunnel:
@@ -68,7 +79,7 @@ Open the generated `https://….trycloudflare.com` URL **on both devices**. Use 
 2. Send/copy the link to the phone and open it in the phone browser.
 3. Set a different **Code Name** on the phone. Both devices should show each other as online and “not verified”.
 4. Open the human on each device, compare the eight words out loud, then mark them verified.
-5. Schedule a randevouz a few minutes ahead, keep both pages open and awake at that time, and the photo will move directly browser-to-browser.
+5. Schedule a rendezvous a few minutes ahead, keep both pages open and awake at that time, and the photo will move directly browser-to-browser.
 
 If you prefer a single-port production-style preview:
 
@@ -101,10 +112,10 @@ Environment variables are read from `.env` (see `.env.example`) and from the pro
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `PORT` | `8787` | HTTP + WebSocket port. |
-| `HOST` / `RANDEZVOUS_HOST` | `::` | Listen address. `::` is dual-stack. |
-| `RANDEZVOUS_IPV6_ONLY` | `false` | Set `true` only for an intentionally IPv6-only listener. |
-| `RANDEZVOUS_DATA_FILE` | `./data/signal-store.json` | Durable queue of joins, removals, and appointment notices. No photo data. |
-| `RANDEZVOUS_ICE_SERVERS` / `ICE_SERVERS` | Google STUN | JSON array of `RTCIceServer` objects. Add a TURN fallback here if needed. |
+| `HOST` / `RENDEZVOUS_HOST` | `::` | Listen address. `::` is dual-stack. |
+| `RENDEZVOUS_IPV6_ONLY` | `false` | Set `true` only for an intentionally IPv6-only listener. |
+| `RENDEZVOUS_DATA_FILE` | `./data/signal-store.json` | Durable queue of joins, removals, and appointment notices. No photo data. |
+| `RENDEZVOUS_ICE_SERVERS` / `ICE_SERVERS` | Google STUN | JSON array of `RTCIceServer` objects. Add a TURN fallback here if needed. |
 | `VITE_SIGNAL_URL` | same origin `/signal` | Build-time client override when the UI is hosted separately from the signal server. |
 
 The reference server defaults to a **dual-stack** listener and prints a prominent warning at startup if it is configured single-stack. It also advertises its listener host and dual-stack capability in `hello:ok` and `/health`, which the UI's diagnostics panel surfaces.
@@ -120,9 +131,9 @@ Railway runs the built Node server, which serves both `dist/` and the `/signal` 
    - Start command: `npm start`
 2. Set the healthcheck path to `/health` in the service settings.
 3. Add a volume mounted at `/data`, then set the service variables:
-   - `RANDEZVOUS_HOST=0.0.0.0` — Railway's proxy reaches the container over IPv4.
-   - `RANDEZVOUS_DATA_FILE=/data/signal-store.json` — keeps queued joins, appointment notices, and invite revocations across restarts and redeploys.
-   - Optional: `RANDEZVOUS_ICE_SERVERS` with a JSON array, including a TURN server if you need one.
+   - `RENDEZVOUS_HOST=0.0.0.0` — Railway's proxy reaches the container over IPv4.
+   - `RENDEZVOUS_DATA_FILE=/data/signal-store.json` — keeps queued joins, appointment notices, and invite revocations across restarts and redeploys.
+   - Optional: `RENDEZVOUS_ICE_SERVERS` with a JSON array, including a TURN server if you need one.
 4. Leave `PORT` unset; Railway injects it.
 5. Generate a public domain. Railway terminates HTTPS, so the browser automatically uses `wss://…/signal`; no `VITE_SIGNAL_URL` is needed for same-origin hosting.
 
@@ -137,7 +148,7 @@ TURN is optional and self-hostable. The photo remains protected by WebRTC DTLS a
 Example:
 
 ```bash
-RANDEZVOUS_ICE_SERVERS='[
+RENDEZVOUS_ICE_SERVERS='[
   {"urls":"stun:stun.example.com:3478"},
   {"urls":"turn:turn.example.com:3478","username":"user","credential":"secret"}
 ]' npm start
@@ -146,13 +157,13 @@ RANDEZVOUS_ICE_SERVERS='[
 ## Embedding the reusable package
 
 ```ts
-import { defineRandevouzApp } from '@instanthero/randevouz';
+import { defineRendezvousApp } from '@instanthero/rendezvous';
 
-defineRandevouzApp();
+defineRendezvousApp();
 ```
 
 ```html
-<randevouz-app signal-url="wss://signal.example.com/signal"></randevouz-app>
+<rendezvous-app signal-url="wss://signal.example.com/signal"></rendezvous-app>
 ```
 
 Attributes:
@@ -161,15 +172,15 @@ Attributes:
 | --- | --- |
 | `signal-url` | WebSocket URL. Defaults to same-origin `/signal`. |
 | `ice-servers` | JSON array of `RTCIceServer` objects; overrides the server-advertised set. |
-| `storage-name` | IndexedDB database name, useful when embedding multiple isolated instances. Defaults to `randevouz`. |
+| `storage-name` | IndexedDB database name, useful when embedding multiple isolated instances. Defaults to `rendezvous`. |
 
 The element exposes `getClient()` / `clientInstance`, and dispatches composed DOM events:
 
 ```ts
-element.addEventListener('randevouz:state', (event) => {});
-element.addEventListener('randevouz:notice', (event) => {});
-element.addEventListener('randevouz:appointment', (event) => {});
-element.addEventListener('randevouz:transfer', (event) => {});
+element.addEventListener('rendezvous:state', (event) => {});
+element.addEventListener('rendezvous:notice', (event) => {});
+element.addEventListener('rendezvous:appointment', (event) => {});
+element.addEventListener('rendezvous:transfer', (event) => {});
 ```
 
 The host is intentionally light: identity, persistence, handshakes, and transfer logic are in the headless client.
@@ -177,9 +188,9 @@ The host is intentionally light: identity, persistence, handshakes, and transfer
 ### Headless client
 
 ```ts
-import { createRandevouzClient } from '@instanthero/randevouz';
+import { createRendezvousClient } from '@instanthero/rendezvous';
 
-const client = createRandevouzClient({
+const client = createRendezvousClient({
   signalUrl: 'wss://signal.example.com/signal',
   iceServers: [{ urls: 'stun:stun.example.com:3478' }],
 });
@@ -231,7 +242,7 @@ Browser A ◄══════ WebRTC data channel ══════► Browse
 2. The invitation link embeds the inviter's public identity, name, and a signature. The invitee pins it.
 3. Both browsers authenticate to the signalling server with a signed nonce challenge.
 4. The server stores appointment metadata and delivers it to the recipient whenever they next connect. It does not deliver the photo.
-5. At/after the rendezvous time, if both humans are online, the sender opens a direct RTC session.
+5. Inside the five-minute early/late handoff window, if both humans are online, the sender opens a direct RTC session. Both being online beforehand is enough; they connect when the window opens.
 6. Before sending photo bytes, both peers sign both DTLS fingerprints with their long-term keys and verify against the pinned keys.
 7. The photo is chunked over an ordered data channel; the recipient stores the completed Blob and ACKs. Only then does the sender mark it delivered.
 
@@ -249,6 +260,7 @@ Verification does not depend on DTLS certificates, so the code is stable across 
 - Identity keypair: IndexedDB (`CryptoKey` for the private key, public raw key).
 - Humans, verification state, pending joins/removals, revoked invites: IndexedDB.
 - The app asks the browser for persistent storage (`navigator.storage.persist()`) when it opens IndexedDB. Browsers may still deny the request or evict data in private browsing, so export or back up anything you cannot lose.
+- Existing browser data is migrated automatically from the pre-rename IndexedDB databases on first launch.
 - Server: join/removal/rendezvous metadata, invite-token hashes, presence. No photos, no thumbnails, no photo file names.
 - Live WebRTC connections are disposable. A page close ends them. The relationship and pinned keys persist and re-handshake on the next visit.
 - “Connected forever” means the relationship, not a socket.
@@ -258,7 +270,7 @@ Verification does not depend on DTLS certificates, so the code is stable across 
 - Both browsers must be open and online for the photo to move.
 - No push notifications while the app is closed; appointment notices are delivered on next launch via the server queue.
 - No server-side storage or timed delivery.
-- No group randevouz, albums, captions, reactions, or video.
+- No group rendezvous, albums, captions, reactions, or video.
 - The wall currently ranks by arrival (freshest = rank 01) and scales with a power law; richer ranking is explicitly future work.
 - Single active tab per identity; opening another tab supersedes the first connection.
 - TURN is optional; some NAT pairs will fail without it.

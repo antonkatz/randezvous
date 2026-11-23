@@ -96,7 +96,7 @@ export interface TransferDiagnostics {
   } | null;
 }
 
-export interface RandevouzSnapshot {
+export interface RendezvousSnapshot {
   ready: boolean;
   identity: PublicIdentity;
   signal: SignalStatus;
@@ -106,7 +106,7 @@ export interface RandevouzSnapshot {
   rendezvous: StoredRendezvous[];
 }
 
-export interface RandevouzError extends Error {
+export interface RendezvousError extends Error {
   code: string;
 }
 
@@ -160,14 +160,14 @@ export interface TransferEvent {
   message?: string;
 }
 
-export interface RandevouzClientEvents {
-  state: RandevouzSnapshot;
+export interface RendezvousClientEvents {
+  state: RendezvousSnapshot;
   notice: ClientNotice;
   appointment: AppointmentEvent;
   transfer: TransferEvent;
 }
 
-export interface RandevouzClientOptions {
+export interface RendezvousClientOptions {
   signalUrl?: string;
   iceServers?: RTCIceServer[];
   /** Used to namespace data if multiple instances share an origin. */

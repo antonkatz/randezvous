@@ -18,8 +18,8 @@ export default defineConfig({
   webServer: {
     command:
       `rm -rf .rendezvous-test && mkdir -p .rendezvous-test && ` +
-      `RANDEZVOUS_HOST=127.0.0.1 PORT=${port} ` +
-      `RANDEZVOUS_DATA_FILE=.rendezvous-test/e2e-store.json npm start`,
+      `RENDEZVOUS_HOST=127.0.0.1 PORT=${port} ` +
+      `RENDEZVOUS_DATA_FILE=.rendezvous-test/e2e-store.json npm start`,
     url: `http://127.0.0.1:${port}/health`,
     reuseExistingServer: false,
     timeout: 120_000,

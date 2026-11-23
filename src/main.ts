@@ -1,3 +1,3 @@
-import { defineRandevouzApp } from './lib';
+import { defineRendezvousApp } from './lib';
 
-defineRandevouzApp();
+defineRendezvousApp();

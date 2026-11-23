@@ -1,4 +1,4 @@
-import { requestPersistentStorage } from '../lib/persistence';
+import { migrateLegacyDatabase, requestPersistentStorage } from '../lib/persistence';
 import { compareStrings } from './canonical';
 import type { CircleId, CircleStore, StoredCircleRecord } from './types';
 
@@ -69,14 +69,14 @@ export class IndexedDbCircleStore implements CircleStore {
   private readonly name: string;
   private dbPromise: Promise<IDBDatabase> | null = null;
 
-  constructor(databaseName = 'randevouz-circles') {
+  constructor(databaseName = 'rendezvous-circles') {
     this.name = databaseName;
   }
 
   private open(): Promise<IDBDatabase> {
     if (this.dbPromise) return this.dbPromise;
     void requestPersistentStorage();
-    this.dbPromise = new Promise((resolve, reject) => {
+    this.dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open(this.name, 1);
       request.onupgradeneeded = () => {
         const db = request.result;
@@ -93,6 +93,13 @@ export class IndexedDbCircleStore implements CircleStore {
         reject(request.error ?? new Error('Could not open circle IndexedDB'));
       request.onblocked = () =>
         reject(new Error('Circle IndexedDB upgrade blocked by another tab'));
+    }).then(async (db) => {
+      try {
+        await migrateLegacyDatabase('randevouz-circles', db);
+      } catch (error) {
+        console.warn('[rendezvous] could not migrate the legacy circle database', error);
+      }
+      return db;
     });
     return this.dbPromise;
   }

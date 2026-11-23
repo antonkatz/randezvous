@@ -28,7 +28,7 @@ import type {
   StoredCircleRecord,
 } from './types';
 
-const TEST_SIGNATURE_DOMAIN = 'randevouz/circles/test/v1';
+const TEST_SIGNATURE_DOMAIN = 'rendezvous/circles/test/v1';
 
 export interface TestKeyRegistry {
   register(publicKey: string): string;

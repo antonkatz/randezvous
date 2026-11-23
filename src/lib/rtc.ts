@@ -18,7 +18,7 @@ const CONNECT_TIMEOUT_MS = 30_000;
 const AUTH_TIMEOUT_MS = 15_000;
 const TRANSFER_INACTIVITY_MS = 45_000;
 const ACK_TIMEOUT_MS = 20_000;
-const RTC_AUTH_DOMAIN = 'randevouz/rtc-auth/v1';
+const RTC_AUTH_DOMAIN = 'rendezvous/rtc-auth/v1';
 
 export type TransferPhase = 'connecting' | 'progress' | 'complete' | 'error';
 

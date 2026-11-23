@@ -37,14 +37,14 @@ import {
   type PhotoMeta,
 } from './rtc';
 import { WebSocketSignalTransport } from './signal';
-import { RandevouzStore, type PendingRemoval } from './store';
+import { RendezvousStore, type PendingRemoval } from './store';
 import type {
   ClientNotice,
   Human,
   PublicIdentity,
-  RandevouzClientEvents,
-  RandevouzClientOptions,
-  RandevouzSnapshot,
+  RendezvousClientEvents,
+  RendezvousClientOptions,
+  RendezvousSnapshot,
   RendezvousStatus,
   ScheduleInput,
   SignalNetworkInfo,
@@ -58,16 +58,16 @@ import type {
 
 const RETRY_DELAY_MS = 20_000;
 const ANNOUNCE_RETRY_MS = 5_000;
-const SIGNAL_AUTH_DOMAIN = 'randevouz/signal-auth/v1';
+const SIGNAL_AUTH_DOMAIN = 'rendezvous/signal-auth/v1';
 
 type Listener<T> = (value: T) => void;
 
-export class RandevouzClientError extends Error {
+export class RendezvousClientError extends Error {
   readonly code: string;
 
   constructor(code: string, message: string) {
     super(message);
-    this.name = 'RandevouzClientError';
+    this.name = 'RendezvousClientError';
     this.code = code;
   }
 }
@@ -101,9 +101,9 @@ function makeStoredHuman(human: Human): StoredHuman {
   };
 }
 
-export class RandevouzClient {
-  private readonly options: RandevouzClientOptions;
-  private readonly store: RandevouzStore;
+export class RendezvousClient {
+  private readonly options: RendezvousClientOptions;
+  private readonly store: RendezvousStore;
   private identity: StoredIdentity | null = null;
   private humans = new Map<string, Human>();
   private rendezvous = new Map<string, StoredRendezvous>();
@@ -127,8 +127,8 @@ export class RandevouzClient {
   private removalsInFlight = new Set<string>();
   private lastSignalStatusWasOnline = false;
   private readonly listeners = new Map<
-    keyof RandevouzClientEvents,
-    Set<Listener<RandevouzClientEvents[keyof RandevouzClientEvents]>>
+    keyof RendezvousClientEvents,
+    Set<Listener<RendezvousClientEvents[keyof RendezvousClientEvents]>>
   >();
   private readonly onVisibilityChange = (): void => {
     if (document.visibilityState === 'visible') {
@@ -144,32 +144,32 @@ export class RandevouzClient {
     void this.processInviteFromLocation();
   };
 
-  constructor(options: RandevouzClientOptions = {}) {
+  constructor(options: RendezvousClientOptions = {}) {
     this.options = options;
-    this.store = new RandevouzStore(options.storageName ?? 'randevouz');
+    this.store = new RendezvousStore(options.storageName ?? 'rendezvous');
   }
 
-  on<K extends keyof RandevouzClientEvents>(
+  on<K extends keyof RendezvousClientEvents>(
     event: K,
-    listener: Listener<RandevouzClientEvents[K]>,
+    listener: Listener<RendezvousClientEvents[K]>,
   ): () => void {
     const set =
       this.listeners.get(event) ??
-      new Set<Listener<RandevouzClientEvents[keyof RandevouzClientEvents]>>();
+      new Set<Listener<RendezvousClientEvents[keyof RendezvousClientEvents]>>();
     set.add(
-      listener as Listener<RandevouzClientEvents[keyof RandevouzClientEvents]>,
+      listener as Listener<RendezvousClientEvents[keyof RendezvousClientEvents]>,
     );
     this.listeners.set(event, set);
     return () => {
       set.delete(
-        listener as Listener<RandevouzClientEvents[keyof RandevouzClientEvents]>,
+        listener as Listener<RendezvousClientEvents[keyof RendezvousClientEvents]>,
       );
     };
   }
 
-  private emit<K extends keyof RandevouzClientEvents>(
+  private emit<K extends keyof RendezvousClientEvents>(
     event: K,
-    value: RandevouzClientEvents[K],
+    value: RendezvousClientEvents[K],
   ): void {
     const listeners = this.listeners.get(event);
     if (!listeners) return;
@@ -177,7 +177,7 @@ export class RandevouzClient {
       try {
         listener(value);
       } catch (error) {
-        console.error('[randevouz] listener failed', error);
+        console.error('[rendezvous] listener failed', error);
       }
     }
   }
@@ -186,7 +186,7 @@ export class RandevouzClient {
     this.emit('notice', notice);
   }
 
-  getSnapshot(): RandevouzSnapshot {
+  getSnapshot(): RendezvousSnapshot {
     const identity = this.identity;
     return {
       ready: this.ready,
@@ -208,7 +208,7 @@ export class RandevouzClient {
 
   private requireIdentity(): StoredIdentity {
     if (!this.identity) {
-      throw new RandevouzClientError('not-ready', 'Randevouz is not ready yet.');
+      throw new RendezvousClientError('not-ready', 'Rendezvous is not ready yet.');
     }
     return this.identity;
   }
@@ -243,7 +243,7 @@ export class RandevouzClient {
         this.messageChain = this.messageChain
           .then(() => this.handleServerMessage(message))
           .catch((error: unknown) => {
-            console.error('[randevouz] signal message failed', error);
+            console.error('[rendezvous] signal message failed', error);
             this.notice({
               tone: 'error',
               code: 'server-error',
@@ -303,16 +303,16 @@ export class RandevouzClient {
       !isRawPublicKey(identity.publicKey) ||
       !identity.privateKey
     ) {
-      throw new RandevouzClientError(
+      throw new RendezvousClientError(
         'storage-error',
-        'The stored Randevouz identity is incomplete. Clear this site’s data to create a new one.',
+        'The stored Rendezvous identity is incomplete. Clear this site’s data to create a new one.',
       );
     }
     const expectedId = await derivePeerId(base64UrlToBytes(identity.publicKey));
     if (expectedId !== identity.id) {
-      throw new RandevouzClientError(
+      throw new RendezvousClientError(
         'storage-error',
-        'The stored Randevouz identity does not match its public key. Clear this site’s data to create a new one.',
+        'The stored Rendezvous identity does not match its public key. Clear this site’s data to create a new one.',
       );
     }
     identity.name = normalizeName(identity.name ?? '');
@@ -435,7 +435,7 @@ export class RandevouzClient {
       this.notice({
         tone: 'warning',
         code: 'signal-replaced',
-        message: 'Randevouz is open in another window for this browser identity.',
+        message: 'Rendezvous is open in another window for this browser identity.',
       });
     }
     this.emitState();
@@ -1015,11 +1015,11 @@ export class RandevouzClient {
     inviteHash?: string,
   ): Promise<Human | null> {
     if (!identity || !isPeerId(identity.id) || !isRawPublicKey(identity.publicKey)) {
-      throw new RandevouzClientError('invalid-invite', 'Invalid human identity.');
+      throw new RendezvousClientError('invalid-invite', 'Invalid human identity.');
     }
     const expectedId = await derivePeerId(base64UrlToBytes(identity.publicKey));
     if (expectedId !== identity.id) {
-      throw new RandevouzClientError('invalid-invite', 'Invalid human identity.');
+      throw new RendezvousClientError('invalid-invite', 'Invalid human identity.');
     }
     const existing = this.humans.get(identity.id);
     if (existing) {
@@ -1081,13 +1081,13 @@ export class RandevouzClient {
 
   async verificationWordsFor(humanId: string): Promise<string[]> {
     const human = this.humans.get(humanId);
-    if (!human) throw new RandevouzClientError('no-human', 'That human is not connected.');
+    if (!human) throw new RendezvousClientError('no-human', 'That human is not connected.');
     return deriveVerificationWords(this.requireIdentity().publicKey, human.publicKey);
   }
 
   async markHumanVerified(humanId: string, verified = true): Promise<void> {
     const human = this.humans.get(humanId);
-    if (!human) throw new RandevouzClientError('no-human', 'That human is not connected.');
+    if (!human) throw new RendezvousClientError('no-human', 'That human is not connected.');
     human.verifiedAt = verified ? Date.now() : null;
     await this.store.putHuman(makeStoredHuman(human));
     this.emitHumans();
@@ -1158,19 +1158,19 @@ export class RandevouzClient {
   async scheduleRendezvous(input: ScheduleInput): Promise<StoredRendezvous> {
     const photo = input.photo;
     if (!photo || photo.size <= 0) {
-      throw new RandevouzClientError('invalid-photo', 'Choose a photograph first.');
+      throw new RendezvousClientError('invalid-photo', 'Choose a photograph first.');
     }
     if (photo.size > MAX_PHOTO_BYTES) {
-      throw new RandevouzClientError('photo-too-large', 'Photographs must be 25 MB or smaller.');
+      throw new RendezvousClientError('photo-too-large', 'Photographs must be 25 MB or smaller.');
     }
     if (!photo.type.startsWith('image/')) {
-      throw new RandevouzClientError('invalid-photo', 'That file is not an image.');
+      throw new RendezvousClientError('invalid-photo', 'That file is not an image.');
     }
     if (!Number.isFinite(input.scheduledFor) || input.scheduledFor <= Date.now() + 500) {
-      throw new RandevouzClientError('invalid-time', 'Choose a moment in the near future.');
+      throw new RendezvousClientError('invalid-time', 'Choose a moment in the near future.');
     }
     const human = this.humans.get(input.humanId);
-    if (!human) throw new RandevouzClientError('no-human', 'Choose a human first.');
+    if (!human) throw new RendezvousClientError('no-human', 'Choose a human first.');
 
     const fallbackName = input.photo instanceof File ? input.photo.name : 'photograph';
     const record: StoredRendezvous = {
@@ -1219,6 +1219,6 @@ export class RandevouzClient {
   }
 }
 
-export function createRandevouzClient(options?: RandevouzClientOptions): RandevouzClient {
-  return new RandevouzClient(options);
+export function createRendezvousClient(options?: RendezvousClientOptions): RendezvousClient {
+  return new RendezvousClient(options);
 }

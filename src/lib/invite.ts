@@ -16,9 +16,9 @@ import type { InvitePayload, JoinRequest, PublicIdentityClaim } from './protocol
 import type { PublicIdentity, StoredIdentity } from './types';
 
 const INVITE_VERSION = 'v1';
-const INVITE_DOMAIN = 'randevouz/invite/v1';
-const JOIN_DOMAIN = 'randevouz/join/v1';
-const JOIN_PROOF_TRANSCRIPT_VERSION = 'randevouz/join-proof/v1';
+const INVITE_DOMAIN = 'rendezvous/invite/v1';
+const JOIN_DOMAIN = 'rendezvous/join/v1';
+const JOIN_PROOF_TRANSCRIPT_VERSION = 'rendezvous/join-proof/v1';
 
 function invitePayloadBytes(payload: InvitePayload): Uint8Array {
   return utf8(JSON.stringify(payload));

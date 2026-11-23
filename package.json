@@ -1,5 +1,5 @@
 {
-  "name": "@instanthero/randevouz",
+  "name": "@instanthero/rendezvous",
   "version": "0.1.0",
   "description": "A private, browser-to-browser photo rendezvous service.",
   "type": "module",
@@ -10,13 +10,13 @@
     "README.md",
     "src/circles/README.md"
   ],
-  "main": "./dist-lib/randevouz.js",
-  "module": "./dist-lib/randevouz.js",
+  "main": "./dist-lib/rendezvous.js",
+  "module": "./dist-lib/rendezvous.js",
   "types": "./dist-lib/types/lib/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist-lib/types/lib/index.d.ts",
-      "import": "./dist-lib/randevouz.js"
+      "import": "./dist-lib/rendezvous.js"
     },
     "./circles": {
       "types": "./dist-lib/types/circles/index.d.ts",

@@ -9,7 +9,7 @@ import {
 import type { StoredHuman, StoredIdentity } from '../lib/types';
 import type { Friends, Identity, PublicKeyId } from './types';
 
-export const CIRCLE_RECORD_SIGNATURE_DOMAIN = 'randevouz/circle-record/v1';
+export const CIRCLE_RECORD_SIGNATURE_DOMAIN = 'rendezvous/circle-record/v1';
 
 /** Peer-id → pinned raw public key map used by the browser adapter. */
 export class CircleKeyDirectory {

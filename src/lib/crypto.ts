@@ -98,7 +98,7 @@ export interface IdentityMaterial {
 
 export async function derivePeerId(rawPublicKey: Uint8Array): Promise<string> {
   const digest = await sha256(
-    concatBytes(utf8('randevouz/id/v1'), toLengthPrefixed(rawPublicKey)),
+    concatBytes(utf8('rendezvous/id/v1'), toLengthPrefixed(rawPublicKey)),
   );
   return PEER_ID_PREFIX + bytesToBase64Url(digest).slice(0, 22);
 }
@@ -222,7 +222,7 @@ export async function deriveVerificationWords(
 
   const digest = await sha256(
     concatBytes(
-      utf8('randevouz/sas/v1'),
+      utf8('rendezvous/sas/v1'),
       toLengthPrefixed(first),
       toLengthPrefixed(second),
     ),
@@ -259,7 +259,7 @@ export function humanHandshakeTranscript(input: {
   remoteFingerprint: string;
 }): string {
   return [
-    'randevouz/handshake/v1',
+    'rendezvous/handshake/v1',
     `transfer:${input.transferId}`,
     `from:${input.from}`,
     `to:${input.to}`,
@@ -269,5 +269,5 @@ export function humanHandshakeTranscript(input: {
 }
 
 export function signalAuthTranscript(nonce: string): string {
-  return `randevouz/signal-auth/v1\nnonce:${nonce}`;
+  return `rendezvous/signal-auth/v1\nnonce:${nonce}`;
 }

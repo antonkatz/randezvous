@@ -1,9 +1,9 @@
 export {
-  RandevouzClient,
-  RandevouzClientError,
-  createRandevouzClient,
+  RendezvousClient,
+  RendezvousClientError,
+  createRendezvousClient,
 } from './client';
-export { defineRandevouzApp, RandevouzApp } from './ui/randevouz-app';
+export { defineRendezvousApp, RendezvousApp } from './ui/rendezvous-app';
 export { deriveVerificationWords, displayName, normalizeName } from './crypto';
 export type {
   AppointmentEvent,
@@ -15,9 +15,9 @@ export type {
   NoticeCode,
   PhotoAttachment,
   PublicIdentity,
-  RandevouzClientEvents,
-  RandevouzClientOptions,
-  RandevouzSnapshot,
+  RendezvousClientEvents,
+  RendezvousClientOptions,
+  RendezvousSnapshot,
   RendezvousDirection,
   RendezvousStatus,
   ScheduleInput,

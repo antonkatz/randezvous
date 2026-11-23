@@ -9,7 +9,7 @@ export default defineConfig({
     cssCodeSplit: false,
     lib: {
       entry: {
-        randevouz: 'src/lib/index.ts',
+        rendezvous: 'src/lib/index.ts',
         circles: 'src/circles/index.ts',
         'circles-ui': 'src/circles/ui/index.ts',
       },
@@ -18,7 +18,7 @@ export default defineConfig({
     },
     rollupOptions: {
       output: {
-        assetFileNames: 'randevouz[extname]',
+        assetFileNames: 'rendezvous[extname]',
       },
     },
   },

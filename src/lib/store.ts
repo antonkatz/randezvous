@@ -1,4 +1,4 @@
-import { requestPersistentStorage } from './persistence';
+import { migrateLegacyDatabase, requestPersistentStorage } from './persistence';
 import type { JoinRequest } from './protocol';
 import type { StoredHuman, StoredIdentity, StoredRendezvous } from './types';
 
@@ -32,18 +32,18 @@ function transactionToPromise(transaction: IDBTransaction): Promise<void> {
   });
 }
 
-export class RandevouzStore {
+export class RendezvousStore {
   private readonly name: string;
   private dbPromise: Promise<IDBDatabase> | null = null;
 
-  constructor(storageName = 'randevouz') {
+  constructor(storageName = 'rendezvous') {
     this.name = storageName;
   }
 
   private open(): Promise<IDBDatabase> {
     if (this.dbPromise) return this.dbPromise;
     void requestPersistentStorage();
-    this.dbPromise = new Promise((resolve, reject) => {
+    this.dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open(this.name, DB_VERSION);
       request.onupgradeneeded = () => {
         const db = request.result;
@@ -66,6 +66,13 @@ export class RandevouzStore {
       request.onerror = () =>
         reject(request.error ?? new Error('Could not open IndexedDB'));
       request.onblocked = () => reject(new Error('IndexedDB upgrade blocked by another tab'));
+    }).then(async (db) => {
+      try {
+        await migrateLegacyDatabase('randevouz', db);
+      } catch (error) {
+        console.warn('[rendezvous] could not migrate the legacy database', error);
+      }
+      return db;
     });
     return this.dbPromise;
   }

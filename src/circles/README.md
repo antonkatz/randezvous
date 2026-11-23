@@ -2,7 +2,7 @@
 
 A UI-independent, client-side module for named circles. Every member holds the same grow-only set of signed records; merging is union. There is no server, no authority, no photo content in this module, and no runtime dependency beyond Web Crypto and the host app's existing identity, storage and direct-connection layers.
 
-The source lives in `src/circles`. The core entry point is `src/circles/index.ts` (package subpath `@instanthero/randevouz/circles`); the framework-free UI is `src/circles/ui/index.ts` (package subpath `@instanthero/randevouz/circles/ui`) and is deliberately not imported by the core. Tests sit beside each module and run with `npm test`.
+The source lives in `src/circles`. The core entry point is `src/circles/index.ts` (package subpath `@instanthero/rendezvous/circles`); the framework-free UI is `src/circles/ui/index.ts` (package subpath `@instanthero/rendezvous/circles/ui`) and is deliberately not imported by the core. Tests sit beside each module and run with `npm test`.
 
 ## Quick start
 
@@ -239,7 +239,7 @@ Delivery restrictions:
 - Membership records (`CircleCreated`, `Invite`, `Join`, `Leave`) sync normally for shared circles.
 - `have` advertises only records the sender is allowed to send, so privacy restrictions do not leak ids.
 
-Stores implement `{ load, append, listCircles }`. `MemoryCircleStore` is for tests/small hosts; `IndexedDbCircleStore` is a separate database (`randevouz-circles`) with an immutable `(circleId, id)` key, so the existing photo/identity store is untouched. Appending is idempotent.
+Stores implement `{ load, append, listCircles }`. `MemoryCircleStore` is for tests/small hosts; `IndexedDbCircleStore` is a separate database (`rendezvous-circles`) with an immutable `(circleId, id)` key, so the existing photo/identity store is untouched. Appending is idempotent.
 
 ## Configuration
 
@@ -276,7 +276,7 @@ Weekly participation, season pairs and prompt ratios use current member-derived 
 
 ## UI
 
-Import the UI separately: `import { defineCircleStatsElements } from '@instanthero/randevouz/circles/ui'`. `src/circles/ui` contains framework-free custom elements with a flat dark theme (white on black) and CSS custom properties for restyling:
+Import the UI separately: `import { defineCircleStatsElements } from '@instanthero/rendezvous/circles/ui'`. `src/circles/ui` contains framework-free custom elements with a flat dark theme (white on black) and CSS custom properties for restyling:
 
 - `<circle-dashboard>`: the composition shell with “Your circles”, the create screen, the circle page and a pending invitation. It owns presentation state only.
 - `<circle-create-form>`: name + IANA timezone; validates locally and emits `circle-create` with `{ name, timezone }`.
@@ -294,11 +294,11 @@ import {
   computeCircleStats,
   deriveMemberView,
   rankCircles,
-} from '@instanthero/randevouz/circles';
+} from '@instanthero/rendezvous/circles';
 import {
   defineCircleStatsElements,
   type CircleDashboard,
-} from '@instanthero/randevouz/circles/ui';
+} from '@instanthero/rendezvous/circles/ui';
 
 defineCircleStatsElements();
 const dashboard = document.createElement('circle-dashboard') as CircleDashboard;
@@ -340,7 +340,7 @@ dashboard.addEventListener('circle-create', async (event) => {
 
 For `circle-select`, load that circle, set `dashboard.stats`, `dashboard.view` and `dashboard.inviteCandidates`. For `circle-invite-request`, call `createCircleInvite` and send the bundle. For `circle-invite-accept`, call `acceptCircleInvite`, append the returned records and send the acceptance back.
 
-The components are **not mounted inside `<randevouz-app>`**. The current app does not expose a direct `PeerChannel`, and this task explicitly excluded changing WebRTC/signalling/TURN, so mounting a live circles tab and wiring invitations is host work. The dashboard is ready for that host.
+The existing `<rendezvous-app>` mounts a **circular `+ circle` button** at the lower left. It opens `<circle-dashboard>` in a dark dialog, and creation plus local listing/stats work today. Invitation delivery is still not wired into the app because the current app does not expose a direct `PeerChannel`, and this task excluded changing WebRTC/signalling/TURN. The in-app invite-candidate list is therefore intentionally empty until that transport exists; the API, dashboard and invitation card are ready for it.
 
 ## Tests
 

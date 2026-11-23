@@ -188,7 +188,6 @@ export class CircleDashboard extends HTMLElement {
       card.bundle = this.statePendingInvite;
       card.circleName = this.stateInviteCircleName || this.pendingCircleName();
       card.inviterName = this.stateInviteInviterName;
-      this.forward(card, ['circle-invite-accept', 'circle-invite-decline']);
       body?.append(card);
       return;
     }
@@ -224,7 +223,6 @@ export class CircleDashboard extends HTMLElement {
       form.busy = this.stateBusy;
       form.error = this.stateError;
       if (this.stateDefaultTimezone) form.defaultTimezone = this.stateDefaultTimezone;
-      this.forward(form, ['circle-create']);
       form.addEventListener('circle-create-cancel', () => this.showList());
       body.append(form);
       return;
@@ -235,14 +233,12 @@ export class CircleDashboard extends HTMLElement {
       page.stats = this.stateStats;
       page.view = this.stateView;
       page.inviteCandidates = this.stateInviteCandidates;
-      this.forward(page, ['circle-invite-request']);
       body.append(page);
       return;
     }
 
     const list = document.createElement('circle-stats-list') as CircleStatsList;
     list.entries = this.stateEntries;
-    this.forward(list, ['circle-select']);
     body.append(list);
   }
 
@@ -261,24 +257,6 @@ export class CircleDashboard extends HTMLElement {
     form.busy = this.stateBusy;
     form.error = this.stateError;
     if (this.stateDefaultTimezone) form.defaultTimezone = this.stateDefaultTimezone;
-  }
-
-  private forward(
-    source: HTMLElement,
-    eventNames: readonly string[],
-  ): void {
-    for (const eventName of eventNames) {
-      source.addEventListener(eventName, (event) => {
-        const detail = event instanceof CustomEvent ? event.detail : undefined;
-        this.dispatchEvent(
-          new CustomEvent(eventName, {
-            detail,
-            bubbles: true,
-            composed: true,
-          }),
-        );
-      });
-    }
   }
 
   private pendingCircleName(): string {

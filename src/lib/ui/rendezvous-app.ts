@@ -1,13 +1,32 @@
 import styles from './styles.css?inline';
 import instantHeroMark from './instanthero-mark.svg?raw';
+import {
+  CircleKeyDirectory,
+  IndexedDbCircleStore,
+  computeCircleStats,
+  createBrowserCircleIdentity,
+  createCircle,
+  deriveMemberView,
+  friendsFromHumans,
+  rankCircles,
+  type CircleStats,
+  type Friends as CircleFriends,
+  type Identity as CircleIdentity,
+} from '../../circles';
+import {
+  CircleDashboard,
+  defineCircleStatsElements,
+} from '../../circles/ui';
 import { displayName, normalizeName } from '../crypto';
-import { RandevouzClient } from '../client';
+import { RendezvousClient } from '../client';
+import { RendezvousStore } from '../store';
 import { wallPhotoWidth } from './wall';
 import type {
   AppointmentEvent,
   ClientNotice,
   Human,
-  RandevouzSnapshot,
+  RendezvousSnapshot,
+  StoredHuman,
   StoredRendezvous,
   TransferEvent,
 } from '../types';
@@ -16,7 +35,7 @@ const TEMPLATE = `
 <style>${styles}</style>
 <div class="app is-loading" id="app">
   <p class="masthead">
-    <span class="masthead-name">randevouz</span>
+    <span class="masthead-name">rendezvous</span>
     <span class="masthead-by">by</span>
     <span class="masthead-stamp" role="img" aria-label="InstantHero">${instantHeroMark}</span>
   </p>
@@ -65,7 +84,7 @@ const TEMPLATE = `
           <div class="diag-row"><dt>candidates</dt><dd id="diag-candidates">—</dd></div>
         </dl>
         <p class="diag-warning" id="diag-warning" hidden></p>
-        <p class="diag-note" id="diag-note">IPv4 and IPv6 addresses belong to the network this device is on. Randevouz uses IPv6 when the browser gathers it, and never filters either family. The app cannot create an IPv6 address for you.</p>
+        <p class="diag-note" id="diag-note">IPv4 and IPv6 addresses belong to the network this device is on. Rendezvous uses IPv6 when the browser gathers it, and never filters either family. The app cannot create an IPv6 address for you.</p>
       </section>
     </div>
   </header>
@@ -76,8 +95,8 @@ const TEMPLATE = `
       <p class="eyebrow">one photograph, one moment</p>
       <h1>Some photographs<br><em>should arrive later.</em></h1>
       <p class="lede">Choose a human. Choose a moment. The photograph stays in this browser until you are both here — then it crosses directly, browser to browser.</p>
-      <button class="cta" id="set-randevouz" type="button">
-        <span class="cta-label">Set a randevouz</span>
+      <button class="cta" id="set-rendezvous" type="button">
+        <span class="cta-label">Set a rendezvous</span>
         <span class="cta-arrow" aria-hidden="true">↗</span>
       </button>
       <p class="cta-note">this is a meeting, not a delivery</p>
@@ -103,8 +122,13 @@ const TEMPLATE = `
     <div class="wall-board" id="wall-board"></div>
   </section>
 
+  <button class="circle-fab" id="circle-fab" type="button" aria-haspopup="dialog" aria-controls="circle-dialog" aria-label="Create a circle" title="Create a circle">
+    <span class="circle-fab-plus" aria-hidden="true">+</span>
+    <span class="circle-fab-label" aria-hidden="true">circle</span>
+  </button>
+
   <footer class="footer">
-    <span class="footer-brand">randevouz <span>✳</span></span>
+    <span class="footer-brand">rendezvous <span>✳</span></span>
     <span class="footer-center"><span class="footer-mark" aria-hidden="true"></span> photo bytes never touch a server</span>
     <span>v0.1 · instant hero</span>
   </footer>
@@ -117,7 +141,7 @@ const TEMPLATE = `
     <div class="modal-head">
       <div>
         <p class="modal-kicker">a photograph for later</p>
-        <h2 id="rv-title">Set a randevouz</h2>
+        <h2 id="rv-title">Set a rendezvous</h2>
       </div>
       <button class="modal-close" id="rv-close" type="button" aria-label="Close">×</button>
     </div>
@@ -150,7 +174,7 @@ const TEMPLATE = `
         <div>
           <p class="field-label">02 · the human</p>
           <div class="human-options" id="human-options"></div>
-          <p class="field-note" id="human-note">A randevouz is between two people.</p>
+          <p class="field-note" id="human-note">A rendezvous is between two people.</p>
         </div>
       </div>
       <div class="rv-actions">
@@ -195,7 +219,7 @@ const TEMPLATE = `
 
       <div class="rv-actions">
         <button class="back-button" id="rv-back" type="button">← Back</button>
-        <button class="primary" id="rv-schedule" type="button">Set a randevouz <span aria-hidden="true">↗</span></button>
+        <button class="primary" id="rv-schedule" type="button">Set a rendezvous <span aria-hidden="true">↗</span></button>
       </div>
     </section>
 
@@ -210,7 +234,7 @@ const TEMPLATE = `
       </dl>
       <p class="critical-note">The photo is still here. It will only travel when you are both present at the same time. We’ll tell them when they next arrive.</p>
       <div class="done-actions">
-        <p>You can close this. Keep Randevouz open at the appointed time.</p>
+        <p>You can close this. Keep Rendezvous open at the appointed time.</p>
         <button class="primary" id="rv-finish" type="button">Done</button>
       </div>
     </section>
@@ -246,11 +270,21 @@ const TEMPLATE = `
     <div class="remove-zone">
       <button class="text-danger" id="remove-human" type="button">Forget this human</button>
       <div class="remove-confirm" id="remove-confirm" hidden>
-        <span>This cancels pending randevouz and revokes the old link.</span>
+        <span>This cancels pending rendezvous and revokes the old link.</span>
         <button class="confirm-remove" id="confirm-remove" type="button">Forget permanently</button>
         <button class="back-button" id="cancel-remove" type="button">Keep</button>
       </div>
     </div>
+  </div>
+</dialog>
+
+<dialog class="circle-dialog" id="circle-dialog" aria-labelledby="circle-dialog-title">
+  <div class="circle-dialog-card">
+    <div class="circle-dialog-head">
+      <span class="circle-dialog-kicker" id="circle-dialog-title">named groups</span>
+      <button class="circle-dialog-close" id="circle-close" type="button" aria-label="Close circles">×</button>
+    </div>
+    <circle-dashboard id="circle-dashboard"></circle-dashboard>
   </div>
 </dialog>
 
@@ -368,9 +402,9 @@ interface ToastContent {
   onClose?: () => void;
 }
 
-export class RandevouzApp extends HTMLElement {
-  private client: RandevouzClient | null = null;
-  private state: RandevouzSnapshot | null = null;
+export class RendezvousApp extends HTMLElement {
+  private client: RendezvousClient | null = null;
+  private state: RendezvousSnapshot | null = null;
   private initialized = false;
   private subscriptions: Array<() => void> = [];
   private objectUrls = new Map<string, string>();
@@ -393,6 +427,12 @@ export class RandevouzApp extends HTMLElement {
   private deleteTimer: number | null = null;
   private root!: ShadowRoot;
   private wallResizeObserver: ResizeObserver | null = null;
+  private circleDashboard: CircleDashboard | null = null;
+  private circleAppStore: RendezvousStore | null = null;
+  private circleStore: IndexedDbCircleStore | null = null;
+  private circleIdentity: CircleIdentity | null = null;
+  private circleFriends: CircleFriends | null = null;
+  private circleHumans: StoredHuman[] = [];
 
   private readonly onDocumentPointerDown = (event: PointerEvent): void => {
     const path = event.composedPath();
@@ -408,11 +448,11 @@ export class RandevouzApp extends HTMLElement {
     if (this.diagnosticsOpen) this.closeDiagnostics();
   };
 
-  get clientInstance(): RandevouzClient | null {
+  get clientInstance(): RendezvousClient | null {
     return this.client;
   }
 
-  getClient(): RandevouzClient | null {
+  getClient(): RendezvousClient | null {
     return this.client;
   }
 
@@ -455,6 +495,12 @@ export class RandevouzApp extends HTMLElement {
     this.client?.stop();
     this.client = null;
     this.state = null;
+    this.circleDashboard = null;
+    this.circleIdentity = null;
+    this.circleFriends = null;
+    this.circleAppStore = null;
+    this.circleStore = null;
+    this.circleHumans = [];
   }
 
   private $<T extends Element = HTMLElement>(selector: string): T {
@@ -477,23 +523,23 @@ export class RandevouzApp extends HTMLElement {
       }
     }
 
-    this.client = new RandevouzClient({ signalUrl, storageName, iceServers });
+    this.client = new RendezvousClient({ signalUrl, storageName, iceServers });
     this.subscriptions.push(
       this.client.on('state', (snapshot) => {
         this.render(snapshot);
-        this.emitHostEvent('randevouz:state', snapshot);
+        this.emitHostEvent('rendezvous:state', snapshot);
       }),
       this.client.on('notice', (notice) => {
         this.handleNotice(notice);
-        this.emitHostEvent('randevouz:notice', notice);
+        this.emitHostEvent('rendezvous:notice', notice);
       }),
       this.client.on('appointment', (event) => {
         this.handleAppointment(event);
-        this.emitHostEvent('randevouz:appointment', event);
+        this.emitHostEvent('rendezvous:appointment', event);
       }),
       this.client.on('transfer', (event) => {
         this.handleTransfer(event);
-        this.emitHostEvent('randevouz:transfer', event);
+        this.emitHostEvent('rendezvous:transfer', event);
       }),
     );
     this.renderEmptyState();
@@ -504,8 +550,136 @@ export class RandevouzApp extends HTMLElement {
       this.showBootError(
         error instanceof Error
           ? error.message
-          : 'Randevouz could not open its local identity store.',
+          : 'Rendezvous could not open its local identity store.',
       );
+    }
+  }
+
+  private async openCircles(): Promise<void> {
+    const dialog = this.$<HTMLDialogElement>('#circle-dialog');
+    if (!dialog.open) dialog.showModal();
+    try {
+      await this.prepareCircles();
+      await this.reloadCircles();
+      this.circleDashboard?.showList();
+    } catch (error) {
+      dialog.close();
+      this.showToast({
+        tone: 'error',
+        title: 'Circles unavailable',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'The local circle store could not be opened.',
+      });
+    }
+  }
+
+  private async prepareCircles(): Promise<void> {
+    defineCircleStatsElements();
+    const storageName = this.getAttribute('storage-name') || 'rendezvous';
+    if (!this.circleAppStore) this.circleAppStore = new RendezvousStore(storageName);
+    const [storedIdentity, humans] = await Promise.all([
+      this.circleAppStore.getIdentity(),
+      this.circleAppStore.getHumans(),
+    ]);
+    if (!storedIdentity) {
+      throw new Error('Your browser identity is still opening. Try again in a moment.');
+    }
+
+    const directory = new CircleKeyDirectory();
+    directory.add(storedIdentity.id, storedIdentity.publicKey);
+    for (const human of humans) directory.add(human.id, human.publicKey);
+
+    this.circleIdentity = createBrowserCircleIdentity(storedIdentity, directory);
+    this.circleHumans = humans;
+    this.circleFriends = friendsFromHumans(humans);
+    if (!this.circleStore) {
+      this.circleStore = new IndexedDbCircleStore(`${storageName}-circles`);
+    }
+
+    if (!this.circleDashboard) {
+      const dashboard = this.$<CircleDashboard>('#circle-dashboard');
+      dashboard.addEventListener('circle-create', (event) =>
+        void this.createCircleFromDashboard(event),
+      );
+      dashboard.addEventListener('circle-select', (event) => {
+        const detail = (event as CustomEvent<{ circleId?: string }>).detail;
+        if (detail?.circleId) void this.selectCircle(detail.circleId);
+      });
+      this.circleDashboard = dashboard;
+    }
+  }
+
+  private async reloadCircles(): Promise<void> {
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    const friends = this.circleFriends;
+    const dashboard = this.circleDashboard;
+    if (!identity || !store || !friends || !dashboard) return;
+
+    const now = Date.now();
+    const statsList: CircleStats[] = [];
+    for (const circleId of await store.listCircles()) {
+      const records = await store.load(circleId);
+      const view = deriveMemberView(records, identity.selfKey, friends, {}, { circleId });
+      if (!view.members.includes(identity.selfKey)) continue;
+      statsList.push(computeCircleStats(records, view, now, { circleId }));
+    }
+    dashboard.entries = rankCircles(statsList);
+  }
+
+  private async selectCircle(circleId: string): Promise<void> {
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    const friends = this.circleFriends;
+    const dashboard = this.circleDashboard;
+    if (!identity || !store || !friends || !dashboard) return;
+
+    const records = await store.load(circleId);
+    const view = deriveMemberView(records, identity.selfKey, friends, {}, { circleId });
+    if (!view.members.includes(identity.selfKey)) {
+      this.showToast({
+        tone: 'warning',
+        title: 'Circle not available',
+        message: 'You are not a current member in this browser’s view.',
+      });
+      return;
+    }
+    dashboard.view = view;
+    dashboard.inviteCandidates = [];
+    dashboard.stats = computeCircleStats(records, view, Date.now(), { circleId });
+  }
+
+  private async createCircleFromDashboard(event: Event): Promise<void> {
+    const detail = (event as CustomEvent<{ name?: string; timezone?: string }>).detail;
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    const dashboard = this.circleDashboard;
+    if (!identity || !store || !dashboard || !detail?.name || !detail.timezone) return;
+
+    dashboard.busy = true;
+    dashboard.error = '';
+    try {
+      const created = await createCircle({
+        identity,
+        name: detail.name,
+        timezone: detail.timezone,
+        createdAt: Date.now(),
+      });
+      await store.append(created.circleId, [created.record]);
+      await this.reloadCircles();
+      await this.selectCircle(created.circleId);
+      this.showToast({
+        tone: 'success',
+        title: 'Circle created',
+        message: `${detail.name} is ready.`,
+      });
+    } catch (error) {
+      dashboard.error =
+        error instanceof Error ? error.message : 'The circle could not be created.';
+    } finally {
+      dashboard.busy = false;
     }
   }
 
@@ -521,7 +695,7 @@ export class RandevouzApp extends HTMLElement {
     const heading = document.createElement('h2');
     heading.textContent = 'The door stuck.';
     const copy = document.createElement('p');
-    copy.textContent = `${message} Randevouz needs IndexedDB and Web Crypto, and works on localhost or HTTPS.`;
+    copy.textContent = `${message} Rendezvous needs IndexedDB and Web Crypto, and works on localhost or HTTPS.`;
     card.append(heading, copy);
     panel.append(card);
     this.root.append(panel);
@@ -532,7 +706,11 @@ export class RandevouzApp extends HTMLElement {
     this.$('#invite-close').addEventListener('click', () => this.closeInvite());
     this.$('#copy-link').addEventListener('click', () => void this.copyInviteLink());
     this.$('#signal-button').addEventListener('click', () => this.toggleDiagnostics());
-    this.$('#set-randevouz').addEventListener('click', () => this.openRendezvous());
+    this.$('#set-rendezvous').addEventListener('click', () => this.openRendezvous());
+    this.$('#circle-fab').addEventListener('click', () => void this.openCircles());
+    this.$('#circle-close').addEventListener('click', () =>
+      this.$<HTMLDialogElement>('#circle-dialog').close(),
+    );
     this.$('#rv-close').addEventListener('click', () => this.$<HTMLDialogElement>('#rendezvous-dialog').close());
     this.$('#rv-next').addEventListener('click', () => this.goToStepTwo());
     this.$('#rv-back').addEventListener('click', () => this.setStep(1));
@@ -557,6 +735,11 @@ export class RandevouzApp extends HTMLElement {
     });
     this.$('#photo-dialog').addEventListener('click', (event) => {
       if (event.target === this.$('#photo-dialog')) this.closePhotoViewer();
+    });
+    this.$('#circle-dialog').addEventListener('click', (event) => {
+      if (event.target === this.$('#circle-dialog')) {
+        this.$<HTMLDialogElement>('#circle-dialog').close();
+      }
     });
     this.$('#rendezvous-dialog').addEventListener('close', () => this.resetRendezvousFlow());
     this.$('#human-dialog').addEventListener('close', () => {
@@ -626,7 +809,7 @@ export class RandevouzApp extends HTMLElement {
     humans.append(empty);
   }
 
-  private render(snapshot: RandevouzSnapshot): void {
+  private render(snapshot: RendezvousSnapshot): void {
     this.state = snapshot;
     if (!snapshot.ready) return;
     this.$('#app').classList.remove('is-loading');
@@ -644,7 +827,7 @@ export class RandevouzApp extends HTMLElement {
     }
   }
 
-  private renderSignal(snapshot: RandevouzSnapshot): void {
+  private renderSignal(snapshot: RendezvousSnapshot): void {
     const button = this.$('#signal-button');
     button.dataset.status = snapshot.signal;
     const labels: Record<string, string> = {
@@ -659,7 +842,7 @@ export class RandevouzApp extends HTMLElement {
     this.renderDiagnostics(snapshot);
   }
 
-  private renderDiagnostics(snapshot: RandevouzSnapshot): void {
+  private renderDiagnostics(snapshot: RendezvousSnapshot): void {
     const onlineHumans = snapshot.humans.filter((human) => human.online).length;
     this.$('#diag-signal').textContent =
       `${snapshot.signal} · ${onlineHumans} of ${snapshot.humans.length} human${snapshot.humans.length === 1 ? '' : 's'} online`;
@@ -711,10 +894,10 @@ export class RandevouzApp extends HTMLElement {
         : hidden
           ? 'Some host candidates use mDNS names, so their address family is hidden. No IPv6 candidate was visible. IPv6 comes from the network and is used automatically when available.'
           : 'This connection did not produce an IPv6 candidate. That is a property of this network, not something the app can assign. The browser uses IPv6 automatically when it is available.'
-      : 'IPv4 and IPv6 addresses belong to the network this device is on. Randevouz uses IPv6 when the browser gathers it, and never filters either family. The app cannot create an IPv6 address for you.';
+      : 'IPv4 and IPv6 addresses belong to the network this device is on. Rendezvous uses IPv6 when the browser gathers it, and never filters either family. The app cannot create an IPv6 address for you.';
   }
 
-  private renderHumans(snapshot: RandevouzSnapshot): void {
+  private renderHumans(snapshot: RendezvousSnapshot): void {
     const list = this.$('#humans-list');
     list.replaceChildren();
     this.$('#humans-count').textContent =
@@ -789,7 +972,7 @@ export class RandevouzApp extends HTMLElement {
     }
   }
 
-  private renderWall(snapshot: RandevouzSnapshot): void {
+  private renderWall(snapshot: RendezvousSnapshot): void {
     const wrap = this.$('#wall-wrap');
     const board = this.$('#wall-board');
     const next = this.$('#wall-next');
@@ -945,7 +1128,7 @@ export class RandevouzApp extends HTMLElement {
       input.value = link;
       window.setTimeout(() => this.$('#copy-link').focus(), 30);
     } catch {
-      input.value = 'Randevouz is not ready yet. Try again in a moment.';
+      input.value = 'Rendezvous is not ready yet. Try again in a moment.';
     }
   }
 
@@ -1056,7 +1239,7 @@ export class RandevouzApp extends HTMLElement {
     this.$('#rv-error').hidden = true;
     this.$('#rv-next').setAttribute('disabled', '');
     this.$<HTMLButtonElement>('#rv-schedule').disabled = false;
-    this.$('#rv-schedule').innerHTML = 'Set a randevouz <span aria-hidden="true">↗</span>';
+    this.$('#rv-schedule').innerHTML = 'Set a rendezvous <span aria-hidden="true">↗</span>';
     this.updateStepUI(1);
   }
 
@@ -1081,14 +1264,14 @@ export class RandevouzApp extends HTMLElement {
     }
   }
 
-  private renderHumanOptions(snapshot: RandevouzSnapshot): void {
+  private renderHumanOptions(snapshot: RendezvousSnapshot): void {
     const container = this.$('#human-options');
     container.replaceChildren();
     if (snapshot.humans.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'no-humans';
       const copy = document.createElement('p');
-      copy.textContent = 'Every randevouz needs another person. Add one first.';
+      copy.textContent = 'Every rendezvous needs another person. Add one first.';
       const add = document.createElement('button');
       add.type = 'button';
       add.className = 'inline-add';
@@ -1283,10 +1466,10 @@ export class RandevouzApp extends HTMLElement {
       error.textContent =
         scheduleError instanceof Error
           ? scheduleError.message
-          : 'The randevouz could not be saved.';
+          : 'The rendezvous could not be saved.';
       error.hidden = false;
       button.disabled = false;
-      button.innerHTML = 'Set a randevouz <span aria-hidden="true">↗</span>';
+      button.innerHTML = 'Set a rendezvous <span aria-hidden="true">↗</span>';
     }
   }
 
@@ -1347,7 +1530,7 @@ export class RandevouzApp extends HTMLElement {
       this.showToast({
         tone: 'error',
         title: 'The words are unavailable.',
-        message: 'Randevouz could not read both pinned keys.',
+        message: 'Rendezvous could not read both pinned keys.',
       });
     }
   }
@@ -1358,7 +1541,7 @@ export class RandevouzApp extends HTMLElement {
     badge.textContent = human.verifiedAt ? '✓ verified' : 'not verified';
   }
 
-  private refreshHumanDialog(snapshot: RandevouzSnapshot): void {
+  private refreshHumanDialog(snapshot: RendezvousSnapshot): void {
     if (!this.activeHumanId) return;
     const human = snapshot.humans.find((entry) => entry.id === this.activeHumanId);
     if (!human) {
@@ -1408,7 +1591,7 @@ export class RandevouzApp extends HTMLElement {
       this.showToast({
         tone: 'error',
         title: 'The human was not removed.',
-        message: 'Randevouz could not write the change locally.',
+        message: 'Rendezvous could not write the change locally.',
       });
     }
   }
@@ -1470,7 +1653,7 @@ export class RandevouzApp extends HTMLElement {
       this.showToast({
         tone: 'error',
         title: 'The photograph was not deleted.',
-        message: 'Randevouz could not update local storage.',
+        message: 'Rendezvous could not update local storage.',
       });
     }
   }
@@ -1511,7 +1694,7 @@ export class RandevouzApp extends HTMLElement {
     const tone = notice.tone === 'warning' ? 'warning' : notice.tone;
     this.showToast({
       tone,
-      title: titles[notice.code] ?? 'Randevouz.',
+      title: titles[notice.code] ?? 'Rendezvous.',
       message: notice.message,
       duration: notice.tone === 'error' ? 11_000 : 8_000,
     });
@@ -1525,7 +1708,7 @@ export class RandevouzApp extends HTMLElement {
       if (record.scheduledFor - Date.now() < 60_000) return;
       this.showToast({
         tone: 'info',
-        title: 'A randevouz, set.',
+        title: 'A rendezvous, set.',
         message: `${person} chose ${formatMoment(record.scheduledFor)}. The photo stays with them.`,
       });
       return;
@@ -1731,9 +1914,9 @@ export class RandevouzApp extends HTMLElement {
   }
 }
 
-export function defineRandevouzApp(tagName = 'randevouz-app'): void {
+export function defineRendezvousApp(tagName = 'rendezvous-app'): void {
   if (typeof customElements === 'undefined') return;
   if (!customElements.get(tagName)) {
-    customElements.define(tagName, RandevouzApp);
+    customElements.define(tagName, RendezvousApp);
   }
 }

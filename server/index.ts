@@ -34,11 +34,11 @@ try {
 }
 
 const PORT = Number(process.env.PORT ?? 8787);
-const HOST = process.env.RANDEZVOUS_HOST?.trim() || process.env.HOST?.trim() || '::';
-const IPV6_ONLY = process.env.RANDEZVOUS_IPV6_ONLY === 'true';
+const HOST = process.env.RENDEZVOUS_HOST?.trim() || process.env.HOST?.trim() || '::';
+const IPV6_ONLY = process.env.RENDEZVOUS_IPV6_ONLY === 'true';
 const DUAL_STACK = HOST === '::' && !IPV6_ONLY;
 const DATA_FILE =
-  process.env.RANDEZVOUS_DATA_FILE?.trim() || resolve(process.cwd(), 'data/signal-store.json');
+  process.env.RENDEZVOUS_DATA_FILE?.trim() || resolve(process.cwd(), 'data/signal-store.json');
 const DIST_DIR = resolve(process.cwd(), 'dist');
 const CHALLENGE_TTL_MS = 60_000;
 const MAX_PENDING_RENDEZVOUS_PER_SENDER = 100;
@@ -51,7 +51,7 @@ const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
 ];
 
 function parseIceServers(): RTCIceServer[] {
-  const raw = process.env.RANDEZVOUS_ICE_SERVERS ?? process.env.ICE_SERVERS;
+  const raw = process.env.RENDEZVOUS_ICE_SERVERS ?? process.env.ICE_SERVERS;
   if (!raw?.trim()) return DEFAULT_ICE_SERVERS;
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -276,7 +276,7 @@ async function handleHello(state: ClientState, message: Extract<ClientSignalMess
   }
   const validSignature = await verifyText(
     message.publicKey,
-    'randevouz/signal-auth/v1',
+    'rendezvous/signal-auth/v1',
     signalAuthTranscript(state.challenge),
     message.auth.signature,
   );
@@ -436,7 +436,7 @@ async function handleRendezvousCreate(state: ClientState, input: unknown): Promi
     (entry) => entry.fromId === state.id && entry.createdAt > Date.now() - 30 * 24 * 60 * 60 * 1000,
   ).length;
   if (pendingFromSender > MAX_PENDING_RENDEZVOUS_PER_SENDER) {
-    fail(state.ws, 'rendezvous-limit', 'Too many pending randevouz.');
+    fail(state.ws, 'rendezvous-limit', 'Too many pending rendezvous.');
     return;
   }
 
@@ -625,7 +625,7 @@ const httpServer = createServer((request, response) => {
     response.end(
       JSON.stringify({
         ok: true,
-        service: 'randevouz-signal',
+        service: 'rendezvous-signal',
         online: online.size,
         network: {
           host: HOST,
@@ -736,7 +736,7 @@ httpServer.listen(
   },
   () => {
     const protocol = HOST.includes(':') ? `http://[${HOST}]` : `http://${HOST}`;
-    console.log(`[signal] Randevouz signal listening on ${protocol}:${PORT}`);
+    console.log(`[signal] Rendezvous signal listening on ${protocol}:${PORT}`);
     if (DUAL_STACK) {
       console.log('[signal] dual-stack listener enabled (IPv4 + IPv6)');
     } else {

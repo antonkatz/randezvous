@@ -8,7 +8,7 @@ async function setName(page: Page, name: string): Promise<void> {
 
 async function snapshot(page: Page) {
   return page.evaluate(() => {
-    const app = document.querySelector('randevouz-app') as unknown as {
+    const app = document.querySelector('rendezvous-app') as unknown as {
       clientInstance: { getSnapshot: () => unknown };
     };
     return app.clientInstance.getSnapshot() as {
@@ -29,7 +29,7 @@ async function snapshot(page: Page) {
 async function createInvite(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'add human' }).click();
   await page.waitForFunction(() => {
-    const root = document.querySelector('randevouz-app')?.shadowRoot;
+    const root = document.querySelector('rendezvous-app')?.shadowRoot;
     const input = root?.querySelector<HTMLInputElement>('#invite-link');
     return Boolean(input?.value.startsWith('http'));
   });
@@ -98,7 +98,7 @@ test('links two browsers, matches verification words, and hands off a photo only
 
   const scheduled = await ana.evaluate(
     async ({ humanId }) => {
-      const app = document.querySelector('randevouz-app') as unknown as {
+      const app = document.querySelector('rendezvous-app') as unknown as {
         clientInstance: {
           scheduleRendezvous: (input: {
             humanId: string;
@@ -127,7 +127,7 @@ test('links two browsers, matches verification words, and hands off a photo only
       const blob = await new Promise<Blob>((resolve, reject) => {
         canvas.toBlob((value) => (value ? resolve(value) : reject(new Error('No blob'))), 'image/png');
       });
-      const file = new File([blob], 'randevouz-e2e.png', { type: 'image/png' });
+      const file = new File([blob], 'rendezvous-e2e.png', { type: 'image/png' });
       const record = await app.clientInstance.scheduleRendezvous({
         humanId: humanId!,
         photo: file,
@@ -154,7 +154,7 @@ test('links two browsers, matches verification words, and hands off a photo only
   expect(received?.photo?.size).toBe(scheduled.size);
   expect(received?.photo?.type).toBe('image/png');
   const diagnostics = await ana.evaluate(() => {
-    const app = document.querySelector('randevouz-app') as unknown as {
+    const app = document.querySelector('rendezvous-app') as unknown as {
       clientInstance: {
         getSnapshot: () => {
           lastTransferDiagnostics: { selected: { localFamily: string; remoteFamily: string } | null } | null;
@@ -182,7 +182,7 @@ test('links two browsers, matches verification words, and hands off a photo only
   // A second delivery re-ranks the wall: freshest is 01 and physically widest.
   const second = await ana.evaluate(
     async ({ humanId }) => {
-      const app = document.querySelector('randevouz-app') as unknown as {
+      const app = document.querySelector('rendezvous-app') as unknown as {
         clientInstance: {
           scheduleRendezvous: (input: {
             humanId: string;
@@ -214,7 +214,7 @@ test('links two browsers, matches verification words, and hands off a photo only
   await expect(baz.locator('.wall-photo')).toHaveCount(2);
   await expect(baz.locator('.wall-rank')).toHaveText(['01', '02']);
   const widths = await baz.evaluate(() => {
-    const root = document.querySelector('randevouz-app')?.shadowRoot;
+    const root = document.querySelector('rendezvous-app')?.shadowRoot;
     return [...(root?.querySelectorAll<HTMLElement>('.wall-photo') ?? [])].map(
       (element) => Number.parseFloat(element.style.width),
     );
@@ -223,7 +223,7 @@ test('links two browsers, matches verification words, and hands off a photo only
 
   const store = await readFile('.rendezvous-test/e2e-store.json', 'utf8');
   expect(store).not.toContain('data:image');
-  expect(store).not.toContain('randevouz-e2e.png');
+  expect(store).not.toContain('rendezvous-e2e.png');
   expect(store.length).toBeLessThan(200_000);
   expect(consoleErrors).toEqual([]);
 
@@ -242,7 +242,7 @@ test('waits when the recipient is offline and completes when they return', async
   expect(humanId).toBeTruthy();
   const record = await ana.evaluate(
     async ({ humanId }) => {
-      const app = document.querySelector('randevouz-app') as unknown as {
+      const app = document.querySelector('rendezvous-app') as unknown as {
         clientInstance: {
           scheduleRendezvous: (input: {
             humanId: string;
