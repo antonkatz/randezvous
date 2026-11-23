@@ -721,6 +721,7 @@ As a member of several circles, I can switch circles from a persistent bottom ba
 Acceptance:
 - A persistent bottom bar spans the bottom of the main app on desktop and mobile.
 - The **`+ circle`** button is the leftmost item, pinned to the left edge of the bar. Its visible label is exactly `+ circle`.
+- The `+ circle` button must always be an actual circle: equal width and height with a fully circular outline, at least 44 px in both dimensions. It is never a pill, rounded rectangle, or rectangular tab, at any viewport size.
 - Every circle the person belongs to appears exactly once to the right of the button as a perfectly circular icon, never as a rectangular tab or pill.
 - Each icon is at least 44 px in both dimensions, shows the circle’s initial or a quiet mark, and has an accessible name equal to the circle’s name.
 - The active circle has a clear selected treatment (a ring or filled mark, plus a text or accessibility state), not colour alone.
@@ -926,7 +927,7 @@ The server holds only the expiring invite. Membership, Join/Leave, attendance, s
 - **FR-24** Circle invitations are signed and addressed to one public-key identity; the current build auto-accepts valid invitations and still records a signed Join.
 - **FR-25** The signalling server stores only the circle rendezvous invite, until the scheduled rendezvous time has passed, and delivers it to current members; all other circle records move over authenticated RTC, and the server cannot create, alter, re-sign, choose, or promote them.
 - **FR-26** When at least two circle members are online, their clients automatically sync signed circle records over authenticated peer channels.
-- **FR-27** A persistent bottom circle bar lists every circle as a circular icon, with `+ circle` pinned at the left; selecting an icon switches the active circle.
+- **FR-27** A persistent bottom circle bar lists every circle as a circular icon, with `+ circle` pinned at the left as an actual circle; selecting an icon switches the active circle.
 
 ## 8. Non-functional requirements
 
@@ -1380,7 +1381,7 @@ These are explicit follow-ups, not accidental omissions.
 24. **Circle invite auto-accept:** a valid addressed invitation is auto-accepted and produces a signed Join; a bundle forwarded to another key is rejected; leaving still works.
 25. **Circle invite, not circle storage:** an offline member receives the expiring invite on next connection; the server contains no circle membership, attendance, stats, or record log and no photo bytes; the invite is deleted once its scheduled rendezvous time has passed; duplicate delivery is idempotent. All other circle records sync only over authenticated RTC.
 26. **Circle auto-sync:** two online members with different arrival orders converge without manual action; when one reconnects, sync resumes.
-27. **Circle bar:** with zero, one, and many circles, every circle appears exactly once as a circular icon, `+ circle` is leftmost and pinned, the active state is accessible, the row scrolls without shrinking icons, and the bar covers neither the wall nor primary controls at 390×844 and 1280×800.
+27. **Circle bar:** with zero, one, and many circles, every circle appears exactly once as a circular icon, `+ circle` is leftmost, pinned, and an actual circle, the active state is accessible, the row scrolls without shrinking icons, and the bar covers neither the wall nor primary controls at 390×844 and 1280×800.
 
 ---
 
