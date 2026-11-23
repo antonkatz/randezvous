@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#f1ece2" />
+    <meta
+      name="description"
+      content="A private photo randevouz between two browsers. The photo travels directly, only when you are both here."
+    />
+    <title>Randevouz</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='50' fill='%23151310'/%3E%3Ccircle cx='50' cy='50' r='25' fill='none' stroke='%23f1ece2' stroke-width='1.5' stroke-dasharray='3 5'/%3E%3Ccircle cx='50' cy='25' r='4' fill='%23e84822'/%3E%3C/svg%3E"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #f1ece2;
+      }
+      body {
+        min-height: 100svh;
+      }
+      randevouz-app {
+        display: block;
+        min-height: 100svh;
+      }
+      .noscript {
+        margin: 0;
+        padding: 48px;
+        font-family: Georgia, serif;
+        color: #151310;
+      }
+    </style>
+  </head>
+  <body>
+    <randevouz-app></randevouz-app>
+    <noscript>
+      <p class="noscript">Randevouz needs JavaScript, WebRTC, and a modern browser.</p>
+    </noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

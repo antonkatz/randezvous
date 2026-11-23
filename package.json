@@ -1,0 +1,60 @@
+{
+  "name": "@instanthero/randevouz",
+  "version": "0.1.0",
+  "description": "A private, browser-to-browser photo rendezvous service.",
+  "type": "module",
+  "private": false,
+  "files": [
+    "dist-lib",
+    "docs",
+    "README.md"
+  ],
+  "main": "./dist-lib/randevouz.js",
+  "module": "./dist-lib/randevouz.js",
+  "types": "./dist-lib/types/lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist-lib/types/lib/index.d.ts",
+      "import": "./dist-lib/randevouz.js"
+    }
+  },
+  "scripts": {
+    "dev": "concurrently -k -P -n web,signal -c cyan,magenta \"vite {@}\" \"tsx watch server/index.ts\" --",
+    "dev:web": "vite",
+    "dev:signal": "tsx watch server/index.ts",
+    "build": "npm run typecheck && npm run build:app && npm run build:lib && npm run build:server",
+    "build:app": "vite build",
+    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist-server/index.js --external:ws --sourcemap",
+    "start": "node dist-server/index.js",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "test": "vitest run",
+    "test:e2e": "npm run build && playwright test",
+    "preview": "vite preview",
+    "test:unit": "vitest run"
+  },
+  "keywords": [
+    "webrtc",
+    "photo-sharing",
+    "peer-to-peer",
+    "rendezvous"
+  ],
+  "license": "UNLICENSED",
+  "engines": {
+    "node": "24.x"
+  },
+  "dependencies": {
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "concurrently": "^9.2.1",
+    "esbuild": "^0.27.0",
+    "tsx": "^4.20.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^4.0.18"
+  }
+}

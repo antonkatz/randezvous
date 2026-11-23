@@ -1,0 +1,1739 @@
+import styles from './styles.css?inline';
+import instantHeroMark from './instanthero-mark.svg?raw';
+import { displayName, normalizeName } from '../crypto';
+import { RandevouzClient } from '../client';
+import { wallPhotoWidth } from './wall';
+import type {
+  AppointmentEvent,
+  ClientNotice,
+  Human,
+  RandevouzSnapshot,
+  StoredRendezvous,
+  TransferEvent,
+} from '../types';
+
+const TEMPLATE = `
+<style>${styles}</style>
+<div class="app is-loading" id="app">
+  <p class="masthead">
+    <span class="masthead-name">randevouz</span>
+    <span class="masthead-by">by</span>
+    <span class="masthead-stamp" role="img" aria-label="InstantHero">${instantHeroMark}</span>
+  </p>
+
+  <header class="topbar">
+    <div class="add-area" id="add-area">
+      <button class="add-human" id="add-human" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="invite-popover">
+        <span class="add-glyph" aria-hidden="true">+</span>
+        <span>add human</span>
+      </button>
+      <section class="invite-popover" id="invite-popover" role="dialog" aria-label="Add a human" hidden>
+        <button class="popover-close" id="invite-close" type="button" aria-label="Close">×</button>
+        <p class="popover-kicker">a link with a key inside</p>
+        <h2>Add a human.</h2>
+        <p class="invite-copy">Send this to one person. Their browser and yours become permanently linked, and will find each other whenever you’re both here.</p>
+        <label class="invite-label" for="invite-link">your invitation</label>
+        <div class="link-row">
+          <input class="invite-link" id="invite-link" readonly value="creating your link…">
+          <button class="copy-link" id="copy-link" type="button">copy</button>
+        </div>
+        <p class="invite-fineprint">A live connection is never left open. This link is a standing invitation. Remove the human to revoke it.</p>
+      </section>
+    </div>
+
+    <div class="name-area">
+      <label class="sr-only" for="code-name">Code name</label>
+      <input class="code-name" id="code-name" placeholder="Code Name" maxlength="32" autocomplete="off" spellcheck="false" disabled>
+      <span class="name-hint">this is how you appear</span>
+    </div>
+
+    <div class="diag-area" id="diag-area">
+      <button class="signal-button" id="signal-button" type="button" data-status="starting" aria-expanded="false" aria-controls="diagnostics-panel" aria-label="Connection diagnostics">
+        <span class="signal-dot" aria-hidden="true"></span>
+        <span class="signal-label" id="signal-label">signal</span>
+      </button>
+      <section class="diagnostics" id="diagnostics-panel" role="dialog" aria-label="Connection diagnostics" hidden>
+        <div class="diag-title">
+          <h3>Connection.</h3>
+          <span>live notes</span>
+        </div>
+        <dl class="diag-list">
+          <div class="diag-row"><dt>signal</dt><dd id="diag-signal">—</dd></div>
+          <div class="diag-row"><dt>this socket</dt><dd id="diag-socket">—</dd></div>
+          <div class="diag-row"><dt>bootstrap</dt><dd id="diag-bootstrap">—</dd></div>
+          <div class="diag-row"><dt>last direct</dt><dd id="diag-direct">none yet</dd></div>
+          <div class="diag-row"><dt>candidates</dt><dd id="diag-candidates">—</dd></div>
+        </dl>
+        <p class="diag-warning" id="diag-warning" hidden></p>
+        <p class="diag-note" id="diag-note">IPv4 and IPv6 addresses belong to the network this device is on. Randevouz uses IPv6 when the browser gathers it, and never filters either family. The app cannot create an IPv6 address for you.</p>
+      </section>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div class="orbit" aria-hidden="true"></div>
+    <div class="hero">
+      <p class="eyebrow">one photograph, one moment</p>
+      <h1>Some photographs<br><em>should arrive later.</em></h1>
+      <p class="lede">Choose a human. Choose a moment. The photograph stays in this browser until you are both here — then it crosses directly, browser to browser.</p>
+      <button class="cta" id="set-randevouz" type="button">
+        <span class="cta-label">Set a randevouz</span>
+        <span class="cta-arrow" aria-hidden="true">↗</span>
+      </button>
+      <p class="cta-note">this is a meeting, not a delivery</p>
+    </div>
+  </main>
+
+  <section class="humans" aria-labelledby="humans-title">
+    <div class="section-heading">
+      <span id="humans-title">your humans</span>
+      <span class="rule" aria-hidden="true"></span>
+      <span class="section-count" id="humans-count">none yet</span>
+    </div>
+    <div class="humans-list" id="humans-list"></div>
+  </section>
+
+  <section class="wall-wrap" id="wall-wrap" hidden aria-labelledby="wall-title">
+    <div class="wall-head">
+      <span id="wall-title">the wall</span>
+      <span class="rule" aria-hidden="true"></span>
+      <span id="wall-summary"></span>
+    </div>
+    <div class="wall-next" id="wall-next" hidden></div>
+    <div class="wall-board" id="wall-board"></div>
+  </section>
+
+  <footer class="footer">
+    <span class="footer-brand">randevouz <span>✳</span></span>
+    <span class="footer-center"><span class="footer-mark" aria-hidden="true"></span> photo bytes never touch a server</span>
+    <span>v0.1 · instant hero</span>
+  </footer>
+</div>
+
+<div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="false"></div>
+
+<dialog class="modal rv-modal" id="rendezvous-dialog" aria-labelledby="rv-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <p class="modal-kicker">a photograph for later</p>
+        <h2 id="rv-title">Set a randevouz</h2>
+      </div>
+      <button class="modal-close" id="rv-close" type="button" aria-label="Close">×</button>
+    </div>
+
+    <div class="rv-steps" aria-hidden="true">
+      <span class="step-marker is-active" id="rv-marker-1"></span>
+      <span class="step-marker" id="rv-marker-2"></span>
+      <span class="step-marker" id="rv-marker-3"></span>
+      <span class="step-count" id="rv-step-count">01 / 03</span>
+    </div>
+
+    <section class="rv-step" id="rv-step-1">
+      <div class="rv-grid">
+        <div>
+          <p class="field-label">01 · the photograph</p>
+          <button class="photo-drop" id="photo-drop" type="button" aria-label="Choose a photograph">
+            <img class="photo-preview" id="photo-preview" alt="" hidden>
+            <span class="photo-empty" id="photo-empty">
+              <span class="plus-ring" aria-hidden="true">+</span>
+              <span>choose a photograph</span>
+              <small>tap, or drop one here · 25 MB max</small>
+            </span>
+            <span class="photo-reselect" id="photo-reselect" hidden>change</span>
+          </button>
+          <input id="photo-input" type="file" accept="image/*" hidden>
+          <p class="photo-caption" id="photo-caption" hidden><span id="photo-name"></span><span id="photo-size"></span></p>
+          <p class="field-error" id="photo-error" hidden></p>
+        </div>
+
+        <div>
+          <p class="field-label">02 · the human</p>
+          <div class="human-options" id="human-options"></div>
+          <p class="field-note" id="human-note">A randevouz is between two people.</p>
+        </div>
+      </div>
+      <div class="rv-actions">
+        <p class="rv-aside">You’ll both need to be here.</p>
+        <button class="primary" id="rv-next" type="button" disabled>Continue <span aria-hidden="true">→</span></button>
+      </div>
+    </section>
+
+    <section class="rv-step" id="rv-step-2" hidden>
+      <div class="pick-summary">
+        <img class="pick-thumb" id="pick-thumb" alt="">
+        <div class="pick-copy">
+          <span class="pick-kicker">on its way to</span>
+          <span class="pick-name" id="pick-name"></span>
+        </div>
+      </div>
+
+      <div class="time-grid">
+        <div>
+          <label class="time-label" for="rv-time">time</label>
+          <div class="time-picker">
+            <span class="time-readout" id="rv-time-readout" aria-hidden="true">--:--</span>
+            <span class="time-clock" aria-hidden="true">
+              <svg viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.2">
+                <circle cx="16" cy="16" r="13.5"></circle>
+                <path d="M16 9.5V16l4.4 2.8"></path>
+              </svg>
+            </span>
+            <input class="time-input" id="rv-time" type="time" required>
+          </div>
+          <p class="resolved" id="rv-resolved">Choose a time.</p>
+        </div>
+        <div>
+          <label class="date-label" for="rv-date">date <span>(optional)</span></label>
+          <input class="date-input" id="rv-date" type="date">
+          <p class="time-note" id="rv-date-note">Leave empty for the next time that comes around.</p>
+        </div>
+      </div>
+
+      <p class="critical-note">This is a meeting. At the chosen moment, the photograph moves only if both browsers are open and online. Otherwise it waits for your next overlap.</p>
+      <p class="field-error" id="rv-error" hidden></p>
+
+      <div class="rv-actions">
+        <button class="back-button" id="rv-back" type="button">← Back</button>
+        <button class="primary" id="rv-schedule" type="button">Set a randevouz <span aria-hidden="true">↗</span></button>
+      </div>
+    </section>
+
+    <section class="rv-step done-step" id="rv-step-3" hidden>
+      <div class="done-mark" aria-hidden="true">✓</div>
+      <h3>DONE.</h3>
+      <p class="done-summary" id="done-summary"></p>
+      <dl class="done-detail">
+        <dt>for</dt><dd id="done-human"></dd>
+        <dt>at</dt><dd id="done-moment"></dd>
+        <dt>the photograph</dt><dd id="done-photo"></dd>
+      </dl>
+      <p class="critical-note">The photo is still here. It will only travel when you are both present at the same time. We’ll tell them when they next arrive.</p>
+      <div class="done-actions">
+        <p>You can close this. Keep Randevouz open at the appointed time.</p>
+        <button class="primary" id="rv-finish" type="button">Done</button>
+      </div>
+    </section>
+  </div>
+</dialog>
+
+<dialog class="modal human-modal" id="human-dialog" aria-labelledby="human-dialog-name">
+  <div class="modal-card">
+    <div class="human-head">
+      <div class="human-identity">
+        <span class="human-avatar" id="human-dialog-avatar" aria-hidden="true"></span>
+        <div>
+          <p class="modal-kicker">one of your humans</p>
+          <h2 id="human-dialog-name"></h2>
+          <p class="human-sub" id="human-dialog-sub"></p>
+        </div>
+      </div>
+      <button class="modal-close" id="human-close" type="button" aria-label="Close">×</button>
+    </div>
+
+    <section class="verify-section" aria-labelledby="verify-heading">
+      <div class="verify-section-head">
+        <p id="verify-heading">your comparison words</p>
+        <span class="badge is-unverified" id="human-dialog-badge">not verified</span>
+      </div>
+      <ol class="verification-words" id="verification-words" aria-label="Eight verification words"></ol>
+      <p class="verify-instruction">Say these eight words out loud, or compare them in another app. If they match, nobody swapped your keys. Do not send the words through the same link.</p>
+      <div class="verify-actions">
+        <button class="secondary" id="mark-verified" type="button">Mark as verified</button>
+      </div>
+    </section>
+
+    <div class="remove-zone">
+      <button class="text-danger" id="remove-human" type="button">Forget this human</button>
+      <div class="remove-confirm" id="remove-confirm" hidden>
+        <span>This cancels pending randevouz and revokes the old link.</span>
+        <button class="confirm-remove" id="confirm-remove" type="button">Forget permanently</button>
+        <button class="back-button" id="cancel-remove" type="button">Keep</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="photo-dialog" id="photo-dialog" aria-labelledby="photo-viewer-title">
+  <div class="photo-viewer">
+    <div class="photo-viewer-head">
+      <div>
+        <h2 class="photo-viewer-title" id="photo-viewer-title">A photograph.</h2>
+        <p class="photo-viewer-sub" id="photo-viewer-sub"></p>
+      </div>
+      <button class="photo-viewer-close" id="photo-viewer-close" type="button" aria-label="Close">×</button>
+    </div>
+    <div class="photo-viewer-image-wrap">
+      <img class="photo-viewer-image" id="photo-viewer-image" alt="Shared photograph">
+    </div>
+    <div class="photo-viewer-actions">
+      <button class="viewer-button" id="photo-delete" type="button">Delete locally</button>
+      <a class="viewer-button" id="photo-download" href="#" download>Save to device</a>
+    </div>
+  </div>
+</dialog>
+`;
+
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function toTimeValue(date: Date): string {
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function toDateValue(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function nextDefaultTime(): string {
+  const date = new Date(Date.now() + 60 * 60 * 1000);
+  date.setSeconds(0, 0);
+  date.setMinutes(Math.ceil(date.getMinutes() / 5) * 5);
+  return toTimeValue(date);
+}
+
+function formatClock(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
+}
+
+function formatMoment(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const thatDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const difference = Math.round((thatDay - today) / 86_400_000);
+  if (difference === 0) return `today at ${formatClock(timestamp)}`;
+  if (difference === 1) return `tomorrow at ${formatClock(timestamp)}`;
+  if (difference === -1) return `yesterday at ${formatClock(timestamp)}`;
+  const day = new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+  return `${day} at ${formatClock(timestamp)}`;
+}
+
+function formatShortDay(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const thatDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const difference = Math.round((thatDay - today) / 86_400_000);
+  if (difference === 0) return 'today';
+  if (difference === 1) return 'tomorrow';
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function initialFor(name: string): string {
+  const characters = [...(normalizeName(name) || '?')];
+  return characters[0] ?? '?';
+}
+
+function escapePunctuation(name: string): string {
+  return displayName(name);
+}
+
+interface ToastHandle {
+  element: HTMLElement;
+  timer: number | null;
+  close: () => void;
+  cleanup: () => void;
+  cleaned: boolean;
+}
+
+interface ToastContent {
+  tone: ClientNotice['tone'];
+  title: string;
+  message: string;
+  actionLabel?: string;
+  action?: () => void;
+  photoUrl?: string;
+  progress?: number;
+  persistent?: boolean;
+  duration?: number;
+  onClose?: () => void;
+}
+
+export class RandevouzApp extends HTMLElement {
+  private client: RandevouzClient | null = null;
+  private state: RandevouzSnapshot | null = null;
+  private initialized = false;
+  private subscriptions: Array<() => void> = [];
+  private objectUrls = new Map<string, string>();
+  private toasts = new Map<string, ToastHandle>();
+  private transferToastIds = new Map<string, string>();
+  private toastSequence = 0;
+  private nameSaveTimer: number | null = null;
+  private copyResetTimer: number | null = null;
+  private inviteOpen = false;
+  private diagnosticsOpen = false;
+  private rvStep = 1;
+  private selectedHumanId: string | null = null;
+  private photo: File | null = null;
+  private photoUrl: string | null = null;
+  private activeHumanId: string | null = null;
+  private verificationRequest = 0;
+  private viewerRecordId: string | null = null;
+  private viewerUrl: string | null = null;
+  private deleteArmed = false;
+  private deleteTimer: number | null = null;
+  private root!: ShadowRoot;
+  private wallResizeObserver: ResizeObserver | null = null;
+
+  private readonly onDocumentPointerDown = (event: PointerEvent): void => {
+    const path = event.composedPath();
+    if (this.inviteOpen && !path.includes(this.$('#add-area'))) this.closeInvite();
+    if (this.diagnosticsOpen && !path.includes(this.$('#diag-area'))) {
+      this.closeDiagnostics();
+    }
+  };
+
+  private readonly onDocumentKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape') return;
+    if (this.inviteOpen) this.closeInvite();
+    if (this.diagnosticsOpen) this.closeDiagnostics();
+  };
+
+  get clientInstance(): RandevouzClient | null {
+    return this.client;
+  }
+
+  getClient(): RandevouzClient | null {
+    return this.client;
+  }
+
+  connectedCallback(): void {
+    if (this.initialized) return;
+    this.initialized = true;
+    this.root = this.shadowRoot ?? this.attachShadow({ mode: 'open' });
+    this.root.innerHTML = TEMPLATE;
+    this.bindStaticEvents();
+    if (typeof ResizeObserver !== 'undefined') {
+      this.wallResizeObserver = new ResizeObserver(() => this.layoutWall());
+      this.wallResizeObserver.observe(this.$('#wall-board'));
+    }
+    document.addEventListener('pointerdown', this.onDocumentPointerDown, true);
+    document.addEventListener('keydown', this.onDocumentKeyDown);
+    this.startClient();
+  }
+
+  disconnectedCallback(): void {
+    this.initialized = false;
+    document.removeEventListener('pointerdown', this.onDocumentPointerDown, true);
+    document.removeEventListener('keydown', this.onDocumentKeyDown);
+    this.wallResizeObserver?.disconnect();
+    this.wallResizeObserver = null;
+    if (this.nameSaveTimer !== null) window.clearTimeout(this.nameSaveTimer);
+    if (this.copyResetTimer !== null) window.clearTimeout(this.copyResetTimer);
+    if (this.deleteTimer !== null) window.clearTimeout(this.deleteTimer);
+    for (const unsubscribe of this.subscriptions) unsubscribe();
+    this.subscriptions = [];
+    for (const handle of this.toasts.values()) {
+      if (handle.timer !== null) window.clearTimeout(handle.timer);
+      if (!handle.cleaned) {
+        handle.cleaned = true;
+        handle.cleanup();
+      }
+    }
+    this.toasts.clear();
+    this.revokeObjectUrls();
+    this.closePhotoViewer();
+    this.client?.stop();
+    this.client = null;
+    this.state = null;
+  }
+
+  private $<T extends Element = HTMLElement>(selector: string): T {
+    const element = this.root.querySelector<T>(selector);
+    if (!element) throw new Error(`Missing UI element ${selector}`);
+    return element;
+  }
+
+  private async startClient(): Promise<void> {
+    const signalUrl = this.getAttribute('signal-url') || undefined;
+    const storageName = this.getAttribute('storage-name') || undefined;
+    let iceServers: RTCIceServer[] | undefined;
+    const iceAttribute = this.getAttribute('ice-servers');
+    if (iceAttribute) {
+      try {
+        const parsed: unknown = JSON.parse(iceAttribute);
+        if (Array.isArray(parsed)) iceServers = parsed as RTCIceServer[];
+      } catch {
+        // Ignore malformed configuration; the server will provide ICE servers.
+      }
+    }
+
+    this.client = new RandevouzClient({ signalUrl, storageName, iceServers });
+    this.subscriptions.push(
+      this.client.on('state', (snapshot) => {
+        this.render(snapshot);
+        this.emitHostEvent('randevouz:state', snapshot);
+      }),
+      this.client.on('notice', (notice) => {
+        this.handleNotice(notice);
+        this.emitHostEvent('randevouz:notice', notice);
+      }),
+      this.client.on('appointment', (event) => {
+        this.handleAppointment(event);
+        this.emitHostEvent('randevouz:appointment', event);
+      }),
+      this.client.on('transfer', (event) => {
+        this.handleTransfer(event);
+        this.emitHostEvent('randevouz:transfer', event);
+      }),
+    );
+    this.renderEmptyState();
+    try {
+      await this.client.start();
+      this.$('#app').classList.remove('is-loading');
+    } catch (error) {
+      this.showBootError(
+        error instanceof Error
+          ? error.message
+          : 'Randevouz could not open its local identity store.',
+      );
+    }
+  }
+
+  private emitHostEvent(name: string, detail: unknown): void {
+    this.dispatchEvent(new CustomEvent(name, { detail, bubbles: true, composed: true }));
+  }
+
+  private showBootError(message: string): void {
+    const panel = document.createElement('div');
+    panel.className = 'boot-error';
+    const card = document.createElement('div');
+    card.className = 'boot-error-card';
+    const heading = document.createElement('h2');
+    heading.textContent = 'The door stuck.';
+    const copy = document.createElement('p');
+    copy.textContent = `${message} Randevouz needs IndexedDB and Web Crypto, and works on localhost or HTTPS.`;
+    card.append(heading, copy);
+    panel.append(card);
+    this.root.append(panel);
+  }
+
+  private bindStaticEvents(): void {
+    this.$('#add-human').addEventListener('click', () => void this.toggleInvite());
+    this.$('#invite-close').addEventListener('click', () => this.closeInvite());
+    this.$('#copy-link').addEventListener('click', () => void this.copyInviteLink());
+    this.$('#signal-button').addEventListener('click', () => this.toggleDiagnostics());
+    this.$('#set-randevouz').addEventListener('click', () => this.openRendezvous());
+    this.$('#rv-close').addEventListener('click', () => this.$<HTMLDialogElement>('#rendezvous-dialog').close());
+    this.$('#rv-next').addEventListener('click', () => this.goToStepTwo());
+    this.$('#rv-back').addEventListener('click', () => this.setStep(1));
+    this.$('#rv-schedule').addEventListener('click', () => void this.scheduleRendezvous());
+    this.$('#rv-finish').addEventListener('click', () => this.$<HTMLDialogElement>('#rendezvous-dialog').close());
+    this.$('#human-close').addEventListener('click', () => this.$<HTMLDialogElement>('#human-dialog').close());
+    this.$('#mark-verified').addEventListener('click', () => void this.markVerified());
+    this.$('#remove-human').addEventListener('click', () => this.beginHumanRemoval());
+    this.$('#cancel-remove').addEventListener('click', () => this.resetHumanRemoval());
+    this.$('#confirm-remove').addEventListener('click', () => void this.confirmHumanRemoval());
+    this.$('#photo-viewer-close').addEventListener('click', () => this.closePhotoViewer());
+    this.$('#photo-delete').addEventListener('click', () => void this.deleteViewedPhoto());
+    this.$('#rendezvous-dialog').addEventListener('click', (event) => {
+      if (event.target === this.$('#rendezvous-dialog')) {
+        this.$<HTMLDialogElement>('#rendezvous-dialog').close();
+      }
+    });
+    this.$('#human-dialog').addEventListener('click', (event) => {
+      if (event.target === this.$('#human-dialog')) {
+        this.$<HTMLDialogElement>('#human-dialog').close();
+      }
+    });
+    this.$('#photo-dialog').addEventListener('click', (event) => {
+      if (event.target === this.$('#photo-dialog')) this.closePhotoViewer();
+    });
+    this.$('#rendezvous-dialog').addEventListener('close', () => this.resetRendezvousFlow());
+    this.$('#human-dialog').addEventListener('close', () => {
+      this.activeHumanId = null;
+      this.resetHumanRemoval();
+    });
+    this.$('#photo-dialog').addEventListener('close', () => this.releaseViewerUrl());
+    this.$('#photo-input').addEventListener('change', (event) => {
+      const input = event.currentTarget as HTMLInputElement;
+      const file = input.files?.[0];
+      if (file) this.setPhoto(file);
+      input.value = '';
+    });
+    this.$('#photo-drop').addEventListener('click', () => this.$<HTMLInputElement>('#photo-input').click());
+    const drop = this.$('#photo-drop');
+    drop.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      drop.classList.add('is-dragging');
+    });
+    drop.addEventListener('dragleave', () => drop.classList.remove('is-dragging'));
+    drop.addEventListener('drop', (event) => {
+      event.preventDefault();
+      drop.classList.remove('is-dragging');
+      const file = event.dataTransfer?.files[0];
+      if (file) this.setPhoto(file);
+    });
+
+    const codeName = this.$<HTMLInputElement>('#code-name');
+    codeName.addEventListener('input', () => {
+      if (this.nameSaveTimer !== null) window.clearTimeout(this.nameSaveTimer);
+      this.nameSaveTimer = window.setTimeout(() => void this.commitCodeName(), 360);
+    });
+    codeName.addEventListener('blur', () => void this.commitCodeName());
+    codeName.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        codeName.blur();
+      }
+    });
+
+    const time = this.$<HTMLInputElement>('#rv-time');
+    const date = this.$<HTMLInputElement>('#rv-date');
+    time.addEventListener('input', () => {
+      this.updateTimeReadout();
+      this.updateScheduleResolution();
+    });
+    time.addEventListener('click', () => {
+      try {
+        time.showPicker();
+      } catch {
+        // Browsers without a popup picker still support keyboard editing.
+      }
+    });
+    date.addEventListener('input', () => this.updateScheduleResolution());
+    this.$('#humans-list').addEventListener('click', (event) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>('[data-human-id]');
+      if (target?.dataset.humanId) this.openHuman(target.dataset.humanId);
+    });
+  }
+
+  private renderEmptyState(): void {
+    const humans = this.$('#humans-list');
+    humans.replaceChildren();
+    const empty = document.createElement('p');
+    empty.className = 'humans-empty';
+    empty.textContent = 'No humans yet. The door is at the top left.';
+    humans.append(empty);
+  }
+
+  private render(snapshot: RandevouzSnapshot): void {
+    this.state = snapshot;
+    if (!snapshot.ready) return;
+    this.$('#app').classList.remove('is-loading');
+    const codeName = this.$<HTMLInputElement>('#code-name');
+    if (this.root.activeElement !== codeName && codeName.value !== snapshot.identity.name) {
+      codeName.value = snapshot.identity.name;
+    }
+    codeName.disabled = false;
+    this.renderSignal(snapshot);
+    this.renderHumans(snapshot);
+    this.renderWall(snapshot);
+    if (this.activeHumanId) this.refreshHumanDialog(snapshot);
+    if (this.rvStep === 1 && this.$<HTMLDialogElement>('#rendezvous-dialog').open) {
+      this.renderHumanOptions(snapshot);
+    }
+  }
+
+  private renderSignal(snapshot: RandevouzSnapshot): void {
+    const button = this.$('#signal-button');
+    button.dataset.status = snapshot.signal;
+    const labels: Record<string, string> = {
+      starting: 'signal · starting',
+      connecting: 'signal · connecting',
+      online: 'signal · live',
+      offline: 'signal · off',
+      replaced: 'signal · another window',
+    };
+    this.$('#signal-label').textContent = labels[snapshot.signal] ?? 'signal';
+    button.setAttribute('aria-label', 'Open connection diagnostics');
+    this.renderDiagnostics(snapshot);
+  }
+
+  private renderDiagnostics(snapshot: RandevouzSnapshot): void {
+    const onlineHumans = snapshot.humans.filter((human) => human.online).length;
+    this.$('#diag-signal').textContent =
+      `${snapshot.signal} · ${onlineHumans} of ${snapshot.humans.length} human${snapshot.humans.length === 1 ? '' : 's'} online`;
+    const network = snapshot.network;
+    if (network) {
+      this.$('#diag-socket').textContent =
+        `${network.remoteFamily}${network.remoteAddress ? ` · ${network.remoteAddress}` : ''}`;
+      this.$('#diag-bootstrap').textContent = network.dualStack
+        ? `dual-stack advertised · listening on ${network.host}`
+        : `single-stack · listening on ${network.host}`;
+    } else {
+      this.$('#diag-socket').textContent = snapshot.signal === 'online' ? 'negotiating…' : '—';
+      this.$('#diag-bootstrap').textContent = '—';
+    }
+
+    const diagnostics = snapshot.lastTransferDiagnostics;
+    if (diagnostics?.selected) {
+      this.$('#diag-direct').textContent =
+        `${diagnostics.selected.localFamily} → ${diagnostics.selected.remoteFamily} · ${diagnostics.selected.protocol.toUpperCase()} · ${diagnostics.selected.localType}/${diagnostics.selected.remoteType}`;
+      this.$('#diag-candidates').textContent =
+        `local ${diagnostics.localCandidates.ipv4} v4 · ${diagnostics.localCandidates.ipv6} v6 · ${diagnostics.localCandidates.unknown} hidden / remote ${diagnostics.remoteCandidates.ipv4} v4 · ${diagnostics.remoteCandidates.ipv6} v6 · ${diagnostics.remoteCandidates.unknown} hidden`;
+    } else if (diagnostics) {
+      this.$('#diag-direct').textContent = 'no successful candidate pair';
+      this.$('#diag-candidates').textContent =
+        `local ${diagnostics.localCandidates.ipv4} v4 · ${diagnostics.localCandidates.ipv6} v6 · ${diagnostics.localCandidates.unknown} hidden / remote ${diagnostics.remoteCandidates.ipv4} v4 · ${diagnostics.remoteCandidates.ipv6} v6 · ${diagnostics.remoteCandidates.unknown} hidden`;
+    } else {
+      this.$('#diag-direct').textContent = 'no direct session yet';
+      this.$('#diag-candidates').textContent = 'gathered when a handoff begins';
+    }
+
+    const warning = this.$('#diag-warning');
+    if (network?.warning) {
+      warning.hidden = false;
+      warning.textContent = network.warning;
+    } else {
+      warning.hidden = true;
+      warning.textContent = '';
+    }
+    const note = this.$('#diag-note');
+    const hasV6 =
+      diagnostics &&
+      (diagnostics.localCandidates.ipv6 > 0 || diagnostics.remoteCandidates.ipv6 > 0);
+    const hidden =
+      diagnostics &&
+      diagnostics.localCandidates.unknown + diagnostics.remoteCandidates.unknown > 0;
+    note.textContent = diagnostics
+      ? hasV6
+        ? 'This connection produced IPv6 candidates. WebRTC uses both address families when the network offers them.'
+        : hidden
+          ? 'Some host candidates use mDNS names, so their address family is hidden. No IPv6 candidate was visible. IPv6 comes from the network and is used automatically when available.'
+          : 'This connection did not produce an IPv6 candidate. That is a property of this network, not something the app can assign. The browser uses IPv6 automatically when it is available.'
+      : 'IPv4 and IPv6 addresses belong to the network this device is on. Randevouz uses IPv6 when the browser gathers it, and never filters either family. The app cannot create an IPv6 address for you.';
+  }
+
+  private renderHumans(snapshot: RandevouzSnapshot): void {
+    const list = this.$('#humans-list');
+    list.replaceChildren();
+    this.$('#humans-count').textContent =
+      snapshot.humans.length === 0
+        ? 'none yet'
+        : `${snapshot.humans.length} linked`;
+    if (snapshot.humans.length === 0) {
+      this.renderEmptyState();
+      return;
+    }
+    for (const human of snapshot.humans) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'human-chip';
+      button.dataset.humanId = human.id;
+      button.setAttribute(
+        'aria-label',
+        `Open ${escapePunctuation(human.name)}. ${human.online ? 'Online' : 'Offline'}. ${human.verifiedAt ? 'Verified' : 'Not verified'}.`,
+      );
+      const avatar = document.createElement('span');
+      avatar.className = 'human-avatar';
+      avatar.dataset.online = String(human.online);
+      avatar.setAttribute('aria-hidden', 'true');
+      avatar.textContent = initialFor(human.name);
+      const copy = document.createElement('span');
+      copy.className = 'human-copy';
+      const name = document.createElement('span');
+      name.className = 'human-name';
+      name.textContent = displayName(human.name);
+      if (human.verifiedAt) {
+        const tick = document.createElement('span');
+        tick.className = 'verified-tick';
+        tick.setAttribute('aria-label', 'Verified');
+        tick.textContent = '✓';
+        name.append(' ', tick);
+      } else {
+        const tick = document.createElement('span');
+        tick.className = 'unverified-tick';
+        tick.setAttribute('aria-label', 'Not verified');
+        name.append(' ', tick);
+      }
+      const state = document.createElement('span');
+      state.className = 'human-state';
+      state.dataset.online = String(human.online);
+      const dot = document.createElement('span');
+      dot.className = 'online-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      const stateText = document.createElement('span');
+      stateText.textContent = `${human.online ? 'here now' : 'away'} · ${human.verifiedAt ? 'verified' : 'not verified'}`;
+      state.append(dot, stateText);
+      copy.append(name, state);
+      button.append(avatar, copy);
+      list.append(button);
+    }
+  }
+
+  private photoUrlFor(record: StoredRendezvous): string | null {
+    if (!record.photo) return null;
+    const key = `${record.id}:${record.deliveredAt ?? 'pending'}`;
+    const existing = this.objectUrls.get(key);
+    if (existing) return existing;
+    const url = URL.createObjectURL(record.photo.blob);
+    this.objectUrls.set(key, url);
+    return url;
+  }
+
+  private pruneObjectUrls(liveKeys: Set<string>): void {
+    for (const [key, url] of [...this.objectUrls.entries()]) {
+      if (liveKeys.has(key)) continue;
+      URL.revokeObjectURL(url);
+      this.objectUrls.delete(key);
+    }
+  }
+
+  private renderWall(snapshot: RandevouzSnapshot): void {
+    const wrap = this.$('#wall-wrap');
+    const board = this.$('#wall-board');
+    const next = this.$('#wall-next');
+    const delivered = snapshot.rendezvous
+      .filter((record) => record.status === 'delivered' && Boolean(record.photo))
+      .sort((a, b) => {
+        const arrival = (b.deliveredAt ?? b.scheduledFor) - (a.deliveredAt ?? a.scheduledFor);
+        return arrival !== 0 ? arrival : a.id.localeCompare(b.id);
+      });
+    const pending = snapshot.rendezvous
+      .filter((record) => record.status !== 'delivered')
+      .sort((a, b) => a.scheduledFor - b.scheduledFor);
+    const humans = new Map(snapshot.humans.map((human) => [human.id, human]));
+
+    if (delivered.length === 0 && pending.length === 0) {
+      wrap.hidden = true;
+      board.replaceChildren();
+      next.replaceChildren();
+      next.hidden = true;
+      this.pruneObjectUrls(new Set());
+      return;
+    }
+    wrap.hidden = false;
+    this.$('#wall-summary').textContent = [
+      delivered.length > 0 ? `${delivered.length} photograph${delivered.length === 1 ? '' : 's'}` : null,
+      pending.length > 0 ? `${pending.length} waiting` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
+    board.replaceChildren();
+    next.replaceChildren();
+    next.hidden = pending.length === 0;
+    const liveKeys = new Set<string>();
+
+    for (const record of pending) {
+      const human = humans.get(record.peerId);
+      const person = displayName(record.peerName || human?.name || '');
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'next-card';
+      card.dataset.humanId = record.peerId;
+      const time = document.createElement('span');
+      time.className = 'next-card-time';
+      time.textContent = formatClock(record.scheduledFor);
+      const copy = document.createElement('span');
+      copy.className = 'next-card-copy';
+      const title = document.createElement('span');
+      title.className = 'next-card-title';
+      title.textContent = `${record.direction === 'incoming' ? 'from' : 'to'} ${person}`;
+      const state = document.createElement('span');
+      state.className = 'next-card-state';
+      const needsPerson = !human?.online;
+      state.textContent =
+        record.status === 'transferring'
+          ? 'moving directly'
+          : record.status === 'failed'
+            ? 'retrying when both are here'
+            : record.scheduledFor > Date.now()
+              ? `set · ${formatShortDay(record.scheduledFor)}`
+              : needsPerson
+                ? `waiting for ${person}`
+                : 'both here · connecting';
+      copy.append(title, state);
+      const arrow = document.createElement('span');
+      arrow.className = 'next-card-arrow';
+      arrow.textContent = '↗';
+      card.append(time, copy, arrow);
+      card.setAttribute('aria-label', `Open ${person} · ${formatMoment(record.scheduledFor)} · ${state.textContent}`);
+      card.addEventListener('click', () => this.openHuman(record.peerId));
+      next.append(card);
+    }
+
+    delivered.forEach((record, index) => {
+      const human = humans.get(record.peerId);
+      const person = displayName(record.peerName || human?.name || '');
+      const rank = index + 1;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'wall-photo';
+      button.dataset.wallId = record.id;
+      button.dataset.wallRank = String(rank);
+      button.style.width = '160px';
+      button.setAttribute('aria-label', `Open photograph ranked ${rank} from ${person}`);
+      const frame = document.createElement('span');
+      frame.className = 'wall-photo-frame';
+      const url = this.photoUrlFor(record);
+      if (url) liveKeys.add(`${record.id}:${record.deliveredAt ?? 'pending'}`);
+      if (url) {
+        const image = document.createElement('img');
+        image.className = 'wall-photo-image';
+        image.src = url;
+        image.alt = '';
+        frame.append(image);
+      }
+      const caption = document.createElement('span');
+      caption.className = 'wall-photo-caption';
+      const rankLabel = document.createElement('span');
+      rankLabel.className = 'wall-rank';
+      rankLabel.textContent = String(rank).padStart(2, '0');
+      const personLabel = document.createElement('span');
+      personLabel.className = 'wall-person';
+      personLabel.textContent = `${record.direction === 'incoming' ? 'from' : 'to'} ${person}`;
+      const date = document.createElement('span');
+      date.className = 'wall-date';
+      date.textContent = formatShortDay(record.deliveredAt ?? record.scheduledFor);
+      caption.append(rankLabel, personLabel, date);
+      button.append(frame, caption);
+      button.addEventListener('click', () => this.openPhotoViewer(record));
+      board.append(button);
+    });
+
+    if (delivered.length === 0) {
+      board.hidden = true;
+    } else {
+      board.hidden = false;
+      const note = document.createElement('p');
+      note.className = 'wall-footnote';
+      note.textContent = `rank 01 is freshest · each print steps down on a gentle curve`;
+      board.append(note);
+    }
+    this.pruneObjectUrls(liveKeys);
+    window.requestAnimationFrame(() => this.layoutWall());
+  }
+
+  private layoutWall(): void {
+    const board = this.root.querySelector<HTMLElement>('#wall-board');
+    if (!board) return;
+    const width = board.clientWidth;
+    if (width <= 0) return;
+    for (const photo of board.querySelectorAll<HTMLElement>('.wall-photo')) {
+      const rank = Number(photo.dataset.wallRank ?? '1');
+      photo.style.width = `${wallPhotoWidth(rank, width)}px`;
+    }
+  }
+
+  private async toggleInvite(): Promise<void> {
+    if (this.inviteOpen) {
+      this.closeInvite();
+      return;
+    }
+    this.closeDiagnostics();
+    this.inviteOpen = true;
+    const popover = this.$<HTMLElement>('#invite-popover');
+    popover.hidden = false;
+    this.$('#add-human').setAttribute('aria-expanded', 'true');
+    const input = this.$<HTMLInputElement>('#invite-link');
+    input.value = 'creating your link…';
+    this.$('#copy-link').textContent = 'copy';
+    try {
+      const link = await this.client?.createInviteLink();
+      if (!link) throw new Error('not ready');
+      input.value = link;
+      window.setTimeout(() => this.$('#copy-link').focus(), 30);
+    } catch {
+      input.value = 'Randevouz is not ready yet. Try again in a moment.';
+    }
+  }
+
+  private closeInvite(): void {
+    if (!this.inviteOpen) return;
+    this.inviteOpen = false;
+    this.$('#invite-popover').hidden = true;
+    this.$('#add-human').setAttribute('aria-expanded', 'false');
+  }
+
+  private async copyInviteLink(): Promise<void> {
+    const input = this.$<HTMLInputElement>('#invite-link');
+    if (!input.value.startsWith('http')) return;
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(input.value);
+      copied = true;
+    } catch {
+      input.focus();
+      input.select();
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      }
+    }
+    const button = this.$('#copy-link');
+    button.textContent = copied ? 'copied' : 'select';
+    if (this.copyResetTimer !== null) window.clearTimeout(this.copyResetTimer);
+    this.copyResetTimer = window.setTimeout(() => {
+      button.textContent = 'copy';
+    }, 2200);
+    if (!copied) {
+      this.showToast({
+        tone: 'info',
+        title: 'The link is selected.',
+        message: 'Copy it from the field above.',
+      });
+    }
+  }
+
+  private toggleDiagnostics(): void {
+    if (this.diagnosticsOpen) {
+      this.closeDiagnostics();
+      return;
+    }
+    this.closeInvite();
+    this.diagnosticsOpen = true;
+    this.$('#diagnostics-panel').hidden = false;
+    this.$('#signal-button').setAttribute('aria-expanded', 'true');
+    if (this.state) this.renderDiagnostics(this.state);
+  }
+
+  private closeDiagnostics(): void {
+    if (!this.diagnosticsOpen) return;
+    this.diagnosticsOpen = false;
+    this.$('#diagnostics-panel').hidden = true;
+    this.$('#signal-button').setAttribute('aria-expanded', 'false');
+  }
+
+  private async commitCodeName(): Promise<void> {
+    if (this.nameSaveTimer !== null) {
+      window.clearTimeout(this.nameSaveTimer);
+      this.nameSaveTimer = null;
+    }
+    if (!this.client) return;
+    const input = this.$<HTMLInputElement>('#code-name');
+    try {
+      await this.client.setCodeName(input.value);
+    } catch {
+      this.showToast({
+        tone: 'error',
+        title: 'Your name did not save.',
+        message: 'The local identity store is unavailable.',
+      });
+    }
+  }
+
+  private openRendezvous(): void {
+    if (!this.state?.ready) return;
+    const dialog = this.$<HTMLDialogElement>('#rendezvous-dialog');
+    this.resetRendezvousFlow();
+    this.renderHumanOptions(this.state);
+    this.$<HTMLInputElement>('#rv-time').value = nextDefaultTime();
+    this.updateTimeReadout();
+    this.$<HTMLInputElement>('#rv-date').value = '';
+    this.$<HTMLInputElement>('#rv-date').min = toDateValue(new Date());
+    this.setStep(1);
+    this.updateScheduleResolution();
+    if (!dialog.open) dialog.showModal();
+    this.$<HTMLButtonElement>('#photo-drop').focus();
+  }
+
+  private resetRendezvousFlow(): void {
+    this.rvStep = 1;
+    this.selectedHumanId = null;
+    if (this.photoUrl) URL.revokeObjectURL(this.photoUrl);
+    this.photoUrl = null;
+    this.photo = null;
+    const photoPreview = this.$<HTMLImageElement>('#photo-preview');
+    photoPreview.hidden = true;
+    photoPreview.removeAttribute('src');
+    this.$('#photo-empty').hidden = false;
+    this.$('#photo-reselect').hidden = true;
+    this.$('#photo-caption').hidden = true;
+    this.$('#photo-error').hidden = true;
+    this.$('#photo-drop').classList.remove('has-photo');
+    this.$('#rv-error').hidden = true;
+    this.$('#rv-next').setAttribute('disabled', '');
+    this.$<HTMLButtonElement>('#rv-schedule').disabled = false;
+    this.$('#rv-schedule').innerHTML = 'Set a randevouz <span aria-hidden="true">↗</span>';
+    this.updateStepUI(1);
+  }
+
+  private setStep(step: 1 | 2 | 3): void {
+    this.rvStep = step;
+    for (const value of [1, 2, 3]) {
+      this.$(`#rv-step-${value}`).hidden = value !== step;
+    }
+    this.updateStepUI(step);
+    if (step === 2) {
+      this.updateScheduleResolution();
+      window.setTimeout(() => this.$<HTMLInputElement>('#rv-time').focus(), 30);
+    }
+  }
+
+  private updateStepUI(step: number): void {
+    this.$('#rv-step-count').textContent = `0${step} / 03`;
+    for (const value of [1, 2, 3]) {
+      const marker = this.$(`#rv-marker-${value}`);
+      marker.classList.toggle('is-done', value < step);
+      marker.classList.toggle('is-active', value === step);
+    }
+  }
+
+  private renderHumanOptions(snapshot: RandevouzSnapshot): void {
+    const container = this.$('#human-options');
+    container.replaceChildren();
+    if (snapshot.humans.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'no-humans';
+      const copy = document.createElement('p');
+      copy.textContent = 'Every randevouz needs another person. Add one first.';
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'inline-add';
+      add.textContent = 'add a human ↗';
+      add.addEventListener('click', () => {
+        this.$<HTMLDialogElement>('#rendezvous-dialog').close();
+        void this.toggleInvite();
+      });
+      empty.append(copy, add);
+      container.append(empty);
+      this.$('#human-note').textContent = 'The top-left door is the only way in.';
+      this.updateStepOneState();
+      return;
+    }
+
+    this.$('#human-note').textContent = 'Only humans linked to this browser appear here.';
+    for (const human of snapshot.humans) {
+      const label = document.createElement('label');
+      label.className = 'human-option';
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'rv-human';
+      input.value = human.id;
+      input.checked = human.id === this.selectedHumanId;
+      input.addEventListener('change', () => {
+        this.selectedHumanId = human.id;
+        this.$('#rv-error').hidden = true;
+        this.updateStepOneState();
+      });
+      const avatar = document.createElement('span');
+      avatar.className = 'human-avatar';
+      avatar.dataset.online = String(human.online);
+      avatar.setAttribute('aria-hidden', 'true');
+      avatar.textContent = initialFor(human.name);
+      const copy = document.createElement('span');
+      copy.className = 'human-option-copy';
+      const name = document.createElement('span');
+      name.className = 'human-option-name';
+      name.textContent = displayName(human.name);
+      const state = document.createElement('span');
+      state.className = 'human-option-state';
+      state.textContent = `${human.online ? 'here now' : 'away'} · ${human.verifiedAt ? 'verified' : 'not verified'}`;
+      copy.append(name, state);
+      const check = document.createElement('span');
+      check.className = 'human-option-check';
+      check.setAttribute('aria-hidden', 'true');
+      check.textContent = '✓';
+      label.append(input, avatar, copy, check);
+      container.append(label);
+    }
+    if (this.selectedHumanId && !snapshot.humans.some((human) => human.id === this.selectedHumanId)) {
+      this.selectedHumanId = null;
+    }
+    this.updateStepOneState();
+  }
+
+  private updateStepOneState(): void {
+    const next = this.$<HTMLButtonElement>('#rv-next');
+    const ready = Boolean(this.photo && this.selectedHumanId);
+    next.disabled = !ready;
+    this.$('#rv-error').hidden = true;
+  }
+
+  private setPhoto(file: File): void {
+    const error = this.$('#photo-error');
+    if (!file.type.startsWith('image/')) {
+      error.textContent = 'That file is not an image.';
+      error.hidden = false;
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      error.textContent = 'That photograph is larger than 25 MB.';
+      error.hidden = false;
+      return;
+    }
+    error.hidden = true;
+    if (this.photoUrl) URL.revokeObjectURL(this.photoUrl);
+    this.photo = file;
+    this.photoUrl = URL.createObjectURL(file);
+    const preview = this.$<HTMLImageElement>('#photo-preview');
+    preview.src = this.photoUrl;
+    preview.hidden = false;
+    this.$('#photo-empty').hidden = true;
+    this.$('#photo-reselect').hidden = false;
+    this.$('#photo-drop').classList.add('has-photo');
+    this.$('#photo-caption').hidden = false;
+    this.$('#photo-name').textContent = file.name || 'photograph';
+    this.$('#photo-size').textContent = formatBytes(file.size);
+    this.updateStepOneState();
+  }
+
+  private goToStepTwo(): void {
+    if (!this.photo || !this.selectedHumanId) return;
+    const human = this.state?.humans.find((entry) => entry.id === this.selectedHumanId);
+    if (!human) return;
+    this.$('#pick-name').textContent = displayName(human.name);
+    const thumb = this.$<HTMLImageElement>('#pick-thumb');
+    if (this.photoUrl) thumb.src = this.photoUrl;
+    const timeInput = this.$<HTMLInputElement>('#rv-time');
+    timeInput.value ||= nextDefaultTime();
+    this.updateTimeReadout();
+    this.setStep(2);
+    this.updateScheduleResolution();
+  }
+
+  private resolveSchedule(): { timestamp: number; label: string } | { error: string } {
+    const time = this.$<HTMLInputElement>('#rv-time').value;
+    const dateValue = this.$<HTMLInputElement>('#rv-date').value;
+    if (!time) return { error: 'Choose a time.' };
+    const [hoursText, minutesText] = time.split(':');
+    const hours = Number(hoursText);
+    const minutes = Number(minutesText);
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
+      return { error: 'Choose a valid time.' };
+    }
+    const now = Date.now();
+    let target: Date;
+    if (dateValue) {
+      const [yearText, monthText, dayText] = dateValue.split('-');
+      const year = Number(yearText);
+      const month = Number(monthText);
+      const day = Number(dayText);
+      if (!year || !month || !day) return { error: 'Choose a valid date.' };
+      target = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      if (target.getTime() <= now + 1_000) {
+        return { error: 'That moment has passed. Pick a later time.' };
+      }
+    } else {
+      const today = new Date();
+      target = new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate(),
+        hours,
+        minutes,
+        0,
+        0,
+      );
+      if (target.getTime() <= now + 1_000) {
+        target = new Date(target.getTime() + 86_400_000);
+      }
+    }
+    return { timestamp: target.getTime(), label: formatMoment(target.getTime()) };
+  }
+
+  private updateTimeReadout(): void {
+    const value = this.$<HTMLInputElement>('#rv-time').value;
+    this.$('#rv-time-readout').textContent = value || '--:--';
+  }
+
+  private updateScheduleResolution(): void {
+    if (!this.$('#rv-resolved')) return;
+    this.updateTimeReadout();
+    const resolved = this.resolveSchedule();
+    const schedule = this.$<HTMLButtonElement>('#rv-schedule');
+    const resolvedElement = this.$('#rv-resolved');
+    const time = this.$<HTMLInputElement>('#rv-time').value;
+    if ('error' in resolved) {
+      resolvedElement.textContent = time ? resolved.error : 'Choose a time.';
+      resolvedElement.style.color = time ? '#9d3c23' : '';
+      schedule.disabled = true;
+      return;
+    }
+    resolvedElement.textContent = `We’ll meet ${resolved.label}.`;
+    resolvedElement.style.color = '';
+    schedule.disabled = false;
+  }
+
+  private async scheduleRendezvous(): Promise<void> {
+    if (!this.client || !this.photo || !this.selectedHumanId) return;
+    const resolved = this.resolveSchedule();
+    const error = this.$('#rv-error');
+    if ('error' in resolved) {
+      error.textContent = resolved.error;
+      error.hidden = false;
+      return;
+    }
+    const button = this.$<HTMLButtonElement>('#rv-schedule');
+    button.disabled = true;
+    button.textContent = 'Setting it…';
+    error.hidden = true;
+
+    try {
+      const record = await this.client.scheduleRendezvous({
+        humanId: this.selectedHumanId,
+        photo: this.photo,
+        fileName: this.photo.name,
+        scheduledFor: resolved.timestamp,
+      });
+      this.showDone(record);
+    } catch (scheduleError) {
+      error.textContent =
+        scheduleError instanceof Error
+          ? scheduleError.message
+          : 'The randevouz could not be saved.';
+      error.hidden = false;
+      button.disabled = false;
+      button.innerHTML = 'Set a randevouz <span aria-hidden="true">↗</span>';
+    }
+  }
+
+  private showDone(record: StoredRendezvous): void {
+    const human = this.state?.humans.find((entry) => entry.id === record.peerId);
+    const who = displayName(record.peerName || human?.name || '');
+    this.$('#done-summary').textContent = `For ${who}. ${formatMoment(record.scheduledFor)}.`;
+    this.$('#done-human').textContent = who;
+    this.$('#done-moment').textContent = formatMoment(record.scheduledFor);
+    this.$('#done-photo').textContent = record.photo
+      ? `${record.photo.name} · ${formatBytes(record.photo.size)}`
+      : 'the photograph';
+    this.setStep(3);
+    window.setTimeout(() => this.$<HTMLButtonElement>('#rv-finish').focus(), 40);
+  }
+
+  private openHuman(humanId: string): void {
+    const human = this.state?.humans.find((entry) => entry.id === humanId);
+    if (!human) return;
+    this.activeHumanId = humanId;
+    this.verificationRequest += 1;
+    const request = this.verificationRequest;
+    this.resetHumanRemoval();
+    this.$('#human-dialog-avatar').textContent = initialFor(human.name);
+    this.$('#human-dialog-name').textContent = displayName(human.name);
+    this.$('#human-dialog-sub').textContent = human.online ? 'here now' : 'away';
+    this.updateHumanBadge(human);
+    const words = this.$('#verification-words');
+    words.replaceChildren();
+    for (let index = 0; index < 8; index += 1) {
+      const item = document.createElement('li');
+      item.className = 'is-placeholder';
+      item.textContent = '••••';
+      words.append(item);
+    }
+    const mark = this.$<HTMLButtonElement>('#mark-verified');
+    mark.disabled = Boolean(human.verifiedAt);
+    mark.textContent = human.verifiedAt ? 'Verified' : 'Mark as verified';
+    this.$<HTMLButtonElement>('#remove-human').disabled = false;
+    const dialog = this.$<HTMLDialogElement>('#human-dialog');
+    if (!dialog.open) dialog.showModal();
+    void this.loadVerificationWords(human.id, request);
+  }
+
+  private async loadVerificationWords(humanId: string, request: number): Promise<void> {
+    try {
+      const words = await this.client?.verificationWordsFor(humanId);
+      if (request !== this.verificationRequest || this.activeHumanId !== humanId || !words) return;
+      const list = this.$('#verification-words');
+      list.replaceChildren();
+      for (const word of words) {
+        const item = document.createElement('li');
+        item.textContent = word;
+        list.append(item);
+      }
+    } catch {
+      if (request !== this.verificationRequest) return;
+      this.showToast({
+        tone: 'error',
+        title: 'The words are unavailable.',
+        message: 'Randevouz could not read both pinned keys.',
+      });
+    }
+  }
+
+  private updateHumanBadge(human: Human): void {
+    const badge = this.$('#human-dialog-badge');
+    badge.className = `badge ${human.verifiedAt ? 'is-verified' : 'is-unverified'}`;
+    badge.textContent = human.verifiedAt ? '✓ verified' : 'not verified';
+  }
+
+  private refreshHumanDialog(snapshot: RandevouzSnapshot): void {
+    if (!this.activeHumanId) return;
+    const human = snapshot.humans.find((entry) => entry.id === this.activeHumanId);
+    if (!human) {
+      this.$<HTMLDialogElement>('#human-dialog').close();
+      return;
+    }
+    this.$('#human-dialog-sub').textContent = human.online ? 'here now' : 'away';
+    this.updateHumanBadge(human);
+    const mark = this.$<HTMLButtonElement>('#mark-verified');
+    mark.disabled = Boolean(human.verifiedAt);
+    mark.textContent = human.verifiedAt ? 'Verified' : 'Mark as verified';
+  }
+
+  private async markVerified(): Promise<void> {
+    if (!this.client || !this.activeHumanId) return;
+    try {
+      await this.client.markHumanVerified(this.activeHumanId);
+    } catch {
+      this.showToast({
+        tone: 'error',
+        title: 'Verification did not save.',
+        message: 'The local identity store is unavailable.',
+      });
+    }
+  }
+
+  private beginHumanRemoval(): void {
+    this.$('#remove-confirm').hidden = false;
+    this.$('#remove-human').hidden = true;
+    this.$<HTMLButtonElement>('#confirm-remove').disabled = false;
+  }
+
+  private resetHumanRemoval(): void {
+    this.$('#remove-confirm').hidden = true;
+    this.$('#remove-human').hidden = false;
+    this.$<HTMLButtonElement>('#confirm-remove').disabled = false;
+  }
+
+  private async confirmHumanRemoval(): Promise<void> {
+    if (!this.client || !this.activeHumanId) return;
+    this.$<HTMLButtonElement>('#confirm-remove').disabled = true;
+    try {
+      await this.client.removeHuman(this.activeHumanId);
+      this.$<HTMLDialogElement>('#human-dialog').close();
+    } catch {
+      this.$<HTMLButtonElement>('#confirm-remove').disabled = false;
+      this.showToast({
+        tone: 'error',
+        title: 'The human was not removed.',
+        message: 'Randevouz could not write the change locally.',
+      });
+    }
+  }
+
+  private openPhotoViewer(record: StoredRendezvous): void {
+    if (!record.photo) return;
+    this.releaseViewerUrl();
+    this.viewerRecordId = record.id;
+    this.viewerUrl = URL.createObjectURL(record.photo.blob);
+    this.$<HTMLImageElement>('#photo-viewer-image').src = this.viewerUrl;
+    this.$('#photo-viewer-title').textContent =
+      record.direction === 'incoming' ? `From ${escapePunctuation(record.peerName)}.` : `For ${escapePunctuation(record.peerName)}.`;
+    this.$('#photo-viewer-sub').textContent =
+      `${formatBytes(record.photo.size)} · ${formatMoment(record.deliveredAt ?? record.scheduledFor)} · stays on this browser`;
+    const download = this.$<HTMLAnchorElement>('#photo-download');
+    download.href = this.viewerUrl;
+    download.download = record.photo.name || 'photograph';
+    const del = this.$<HTMLButtonElement>('#photo-delete');
+    del.textContent = 'Delete locally';
+    del.disabled = false;
+    this.deleteArmed = false;
+    const dialog = this.$<HTMLDialogElement>('#photo-dialog');
+    if (!dialog.open) dialog.showModal();
+  }
+
+  private closePhotoViewer(): void {
+    const dialog = this.$<HTMLDialogElement>('#photo-dialog');
+    if (dialog.open) dialog.close();
+    this.releaseViewerUrl();
+  }
+
+  private releaseViewerUrl(): void {
+    if (this.viewerUrl) URL.revokeObjectURL(this.viewerUrl);
+    this.viewerUrl = null;
+    this.viewerRecordId = null;
+    if (this.deleteTimer !== null) window.clearTimeout(this.deleteTimer);
+    this.deleteTimer = null;
+    this.deleteArmed = false;
+  }
+
+  private async deleteViewedPhoto(): Promise<void> {
+    if (!this.client || !this.viewerRecordId) return;
+    const button = this.$<HTMLButtonElement>('#photo-delete');
+    if (!this.deleteArmed) {
+      this.deleteArmed = true;
+      button.textContent = 'Delete? tap again';
+      if (this.deleteTimer !== null) window.clearTimeout(this.deleteTimer);
+      this.deleteTimer = window.setTimeout(() => {
+        this.deleteArmed = false;
+        button.textContent = 'Delete locally';
+      }, 4000);
+      return;
+    }
+    const id = this.viewerRecordId;
+    this.closePhotoViewer();
+    try {
+      await this.client.deleteRendezvous(id);
+    } catch {
+      this.showToast({
+        tone: 'error',
+        title: 'The photograph was not deleted.',
+        message: 'Randevouz could not update local storage.',
+      });
+    }
+  }
+
+  private handleNotice(notice: ClientNotice): void {
+    const titles: Partial<Record<ClientNotice['code'], string>> = {
+      'human-added': 'The link opened.',
+      'human-joined': 'The door opened.',
+      'human-removed': 'Forgotten.',
+      'human-removed-remotely': 'A door closed.',
+      'invalid-invite': 'That link did not verify.',
+      'own-invite': 'That is your own link.',
+      'already-human': 'Already linked.',
+      'key-mismatch': 'That identity did not match.',
+      'invite-revoked': 'That link was revoked.',
+      'transfer-failed': 'The handoff stopped.',
+      'handshake-failed': 'The handshake did not verify.',
+      'transfer-delivered': 'Delivered.',
+      'signal-replaced': 'Another window is here.',
+      'server-error': 'Signal trouble.',
+      'photo-too-large': 'That photo is too large.',
+      'invalid-photo': 'That is not a photo.',
+      'invalid-time': 'That moment does not work.',
+      'no-human': 'Choose a human.',
+      'storage-error': 'Local storage is unavailable.',
+      'invite-queued': 'Invitation queued.',
+      'signal-restored': 'Signal restored.',
+      'signal-lost': 'Signal lost.',
+    };
+    if (
+      notice.code === 'invite-queued' ||
+      notice.code === 'signal-restored' ||
+      notice.code === 'signal-lost' ||
+      notice.code === 'transfer-delivered'
+    ) {
+      return;
+    }
+    const tone = notice.tone === 'warning' ? 'warning' : notice.tone;
+    this.showToast({
+      tone,
+      title: titles[notice.code] ?? 'Randevouz.',
+      message: notice.message,
+      duration: notice.tone === 'error' ? 11_000 : 8_000,
+    });
+  }
+
+  private handleAppointment(event: AppointmentEvent): void {
+    const record = event.rendezvous;
+    const human = this.state?.humans.find((entry) => entry.id === record.peerId);
+    const person = displayName(record.peerName || human?.name || '');
+    if (event.phase === 'announced') {
+      if (record.scheduledFor - Date.now() < 60_000) return;
+      this.showToast({
+        tone: 'info',
+        title: 'A randevouz, set.',
+        message: `${person} chose ${formatMoment(record.scheduledFor)}. The photo stays with them.`,
+      });
+      return;
+    }
+    if (event.phase === 'due') {
+      const directionNote =
+        record.direction === 'incoming'
+          ? human?.online
+            ? `${person} is here. The photograph moves when the direct link is ready.`
+            : `Waiting for ${person} to come online. The photograph is still with them.`
+          : human?.online
+            ? `${person} is here. Connecting directly now.`
+            : `Waiting for ${person} to come online. The photograph is still with you.`;
+      this.showToast({
+        tone: 'warning',
+        title: `It’s time for ${person}.`,
+        message: directionNote,
+        duration: 10_000,
+      });
+      return;
+    }
+    if (event.phase === 'received') {
+      const photoUrl = record.photo ? URL.createObjectURL(record.photo.blob) : undefined;
+      this.showToast({
+        tone: 'success',
+        title: `A photograph from ${person}.`,
+        message: `${record.photo ? formatBytes(record.photo.size) + ' · ' : ''}${formatMoment(record.deliveredAt ?? Date.now())}`,
+        actionLabel: 'Open',
+        action: () => {
+          const current = this.state?.rendezvous.find((entry) => entry.id === record.id) ?? record;
+          this.openPhotoViewer(current);
+        },
+        photoUrl,
+        persistent: false,
+        duration: 12_000,
+        onClose: photoUrl ? () => URL.revokeObjectURL(photoUrl) : undefined,
+      });
+    }
+  }
+
+  private handleTransfer(event: TransferEvent): void {
+    if (event.phase === 'complete') {
+      const toastId = this.transferToastIds.get(event.rendezvousId);
+      if (toastId) {
+        const handle = this.toasts.get(toastId);
+        if (handle) {
+          const title = handle.element.querySelector<HTMLElement>('.toast-title');
+          if (title) title.textContent = 'The photograph crossed.';
+          const message = handle.element.querySelector<HTMLElement>('.toast-message');
+          if (message) message.textContent = 'Stored locally on the receiving browser.';
+          const bar = handle.element.querySelector<HTMLElement>('.toast-progress span');
+          if (bar) bar.style.width = '100%';
+          window.setTimeout(() => handle.close(), 900);
+        }
+        this.transferToastIds.delete(event.rendezvousId);
+      }
+      return;
+    }
+    if (event.phase === 'error') {
+      const toastId = this.transferToastIds.get(event.rendezvousId);
+      if (toastId) {
+        this.toasts.get(toastId)?.close();
+        this.transferToastIds.delete(event.rendezvousId);
+      }
+      return;
+    }
+    const record = this.state?.rendezvous.find((entry) => entry.id === event.rendezvousId);
+    const human = this.state?.humans.find((entry) => entry.id === event.peerId);
+    const person = displayName(record?.peerName || human?.name || '');
+    const percent =
+      event.total > 0 ? Math.min(100, Math.round((event.transferred / event.total) * 100)) : 0;
+    let toastId = this.transferToastIds.get(event.rendezvousId);
+    if (!toastId) {
+      toastId = this.showToast({
+        tone: 'info',
+        title:
+          event.phase === 'connecting'
+            ? `Connecting with ${person}.`
+            : event.direction === 'outgoing'
+              ? `Sending to ${person}.`
+              : `Receiving from ${person}.`,
+        message:
+          event.phase === 'connecting'
+            ? 'Direct and encrypted. Both browsers are here.'
+            : `${formatBytes(event.transferred)} of ${formatBytes(event.total)}`,
+        progress: percent,
+        persistent: true,
+      });
+      this.transferToastIds.set(event.rendezvousId, toastId);
+    } else {
+      const handle = this.toasts.get(toastId);
+      if (handle) {
+        const title = handle.element.querySelector<HTMLElement>('.toast-title');
+        if (title)
+          title.textContent =
+            event.direction === 'outgoing' ? `Sending to ${person}.` : `Receiving from ${person}.`;
+        const message = handle.element.querySelector<HTMLElement>('.toast-message');
+        if (message)
+          message.textContent = `${formatBytes(event.transferred)} of ${formatBytes(event.total)}`;
+        const bar = handle.element.querySelector<HTMLElement>('.toast-progress span');
+        if (bar) bar.style.width = `${percent}%`;
+      }
+    }
+  }
+
+  private showToast(content: ToastContent): string {
+    this.toastSequence += 1;
+    const id = `toast-${this.toastSequence}`;
+    const element = document.createElement('div');
+    element.className = 'toast';
+    element.dataset.tone = content.tone;
+    element.setAttribute('role', content.tone === 'error' ? 'alert' : 'status');
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.textContent = '×';
+
+    const title = document.createElement('p');
+    title.className = 'toast-title';
+    title.textContent = content.title;
+    const message = document.createElement('p');
+    message.className = 'toast-message';
+    message.textContent = content.message;
+
+    if (content.photoUrl) {
+      const image = document.createElement('img');
+      image.className = 'toast-thumb';
+      image.src = content.photoUrl;
+      image.alt = '';
+      element.append(image);
+    }
+
+    element.append(close, title, message);
+
+    if (content.progress !== undefined) {
+      const progress = document.createElement('div');
+      progress.className = 'toast-progress';
+      const bar = document.createElement('span');
+      bar.style.width = `${Math.max(0, Math.min(100, content.progress))}%`;
+      progress.append(bar);
+      element.append(progress);
+    }
+
+    if (content.actionLabel && content.action) {
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'toast-action';
+      action.textContent = content.actionLabel;
+      action.addEventListener('click', () => {
+        content.action?.();
+        this.closeToast(id);
+      });
+      element.append(action);
+    }
+
+    const handle: ToastHandle = {
+      element,
+      timer: null,
+      close: () => this.closeToast(id),
+      cleanup: () => content.onClose?.(),
+      cleaned: false,
+    };
+    if (!content.persistent) {
+      handle.timer = window.setTimeout(
+        () => this.closeToast(id),
+        content.duration ?? 8_000,
+      );
+    }
+    close.addEventListener('click', () => this.closeToast(id));
+
+    this.toasts.set(id, handle);
+    this.$('#toast-region').append(element);
+    while (this.toasts.size > 3) {
+      const oldest = this.toasts.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.toasts.get(oldest)?.close();
+    }
+    return id;
+  }
+
+  private closeToast(id: string): void {
+    const handle = this.toasts.get(id);
+    if (!handle) return;
+    if (handle.timer !== null) window.clearTimeout(handle.timer);
+    handle.element.remove();
+    if (!handle.cleaned) {
+      handle.cleaned = true;
+      handle.cleanup();
+    }
+    this.toasts.delete(id);
+    for (const [rendezvousId, toastId] of this.transferToastIds) {
+      if (toastId === id) this.transferToastIds.delete(rendezvousId);
+    }
+  }
+
+  private revokeObjectUrls(): void {
+    for (const url of this.objectUrls.values()) URL.revokeObjectURL(url);
+    this.objectUrls.clear();
+    if (this.photoUrl) URL.revokeObjectURL(this.photoUrl);
+    this.photoUrl = null;
+  }
+}
+
+export function defineRandevouzApp(tagName = 'randevouz-app'): void {
+  if (typeof customElements === 'undefined') return;
+  if (!customElements.get(tagName)) {
+    customElements.define(tagName, RandevouzApp);
+  }
+}

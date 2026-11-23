@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-lib/
+dist-server/
+data/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+.env
+.rendezvous-test/
