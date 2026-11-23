@@ -7,7 +7,8 @@
   "files": [
     "dist-lib",
     "docs",
-    "README.md"
+    "README.md",
+    "src/circles/README.md"
   ],
   "main": "./dist-lib/randevouz.js",
   "module": "./dist-lib/randevouz.js",
@@ -16,6 +17,14 @@
     ".": {
       "types": "./dist-lib/types/lib/index.d.ts",
       "import": "./dist-lib/randevouz.js"
+    },
+    "./circles": {
+      "types": "./dist-lib/types/circles/index.d.ts",
+      "import": "./dist-lib/circles.js"
+    },
+    "./circles/ui": {
+      "types": "./dist-lib/types/circles/ui/index.d.ts",
+      "import": "./dist-lib/circles-ui.js"
     }
   },
   "scripts": {

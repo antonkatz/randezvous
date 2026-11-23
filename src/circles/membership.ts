@@ -317,6 +317,21 @@ export function isBannedInView(view: MemberView, peerKey: PublicKeyId): boolean 
   return view.banned.includes(peerKey);
 }
 
+/** True when a member was inside a valid chain at a particular instant. */
+export function memberValidAt(
+  records: readonly StoredCircleRecord[],
+  circleId: CircleId,
+  member: PublicKeyId,
+  at: number,
+): boolean {
+  const circle = resolveCircleMetadata(records, circleId);
+  if (!circle) return false;
+  const chain = deriveChain(records, circle);
+  return (chain.intervals.get(member) ?? []).some(
+    (interval) => interval.start <= at && (interval.end === null || interval.end > at),
+  );
+}
+
 /** Standalone form of the connection policy for callers that do not hold the view method. */
 export function shouldAcceptConnection(
   view: MemberView,

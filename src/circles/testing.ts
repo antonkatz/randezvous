@@ -22,6 +22,7 @@ import type {
   InviteRecord,
   JoinRecord,
   LeaveRecord,
+  PeerChannel,
   PlanRecord,
   PublicKeyId,
   StoredCircleRecord,
@@ -218,7 +219,10 @@ export async function makePlan(
 
 export async function makeAttendance(
   attendee: Identity,
-  input: Omit<AttendanceRecord, 'type' | 'attendee' | 'sig' | 'swappedWith'> & {
+  input: Omit<
+    AttendanceRecord,
+    'type' | 'attendee' | 'sig' | 'swappedWith' | 'promptId'
+  > & {
     swappedWith?: PublicKeyId[];
     promptId?: string | null;
   },
@@ -237,4 +241,95 @@ export async function makeAttendance(
 /** Convenience for tests that only need the signed record bodies. */
 export function recordsOf(entries: readonly StoredCircleRecord[]): CircleRecord[] {
   return entries.map((entry) => entry.record);
+}
+
+type MessageHandler = (message: unknown) => void | Promise<void>;
+
+export interface SentMessage {
+  from: PublicKeyId;
+  to: PublicKeyId;
+  message: unknown;
+}
+
+/**
+ * A manually flushed peer network. Messages stay queued until flush() so a
+ * test can deliver them in any order and duplicate them deliberately.
+ */
+export class MemoryPeerHub {
+  private readonly handlers = new Map<PublicKeyId, Set<MessageHandler>>();
+  private readonly queue: SentMessage[] = [];
+  readonly sent: SentMessage[] = [];
+
+  pair(aKey: PublicKeyId, bKey: PublicKeyId): {
+    a: MemoryPeerChannel;
+    b: MemoryPeerChannel;
+  } {
+    return {
+      a: new MemoryPeerChannel(this, aKey, bKey),
+      b: new MemoryPeerChannel(this, bKey, aKey),
+    };
+  }
+
+  subscribe(localKey: PublicKeyId, handler: MessageHandler): () => void {
+    const set = this.handlers.get(localKey) ?? new Set<MessageHandler>();
+    set.add(handler);
+    this.handlers.set(localKey, set);
+    return () => {
+      set.delete(handler);
+    };
+  }
+
+  enqueue(from: PublicKeyId, to: PublicKeyId, message: unknown): void {
+    const item = { from, to, message };
+    this.queue.push(item);
+    this.sent.push(item);
+  }
+
+  pending(): number {
+    return this.queue.length;
+  }
+
+  async flush(order: 'fifo' | 'lifo' = 'fifo'): Promise<void> {
+    while (this.queue.length > 0) {
+      const item = order === 'lifo' ? this.queue.pop() : this.queue.shift();
+      if (!item) break;
+      const handlers = this.handlers.get(item.to);
+      if (!handlers) continue;
+      for (const handler of [...handlers]) {
+        await handler(item.message);
+      }
+    }
+  }
+
+  async replay(order: 'fifo' | 'lifo' = 'fifo'): Promise<void> {
+    const history = [...this.sent];
+    this.sent.length = 0;
+    for (const item of history) this.queue.push(item);
+    await this.flush(order);
+  }
+
+  clear(): void {
+    this.queue.length = 0;
+    this.sent.length = 0;
+  }
+}
+
+export class MemoryPeerChannel implements PeerChannel {
+  private readonly hub: MemoryPeerHub;
+  private readonly localKey: PublicKeyId;
+  readonly peerKey: PublicKeyId;
+
+  constructor(hub: MemoryPeerHub, localKey: PublicKeyId, peerKey: PublicKeyId) {
+    this.hub = hub;
+    this.localKey = localKey;
+    this.peerKey = peerKey;
+  }
+
+  send(message: unknown): void {
+    this.hub.enqueue(this.localKey, this.peerKey, message);
+  }
+
+  onMessage(handler: MessageHandler): () => void {
+    return this.hub.subscribe(this.localKey, handler);
+  }
 }

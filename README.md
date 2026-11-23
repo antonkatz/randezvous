@@ -8,6 +8,7 @@ A private photo handoff between two browsers. Pick a photograph, pick a human, p
 This repository contains the reference app, the reusable package, and a small store-and-forward signalling server.
 
 - **Spec:** [`docs/SPEC.md`](docs/SPEC.md) — user stories, visual design stories, architecture, protocol, threat model, IPv6/TURN assumptions, and the future peer-as-signaller path.
+- **Circles:** [`src/circles/README.md`](src/circles/README.md) — client-side group membership, signed invitations, sync, and the six circle-stats ratios.
 - **UI:** encapsulated `<randevouz-app>` custom element with a cumulative, ranked photo wall.
 - **Client:** headless `RandevouzClient` with snapshots and typed events.
 - **Server:** WebSocket bootstrap for authenticated presence, appointment notices, invite relay, revocation, and WebRTC signalling. It never stores photo bytes.
@@ -108,7 +109,7 @@ Environment variables are read from `.env` (see `.env.example`) and from the pro
 
 The reference server defaults to a **dual-stack** listener and prints a prominent warning at startup if it is configured single-stack. It also advertises its listener host and dual-stack capability in `hello:ok` and `/health`, which the UI's diagnostics panel surfaces.
 
-For IPv6-only peers, the reverse proxy/load balancer and any STUN/TURN endpoints need to be dual-stack too. See §18 of the spec.
+For IPv6-only peers, the reverse proxy/load balancer and any STUN/TURN endpoints need to be dual-stack too. See §19 of the spec.
 
 ### Deploy on Railway
 
@@ -247,6 +248,7 @@ Verification does not depend on DTLS certificates, so the code is stable across 
 - Photos: sender's IndexedDB until successful ACK; recipient's IndexedDB after receipt; all delivered prints appear on the wall.
 - Identity keypair: IndexedDB (`CryptoKey` for the private key, public raw key).
 - Humans, verification state, pending joins/removals, revoked invites: IndexedDB.
+- The app asks the browser for persistent storage (`navigator.storage.persist()`) when it opens IndexedDB. Browsers may still deny the request or evict data in private browsing, so export or back up anything you cannot lose.
 - Server: join/removal/rendezvous metadata, invite-token hashes, presence. No photos, no thumbnails, no photo file names.
 - Live WebRTC connections are disposable. A page close ends them. The relationship and pinned keys persist and re-handshake on the next visit.
 - “Connected forever” means the relationship, not a socket.

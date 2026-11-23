@@ -8,9 +8,13 @@ export default defineConfig({
     emptyOutDir: true,
     cssCodeSplit: false,
     lib: {
-      entry: 'src/lib/index.ts',
+      entry: {
+        randevouz: 'src/lib/index.ts',
+        circles: 'src/circles/index.ts',
+        'circles-ui': 'src/circles/ui/index.ts',
+      },
       formats: ['es'],
-      fileName: () => 'randevouz.js',
+      fileName: (_format, entryName) => `${entryName}.js`,
     },
     rollupOptions: {
       output: {

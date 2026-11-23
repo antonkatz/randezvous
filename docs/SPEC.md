@@ -12,13 +12,13 @@
 - **TURN is optional and untrusted.** The deployment may provide a self-hosted TURN server as a fallback for difficult NATs, but the service must not trust it. WebRTC DTLS encrypts private photos/voice notes end to end; signed identity handshakes authenticate the peers.
 - **The signalling path is untrusted for authenticity.** It can see appointment metadata and route SDP/ICE, but it must not be able to impersonate a human or sit in the middle of a photo transfer unnoticed.
 - **Verification uses a stable, independently derived code.** Both tabs derive an 8-word code from the two sorted raw identity public keys. No code is sent over the wire. The live session is bound to the pinned identity with a signature over the DTLS fingerprints.
-- **A live RTC connection is disposable.** Only identity keys, pinned peer keys, relationships, verification state, appointments, and photos persist.
+- **A live RTC connection is disposable.** Only identity keys, pinned peer keys, relationships, verification state, circle records, appointments, and photos persist.
 
 ---
 
 ## 1. What this is
 
-> **Implementation note:** v0.1 implements the private browser-to-browser photo handoff, invites, verification, revocation, ranked wall, and diagnostics. The following are **specified future additions and are not in the v0.1 build**: starting a handoff up to five minutes early (v0.1 currently starts at the scheduled time and waits indefinitely after it), per-photo voice notes, re-sharing a locally held photo, the one-minute live voice window, and the future public-photo re-share layer. They are written here to lock the product behaviour before implementation.
+> **Implementation note:** v0.1 implements the private browser-to-browser photo handoff, invites, verification, revocation, ranked wall, and diagnostics. The following are **specified future additions and are not in the v0.1 build**: starting a handoff up to five minutes early (v0.1 currently starts at the scheduled time and waits indefinitely after it), per-photo voice notes, re-sharing a locally held photo, the one-minute live voice window, and the future public-photo re-share layer. They are written here to lock the product behaviour before implementation. Circle records, membership, and stats also exist as a separate local module (`src/circles`); their daily canonical rule, auto-accept policy, expiring server-side randevouz invite, and two-member auto-sync are specified in §3 but are not yet wired into the app.
 
 Randevouz is a tiny, private photo-sharing service that runs entirely in the browser. Two people link their browsers once, then leave photographs for each other at chosen times. Photos travel directly from browser to browser over WebRTC. There is no photo upload, no media server, and no account in the private path. (A future, separate opt-in public-photo layer is sketched in US-20 and explicitly deferred.)
 
@@ -49,7 +49,12 @@ This distinction drives every flow in this document:
 | **Human** | A peer whose browser has been permanently linked to yours through an invitation. |
 | **Code name** | The non-unique display name shown to your humans. You can change it at any time. |
 | **Invitation** | A signed, shareable link that grants the bearer a permanent link to your browser identity. |
+| **Circle** | A named, private group of linked humans that shares at most one canonical randevouz per local day. |
+| **Circle invitation** | A signed offer addressed to one public-key identity to join a circle. It is not a bearer link. |
 | **Randevouz** | A scheduled photo handoff between two humans: one photo, one recipient, one moment. |
+| **Circle randevouz** | The one shared appointment for a circle on a local calendar day; metadata only. |
+| **Canonical circle randevouz** | The first valid signed circle randevouz for that circle and day, by signed creation time and then record ID. |
+| **Circle randevouz invite** | A circle randevouz notice delivered to members. The server stores only this circle invite, and only until the scheduled randevouz time has passed. |
 | **Rendezvous time** | The local date and time chosen by the sender. Stored as an absolute Unix timestamp. |
 | **Online** | The browser app is open and connected to the signalling server. This is only a presence signal; the direct RTC link is established when the handoff begins. |
 | **Waiting** | The handoff window is open but the handoff cannot happen because one or both browsers are not present. |
@@ -167,7 +172,7 @@ As a sender, I want to choose one photo, one human, and a time, so that we can m
 - The appointment metadata is sent to the signalling server for store-and-forward delivery to the recipient.
 - The sender may schedule while the signalling server is offline; delivery is retried while the app remains open and on subsequent launches.
 - The completed flow makes the meeting requirement explicit: both browsers must be present.
-- Only one human is selected per randevouz; group randevouz is out of scope.
+- Only one human is selected per direct randevouz. A circle randevouz is the group exception: it selects a circle and a shared moment, while each photo transfer remains a direct pairwise handoff.
 
 #### US-7 — The recipient is notified when they return
 As a recipient, I want the appointment to be waiting for me even if I was offline when it was created, so that I know to meet my human.
@@ -289,6 +294,81 @@ As a user, I want to see my upcoming and waiting randevouz without opening a sep
 - Pending and waiting randevouz are kept in a quiet strip above the wall, separate from the photo sequence.
 - A user can delete a photo or pending appointment locally. Deleting a photo removes it from IndexedDB and re-ranks the remaining wall items.
 
+### Circles
+
+A circle is a named, private group of linked humans. Membership and each day's shared randevouz are represented as signed records that every member can verify and merge. A circle has at most one canonical randevouz per local day. A circle randevouz is a shared appointment; photographs themselves still travel only in direct pairwise WebRTC handoffs, never through the server.
+
+**Implementation status:** `src/circles` implements the signed record set, membership chain, addressed invitations, local peer sync, and stats. The daily canonical rule, auto-accept policy, expiring server-side randevouz invite, and automatic two-member sync are specified here and are not yet wired into the app.
+
+#### CIR-1 — A circle has one randevouz per local day
+
+As a circle member, I want the circle to have one shared randevouz each day, so that the group converges on a single moment instead of competing plans.
+
+**Acceptance criteria**
+- The day is the calendar day of the scheduled timestamp in the circle's configured IANA timezone. A randevouz scheduled at 23:58 belongs to that day.
+- Any current member may set the circle randevouz; there is no owner or admin privilege.
+- At most one circle randevouz is canonical for a circle and local day.
+- Additional valid signed plans for the same day are retained as history but do not become canonical unless the rule in CIR-2 selects them.
+- The limit applies to the circle's shared randevouz. Ordinary one-to-one randevouzes between members are unaffected.
+- The record carries only circle ID, randevouz ID, organizer, invitees, scheduled timestamp, signed creation timestamp, and signature. It never carries photo or voice bytes.
+- A canonical circle randevouz counts once in circle stats, however many members attend and however many plans were proposed. Non-canonical plans for the same day never count.
+
+#### CIR-2 — The first randevouz set becomes canonical
+
+As a circle member, I want the first randevouz set for a day to win, so that the group converges without voting, an owner, or a server decision.
+
+**Acceptance criteria**
+- Among valid signed circle randevouz records for the same circle and local day, the record with the earliest signed creation timestamp is canonical. Ties are broken by the content-derived record ID, ascending.
+- Canonicality is independent of local arrival order, peer sync order, and server receipt order; every member computes the same winner from the same signed records.
+- A plan with a later signed creation timestamp cannot replace the canonical choice. If a valid record with an earlier signed creation timestamp arrives late, it replaces the previous choice and all synced members converge on it.
+- Invalid, unsigned, wrong-circle, wrong-day, or non-member records never become canonical.
+- The signalling server may relay the invite, but it must not store the circle record set, and it cannot create, alter, re-sign, choose, or promote a canonical record.
+- Clients recompute canonicality locally; the server never stores a mutable “canonical” flag as authority.
+
+#### CIR-3 — Circle membership is voluntary, auto-accepted for now
+
+As a person invited to a circle, I want membership to be explicit and auditable, so that joining is recorded and I can leave.
+
+**Acceptance criteria**
+- A circle invitation is signed by a current member and addressed to one public-key identity. Unlike a human invitation link, it cannot be redeemed by whoever holds it.
+- Accepting the invitation creates a signed Join record; declining creates no membership record.
+- For the current build, the client auto-accepts a valid incoming circle invitation. This is a temporary client policy, not a weakening of the signed membership chain; an explicit accept/decline surface remains the later intent.
+- Auto-accept verifies the invitation signature, circle ID, the inviter's current membership, and that the invitation is addressed to this browser's key. Invalid, mismatched, or forwarded invitations are ignored.
+- The inviter still merges the signed Join. The server never adds a member on its own.
+- Membership invitations and the resulting Join/Leave records never go to the signalling server; they travel only over authenticated RTC.
+- A member can leave a circle at any time, including one joined by auto-accept.
+
+#### CIR-4 — The server stores only the circle randevouz invite
+
+As a circle member, I want the day's invite delivered even when I was offline, without turning the signalling server into a store of circle history.
+
+**Acceptance criteria**
+- The member who sets a circle randevouz submits a signed invite to the signalling server.
+- The invite names its recipients, so the server can deliver it without storing or deriving the circle's membership. The recipient list is signed by the organizer and verified by recipients.
+- The server stores only invites, and only until the scheduled randevouz time has passed. It must not store the circle record log, membership history, Join/Leave records, attendance, stats, or any other signed circle record.
+- An invite expires once the scheduled randevouz time has passed, not at the end of the local day. Expired invites are deleted from the server; members keep their local copy.
+- The server delivers each stored invite immediately to online members and on next connection to offline members. It may hold more than one invite for a circle and day, but it never decides which invite is canonical.
+- Circle membership records, Join/Leave records, attendance, stats, and canonical history move only over authenticated RTC between members.
+- The server relays the invite verbatim. It cannot create, alter, re-sign, choose, promote, or add members.
+- Duplicate deliveries, reordered delivery, and reconnects are idempotent by invite ID.
+- Clients verify every signature and recompute canonicality; a server-delivered invite has no extra authority over an RTC-delivered one.
+- A randevouz invite is not a membership invitation; receiving it never changes circle membership.
+- Photos, voice notes, thumbnails, and media references are never part of an invite.
+- For clarity: an invite may carry a signature, but storing the invite is not permission to store the circle's record set.
+
+#### CIR-5 — Two online members sync automatically
+
+As circle members, we want our browsers to exchange circle records whenever at least two of us are online, so that the circle stays current without a manual action.
+
+**Acceptance criteria**
+- When at least two members of a circle are online, their clients automatically exchange membership and randevouz records over authenticated direct peer channels.
+- The server is not part of this record sync.
+- No manual sync, accept, or refresh action is required.
+- Sync is idempotent and order-independent; duplicate, out-of-order, or replayed records converge on the same canonical randevouz.
+- A member coming online, reconnecting, or returning to the tab triggers sync.
+- The server's invite delivery and RTC peer sync are complementary. Losing either one does not permanently fork the canonical choice.
+- Only signed circle metadata moves over RTC. Photographs and voice notes remain in direct pairwise handoffs.
+
 ### Privacy, reliability, and errors
 
 #### US-11 — Private photos never pass through the server
@@ -298,7 +378,7 @@ As a privacy-conscious person, I want confidence that only a direct transfer mov
 - The private signalling protocol has no photo bytes, voice-note bytes, thumbnails, or photo-derived metadata field. The future public layer (US-20) is a separate, explicit surface with its own storage, consent, and moderation rules.
 - Photos are sent only through an ordered WebRTC data channel after both browsers are present.
 - WebRTC media/data is encrypted in transit by DTLS-SRTP / SCTP over DTLS.
-- The server stores appointment metadata and relationship handshakes, but not image content.
+- The server stores appointment metadata, expiring circle randevouz invites, and relationship handshakes, but not image content or circle record history.
 - If a peer is unreachable (for example, symmetric NAT without TURN), the UI reports that the direct connection could not be made and keeps the photo on the sender.
 - The default ICE configuration uses a public STUN server; deployments can supply TURN for hard networks.
 
@@ -346,7 +426,7 @@ As the network matures, we want connected peers to help relay signalling traffic
 **Acceptance criteria (future, not v1)**
 - The client’s signalling transport is an interface, so a WebSocket server can be replaced or supplemented by a peer relay.
 - No v1 feature is blocked by designing for this later.
-- The limitations in §13 are documented before implementation.
+- The limitations in §14 are documented before implementation.
 
 #### US-20 — I can re-share a photo another user made public (later)
 
@@ -367,7 +447,27 @@ As a viewer, I want to re-share a photograph that its owner has explicitly made 
 
 ---
 
-## 4. Visual design user stories
+## 4. Marketing user stories
+
+These stories govern the public promise of the product. They do not add features; they constrain the claims made on landing pages, share cards, and empty states so marketing never contradicts the private, peer-to-peer invariants.
+
+#### MKT-1 — I understand the promise in one line
+
+As someone deciding whether to trust Randevouz with a photograph, I want the product’s promise stated plainly, so that I understand what it offers and what it does not.
+
+**Acceptance criteria**
+- The headline promise is exactly: **“Your photos, kept alive by the people who love you, for free.”**
+- It describes the relationship, not server storage: photographs persist because the people who care keep them, not because a cloud account does.
+- It appears on the public landing/about surface and in single-tagline share cards; inside the app it must never displace **add human**, **Code Name**, or **Set a randevouz**.
+- Supporting copy may explain the meeting rule: photos move only while both people have the app open, and there is no upload or media server in the private path.
+- It must not imply guaranteed delivery, background sync, permanent server storage, or availability after the tab is closed.
+- “For free” applies to the private v1 service; a future public or paid layer must not retroactively change the claim.
+- Tone is intimate and plain, with no exclamation marks, urgency, or growth-hack language.
+- The line wraps without truncation on mobile and does not push the primary in-app actions below the fold.
+
+---
+
+## 5. Visual design user stories
 
 
 The visual direction is an editorial, quiet private club: warm paper, black ink, one vermilion accent, and a single loud black invitation control. It should feel more like a printed appointment card than a social app.
@@ -605,9 +705,9 @@ Acceptance:
 
 ---
 
-## 5. End-to-end flows
+## 6. End-to-end flows
 
-### 5.1 Invite and link
+### 6.1 Invite and link
 
 ```text
 A: click add human
@@ -629,7 +729,7 @@ A future visit re-authenticates the same keypair and re-establishes presence; a 
 
 The relationship is now two-sided and persists in both browsers. No server-side contact graph is required for future operation; the server only relays presence and queues pending appointment notices.
 
-### 5.2 Setting a randevouz
+### 6.2 Setting a randevouz
 
 ```text
 1. Sender taps "Set a randevouz".
@@ -641,7 +741,7 @@ The relationship is now two-sided and persists in both browsers. No server-side 
 7. Confirmation: DONE. "Both browsers need to be open at the same time. The handoff opens five minutes early, and lateness does not cancel it."
 ```
 
-### 5.3 The meeting
+### 6.3 The meeting
 
 ```text
 Before the opening (T−5 min): both may see the upcoming appointment. No bytes move.
@@ -668,7 +768,7 @@ From T−5 onward, on every presence/timer update:
               both show DELIVERED
 ```
 
-### 5.3b One-minute voice during a rendezvous (planned)
+### 6.3b One-minute voice during a rendezvous (planned)
 
 ```text
 Both online, handoff window open, appointment still active
@@ -689,7 +789,7 @@ Both online, handoff window open, appointment still active
 
 The audio offer exists only while both humans are present for the due appointment. It is not a mailbox, a wake-up call, a recording, or a general voice service. A missed call cannot be replayed.
 
-### 5.3c Photo voice notes (planned)
+### 6.3c Photo voice notes (planned)
 
 ```text
 Sender selects a photo
@@ -707,7 +807,7 @@ At handoff:
   wall print + viewer expose a small audio badge/player (no autoplay)
 ```
 
-### 5.3d Re-sharing a locally held photo (planned)
+### 6.3d Re-sharing a locally held photo (planned)
 
 ```text
 Sender opens an outgoing delivered photo
@@ -726,7 +826,7 @@ Sender opens an outgoing delivered photo
 
 Re-sharing a private incoming photo is deliberately unavailable. The future public layer (US-20) is a separate opt-in path with storage, attribution, moderation, and revocation rules.
 
-### 5.4 Appointment states
+### 6.4 Appointment states
 
 
 | State | Sender sees | Recipient sees |
@@ -740,16 +840,43 @@ Re-sharing a private incoming photo is deliberately unavailable. The future publ
 | `delivered` | “Delivered · 09:31” | photo on the wall + notification |
 | `failed` | “Couldn’t connect. Retrying while you’re both here.” | similar |
 
+### 6.5 Circle randevouz
+
+```text
+Any current member sets a circle randevouz for local day D
+        │
+        ├─ sign the circle record locally (circle, plan, creation time)
+        ├─ submit only the signed randevouz invite (with recipients) to the server
+        │     └─ server stores it until the scheduled time passes, then deletes it
+        │        and delivers it to members online or on next connection
+        └─ all other circle records stay local
+                │
+        when ≥2 members are online:
+          automatic RTC peer sync of membership, attendance, stats,
+          and full circle records (idempotent; no manual refresh)
+                │
+        each member verifies signatures and merges:
+          canonical = earliest signed creation time for (circle, D)
+          ties by content-derived record ID
+                │
+        if a valid earlier record arrives late over RTC:
+          it replaces the previous canonical choice
+                │
+        all synced members converge on the same canonical randevouz
+```
+
+The server holds only the expiring invite. Membership, Join/Leave, attendance, stats, and the record log never leave the browsers except over authenticated RTC. The canonical record is metadata only. A member still meets each other member in a direct pairwise handoff under the normal online and five-minute-window rules; the circle record only fixes the shared day and moment.
+
 ---
 
-## 6. Functional requirements summary
+## 7. Functional requirements summary
 
 - **FR-1** One persistent, IndexedDB-backed keypair identity per browser profile + origin.
 - **FR-2** Signed invitation links, two-sided linking, store-and-forward link requests.
 - **FR-3** Live presence only for linked humans.
 - **FR-4** Three-stage rendezvous creation: photo + human → time (+ optional date) → DONE.
 - **FR-5** Photos stored only in IndexedDB on the sender until handed off.
-- **FR-6** Server stores only appointment metadata and short-lived delivery queues.
+- **FR-6** Server stores only appointment metadata, expiring circle randevouz invites, and short-lived delivery queues; circle records and history are never server-stored.
 - **FR-7** Automatic direct transfer from five minutes before the scheduled moment onward once both peers are online; ±5-minute arrival is normal and lateness never discards the saved photograph. *(Early opening is planned; v0.1 opens at the scheduled time.)*
 - **FR-8** Reliable chunked file transfer with CRC-free size check, ACK, retry, and idempotency by appointment ID.
 - **FR-9** Recipient notification on next connection after server notice, plus local handoff-window/due notification.
@@ -765,16 +892,22 @@ Re-sharing a private incoming photo is deliberately unavailable. The future publ
 - **FR-18 (planned)** One authenticated, one-to-one, camera-off live voice window of at most 60 seconds while a randevouz's handoff window is open; explicit mutual consent; no recording; no server media.
 - **FR-19 (planned)** Re-share an outgoing delivered photograph (and its note) from local storage to a new randevouz without re-upload or file picker; all shares independent.
 - **FR-20 (later)** Opt-in public-photo layer with re-sharing, attribution, revocation, moderation, and separate storage — not part of the private photo path.
-- **FR-21** Responsive, keyboard-accessible interface matching §4.
+- **FR-21** Responsive, keyboard-accessible interface matching §5.
+- **FR-22** Circles are signed, content-addressed record sets with at most one canonical circle randevouz per local calendar day.
+- **FR-23** The first valid signed circle randevouz for a circle and day is canonical, ordered by signed creation timestamp and then record ID; later plans cannot replace it, and members recompute the winner locally.
+- **FR-24** Circle invitations are signed and addressed to one public-key identity; the current build auto-accepts valid invitations and still records a signed Join.
+- **FR-25** The signalling server stores only the circle randevouz invite, until the scheduled randevouz time has passed, and delivers it to current members; all other circle records move over authenticated RTC, and the server cannot create, alter, re-sign, choose, or promote them.
+- **FR-26** When at least two circle members are online, their clients automatically sync signed circle records over authenticated peer channels.
 
-## 7. Non-functional requirements
+## 8. Non-functional requirements
 
 ### Privacy
 - Photo and voice-note bytes never enter server memory in the private protocol.
 - Appointment metadata is not end-to-end encrypted from the signalling operator in v1; the operator can see who scheduled with whom and when. The photo remains opaque.
+- Circle randevouz invites are visible to the signalling operator until they expire. Circle membership, attendance, stats, and record history are never sent to the server. Invites contain no photo or voice bytes, and clients never accept server-selected canonicality in place of signed records.
 - The app should not log photo bytes, voice-note bytes, audio content, SDP bodies, or private keys.
 - Identity private keys are held in IndexedDB as Web Crypto `CryptoKey` objects (non-extractable where possible), not as plaintext elsewhere. Any XSS on the origin can still ask the browser to use the key; isolation and CSP remain necessary.
-- Invitations are bearer capabilities. Sharing a link shares access.
+- Human invitation links are bearer capabilities. Sharing a link shares access. Circle invitations are addressed to one identity and are not bearer links.
 - Voice notes are private media with the same no-server guarantee as photos; microphone access is explicit and never backgrounded.
 - Re-sharing a private photo stays local and peer-to-peer. Public publication, when introduced later, is a separate opt-in surface with its own storage and moderation policies.
 - Presence connections are authenticated with a signed server challenge, and linked peers pin each other's public keys.
@@ -815,7 +948,7 @@ Re-sharing a private incoming photo is deliberately unavailable. The future publ
 
 ---
 
-## 8. Architecture
+## 9. Architecture
 
 ```text
 ┌──────────────────────────┐          ┌──────────────────────────┐
@@ -836,9 +969,10 @@ Re-sharing a private incoming photo is deliberately unavailable. The future publ
         │  · presence                                 │
         │  · signed-invite delivery + queue           │
         │  · appointment notices + queue              │
+        │  · randevouz invite queue (expires)         │
         │  · removal propagation                      │
         │  · WebRTC offer/answer/ICE relay            │
-        │  · NO private media storage                 │
+        │  · NO private media or circle records       │
         └─────────────────────────────────────────────┘
 
              Browser A ◄════ WebRTC data channel ════► Browser B
@@ -856,11 +990,12 @@ The signalling server is dual-stack by default. The browser gathers whatever ICE
 3. **RTC (`src/lib/rtc.ts`)** — direct offer/answer/ICE, chunking, backpressure, integrity via size/completion, ACK.
 4. **Storage (`src/lib/store.ts`)** — IndexedDB identity keypair, pinned humans/queues, and rendezvous + private photo/voice-note blobs (planned media additions).
 5. **UI (`src/lib/ui/`)** — encapsulated custom element built only on the public client API.
-6. **Reference server (`server/`)** — replaceable signalling + metadata store.
+6. **Circles (`src/circles/`)** — signed membership, addressed invitations, canonical daily randevouz, local stats, and authenticated peer sync.
+7. **Reference server (`server/`)** — replaceable signalling + metadata store, including expiring circle randevouz invites but no circle record history.
 
 ---
 
-## 9. Signalling protocol (v1)
+## 10. Signalling protocol (v1)
 
 JSON over WebSocket at `/signal`. All messages are server-agnostic; no photo data. On socket open the server issues a one-time nonce. The client's `hello` must include its public key and a signature over the nonce; the server derives the peer ID from the canonical public key and rejects mismatches or invalid signatures. Presence therefore cannot be claimed without the private key.
 
@@ -878,6 +1013,7 @@ JSON over WebSocket at `/signal`. All messages are server-agnostic; no photo dat
 | `invite:reject` | Refuse a join whose invitation token was revoked; also records the revocation server-side. |
 | `rendezvous:create` | Store and deliver an appointment notice (metadata only). |
 | `rendezvous:ack` | Confirm the recipient persisted the notice. |
+| `circle:randevouz:invite` | Store and deliver the signed circle randevouz invite to members until the scheduled randevouz time has passed. Circle records are never uploaded. |
 | `rtc` | Relay offer/answer/ICE for a named transfer. Ephemeral; not queued. |
 
 ### Server → client
@@ -891,6 +1027,7 @@ JSON over WebSocket at `/signal`. All messages are server-agnostic; no photo dat
 | `invite:request` | An invitation request for this peer to add a new human. |
 | `rendezvous:created` | Sender’s appointment metadata is durable. |
 | `rendezvous:notice` | Appointment notice for the recipient. |
+| `circle:randevouz:invite` | The stored circle randevouz invite for a circle this client belongs to; idempotent until the scheduled randevouz time has passed. |
 | `contact:removed` | A human ended the relationship. |
 | `invite:rejected` | A join using a revoked invitation token was refused. |
 | `rtc` | Relay from the other peer. |
@@ -913,16 +1050,17 @@ No audio byte, recording, transcript, or audio-derived feature is ever stored by
 - `rendezvous`: delivered until recipient acknowledges local persistence.
 - `removals`: delivered until target acknowledges; each carries revoked invitation-token hashes.
 - `revokedInvites`: durable hashes used to refuse old invitation links.
+- `circleInvites`: only circle randevouz invites, including their signed recipient routing list, delivered until the scheduled randevouz time has passed. No membership, Join/Leave, attendance, stats, or circle record log is stored.
 - Presence and RTC signals are ephemeral.
 - Records involving a removed relationship are purged.
-- Retention: 30 days for joins, removals, and appointment notices. Revoked invitation-token hashes are retained until the store is intentionally reset, so removed links stay revoked.
+- Retention: 30 days for joins, removals, and appointment notices. Circle randevouz invites expire once their scheduled randevouz time has passed. Revoked invitation-token hashes are retained until the store is intentionally reset, so removed links stay revoked.
 - v1 reference uses `data/signal-store.json`; do not treat this as production infrastructure.
 
 ---
 
-## 10. Verification and connection authentication
+## 11. Verification and connection authentication
 
-### 10.1 Stable comparison code
+### 11.1 Stable comparison code
 
 The code is a relationship fingerprint, not a session fingerprint. It is derived independently in both browsers with no network exchange:
 
@@ -945,7 +1083,7 @@ A short numeric code without a commitment round would be forgeable by grinding k
 
 **Rejected pattern:** “each side invents a word, encrypts it with keys from the signalling exchange, sends it, and displays the word it receives.” A malicious signalling path can terminate both sides, read both words, substitute two chosen words, and users comparing them out of band will see a match. The code must be a locally computed function of the actual keys and/or handshake transcript each side sees, checked against pinned identities. Out-of-band comparison is the check; the code itself must not be transmitted.
 
-### 10.2 Signed live-session handshake
+### 11.2 Signed live-session handshake
 
 Once the RTC data channel opens, before a single photo byte is sent:
 
@@ -970,9 +1108,9 @@ Because the DTLS fingerprints are bound into signatures made with the pinned ide
 
 ---
 
-## 11. Photo & RTC details
+## 12. Photo & RTC details
 
-- Only appointment IDs and RTC signalling cross the server. The selected image — and any attached voice note — never becomes a URL hosted by the server.
+- Only appointment IDs, circle randevouz invites, and RTC signalling cross the server. The selected image — and any attached voice note — never becomes a URL hosted by the server.
 - A sender initiates a fresh `RTCPeerConnection` for each appointment once the handoff window is open (currently at the scheduled time; five-minute early opening is planned) and both peers are present. One ordered `RTCDataChannel` carries the photo and optional voice note.
 - Chunk size 64 KiB. Sender waits when `bufferedAmount` exceeds a high-water mark (4 MiB) before queuing more.
 - Recipient assembles chunks into a typed Blob, verifies total size, stores it in IndexedDB, then ACKs. The sender marks delivered only after the ACK.
@@ -1073,7 +1211,7 @@ This is a separate product surface, not an extension of the private no-media-ser
 
 Until those are designed, all photos are private and re-sharing is limited to local outgoing photos owned by the user.
 
-## 12. Package surface
+## 13. Package surface
 
 ```ts
 import {
@@ -1105,7 +1243,7 @@ await client.scheduleRendezvous({
 
 ---
 
-## 13. Can RTC peers act as signalling servers in the future?
+## 14. Can RTC peers act as signalling servers in the future?
 
 **Yes, partially — and it is worth designing for, but it does not remove the need for a bootstrap and a rendezvous point.**
 
@@ -1132,7 +1270,7 @@ The v1 code isolates the signalling channel behind a transport seam so this can 
 
 ---
 
-## 14. Security & threat model
+## 15. Security & threat model
 
 ### Included
 - Self-certifying peer identities derived from P-256 public keys.
@@ -1166,10 +1304,10 @@ These are explicit follow-ups, not accidental omissions.
 
 ---
 
-## 15. Non-goals for v0.1
+## 16. Non-goals for v0.1
 
 - Albums, captions, reactions, comments, or video.
-- Group rendezvous or multi-recipient broadcast.
+- Group photo broadcast. A circle randevouz coordinates a shared daily moment, but every photograph still moves in a direct pairwise handoff.
 - Server-side thumbnails, cloud storage, or media URLs.
 - Offline background transfer.
 - Automatic photo compression/transcoding.
@@ -1183,7 +1321,7 @@ These are explicit follow-ups, not accidental omissions.
 
 ---
 
-## 16. Acceptance test scenarios
+## 17. Acceptance test scenarios
 
 1. **Invite while both online:** A opens add human; B opens link; both see each other and live presence; reloads preserve the relationship.
 2. **Invite while A offline:** B opens link; linked locally; server queues; A connects later; A gains B and sees presence.
@@ -1207,10 +1345,14 @@ These are explicit follow-ups, not accidental omissions.
 20. **Photo voice note (planned):** record ≤60 seconds, stop at the cap, verify it is stored/transferred with the photo and plays only on user action; failure of the audio attachment keeps the complete handoff pending.
 21. **Local re-share (planned):** re-share an outgoing delivered photo without a file chooser or media upload; new share has independent timing and wall rank; deleting one share leaves the source and other share intact.
 22. **Public re-share (later):** verify photos default private, publication is explicit and revocable, attribution survives, and a public asset cannot expose private photos, voice notes, relationships, or locations.
+23. **Circle daily canonical:** two members set circle randevouzes for the same circle and local day; the earlier signed creation wins in both views; a later plan cannot replace it; a late-arriving earlier plan does replace it and all synced members converge.
+24. **Circle invite auto-accept:** a valid addressed invitation is auto-accepted and produces a signed Join; a bundle forwarded to another key is rejected; leaving still works.
+25. **Circle invite, not circle storage:** an offline member receives the expiring invite on next connection; the server contains no circle membership, attendance, stats, or record log and no photo bytes; the invite is deleted once its scheduled randevouz time has passed; duplicate delivery is idempotent. All other circle records sync only over authenticated RTC.
+26. **Circle auto-sync:** two online members with different arrival orders converge without manual action; when one reconnects, sync resumes.
 
 ---
 
-## 17. Open questions / future work
+## 18. Open questions / future work
 
 - Should appointments support cancellation and rescheduling with a peer notification? (v1: delete locally; scheduled entries can be removed by deleting the human or item.)
 - Should the recipient get an explicit “I’m here” RSVP, or is presence alone enough? v1 uses presence to honour the three-step flow.
@@ -1218,18 +1360,21 @@ These are explicit follow-ups, not accidental omissions.
 - Native/push notifications for closed browsers.
 - Multi-device identity.
 - Authenticated presence and end-to-end encrypted appointment metadata.
-- Peer-assisted signalling per §13.
+- Peer-assisted signalling per §14.
 - Compression/thumbnail choice for very large or HEIC photos.
 - One-minute voice channel implementation and consent UI.
 - Photo voice-note recording/player and media reference storage.
 - Local re-share from the photo wall.
 - Public-photo layer, public storage, moderation, attribution, and revocation (US-20).
+- Should circle invitations return to explicit accept/decline after the auto-accept phase?
+- Circle canonical ordering currently trusts the organizer's signed creation time. Should a server receipt timestamp or NTP-checked clock also be required to stop backdating?
+- Should a late-arriving earlier circle randevouz be allowed to replace the canonical choice after the day's window has opened or attendance has been recorded?
 - Optional local-only captions or transcripts for voice notes/live voice, with explicit consent and no server upload.
 
 
 ---
 
-## 18. Infrastructure addendum: IPv6, dual-stack, diagnostics, TURN
+## 19. Infrastructure addendum: IPv6, dual-stack, diagnostics, TURN
 
 ### IPv6 reality
 A browser cannot assign itself an IPv6 address. The address is supplied by the device's network (ISP, router, or mobile carrier). The app's job is to support it when it exists:

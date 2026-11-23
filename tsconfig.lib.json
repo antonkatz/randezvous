@@ -8,5 +8,6 @@
     "outDir": "dist-lib/types",
     "rootDir": "src"
   },
-  "include": ["src/lib"]
+  "include": ["src/lib", "src/circles"],
+  "exclude": ["**/*.test.ts"]
 }

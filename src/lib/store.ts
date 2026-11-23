@@ -1,3 +1,4 @@
+import { requestPersistentStorage } from './persistence';
 import type { JoinRequest } from './protocol';
 import type { StoredHuman, StoredIdentity, StoredRendezvous } from './types';
 
@@ -41,6 +42,7 @@ export class RandevouzStore {
 
   private open(): Promise<IDBDatabase> {
     if (this.dbPromise) return this.dbPromise;
+    void requestPersistentStorage();
     this.dbPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(this.name, DB_VERSION);
       request.onupgradeneeded = () => {

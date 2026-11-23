@@ -142,11 +142,12 @@ describe('merge rejection', () => {
       organizer: ana.selfKey,
       invitees: [ana.selfKey, baz.selfKey].sort(),
     });
+    const plan = valid.record as Extract<CircleRecord, { type: 'Plan' }>;
     const invalid: StoredCircleRecord = {
       id: valid.id,
       record: {
-        ...valid.record,
-        invitees: [...(valid.record as Extract<CircleRecord, { type: 'Plan' }>).invitees].reverse(),
+        ...plan,
+        invitees: [...plan.invitees].reverse(),
       },
     };
     const result = await mergeRecords(ana, [], [invalid]);
