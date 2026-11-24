@@ -1,6 +1,6 @@
 # Rendezvous — Product & Technical Specification
 
-**Status:** v0.1 · reciprocal photo contributions, the live rendezvous screen, one-minute live audio, photo voice notes, local re-sharing, and per-photo possession inventory are implemented. The five-minute early/late handoff window, delivery celebration, canonical circle rendezvous, optional circle time window, circle auto-accept, expiring circle rendezvous invites, and online circle sync are implemented. The public-photo layer (US-20) remains explicitly deferred.
+**Status:** v0.1 · reciprocal photo contributions, the live rendezvous screen, one-minute live audio, photo voice notes, local re-sharing, and per-photo possession inventory are implemented. The five-minute early/late handoff window, delivery celebration, canonical circle rendezvous, optional circle time window, circle auto-accept, expiring circle rendezvous invites, and online circle sync are implemented. The public-photo layer (US-20) remains explicitly deferred. The rendezvous-driven invitation flow that removes the standalone add-human action is specified here but not yet implemented in the reference app.
 
 **Date:** 22 November 2026  
 **Codename:** rendezvous  
@@ -19,7 +19,7 @@
 
 ## 1. What this is
 
-> **Implementation note:** v0.1 implements the private browser-to-browser photo handoff, invites, verification, revocation, ranked wall, diagnostics, the five-minute early/late handoff window, and the delivery confetti animation. It also implements reciprocal photo contributions, the live rendezvous screen, per-photo voice notes, local re-sharing, the one-minute live voice window, and a per-photo possession inventory. Circle records, membership, canonical daily plans, the optional signed time window, auto-accept, expiring server-side rendezvous invites, and automatic online sync are wired into the app. The future public-photo re-share layer remains deferred and is the only feature in this document not implemented.
+> **Implementation note:** v0.1 implements the private browser-to-browser photo handoff, invites, verification, revocation, ranked wall, diagnostics, the five-minute early/late handoff window, and the delivery confetti animation. It also implements reciprocal photo contributions, the live rendezvous screen, per-photo voice notes, local re-sharing, the one-minute live voice window, and a per-photo possession inventory. Circle records, membership, canonical daily plans, the optional signed time window, auto-accept, expiring server-side rendezvous invites, and automatic online sync are wired into the app. The future public-photo re-share layer remains deferred. The rendezvous-driven invitation flow in US-3 is specified here but is not yet implemented: the current reference build still exposes the older standalone add-human control and does not yet bind a pre-join appointment into the invitation link.
 
 Rendezvous is a tiny, private photo-sharing service that runs entirely in the browser. Two people link their browsers once, then leave photographs for each other at chosen times. Photos travel directly from browser to browser over WebRTC. There is no photo upload, no media server, and no account in the private path. (A future, separate opt-in public-photo layer is sketched in US-20 and explicitly deferred.)
 
@@ -94,24 +94,30 @@ As a returning visitor, I want my identity and connections to persist, so that I
 - The private key is held as a `CryptoKey` (non-extractable where the browser supports it) rather than as plain text in local storage.
 - The public key is exposed in invitations; the peer ID is derived from that key and cannot be claimed without the matching private key.
 
-### Adding a human
+### Meeting someone new
 
-#### US-3 — I can add a human with a link
-As the owner of this browser, I want one obvious action that produces a join link, so that another person can link their browser to mine.
+#### US-3 — A rendezvous can be addressed to someone who has not joined yet
+As a sender, I want to set a rendezvous and generate its invitation link at the same time, so that the first thing a new person receives is the meeting, not an empty contact.
 
 **Acceptance criteria**
-- A single black button with white text reading **add human** is pinned to the top-left of the interface. It is the only top-left control.
-- Clicking/tapping it opens a small panel that drops down beneath the button.
-- The panel contains a shareable link and a copy action.
-- The link is a signed invitation to my current peer identity. It can be generated while the signalling server is offline.
-- The link opens the same app, verifies the invitation locally, and immediately creates the reciprocal relationship.
-- The link embeds the inviter's public key. The invitee pins it, and the inviter pins the invitee's public key from the connection request. A later claim to the same peer ID without the matching private key is rejected.
-- If the inviter is online, they receive the request immediately. If not, the signalling server queues the request until the inviter next connects.
-- Both sides then retain each other’s identity permanently until either side deletes the relationship.
-- The link is a bearer credential: anyone who has it can connect. There is no account, approval screen, or password in v1.
+- There is no standalone **add human** control, panel, empty-state action, or menu item anywhere in the interface.
+- The only way to establish a new human relationship is to set a rendezvous and choose **someone new** in the human step.
+- The human step lists linked humans and one **someone new** choice. It never asks the sender to leave the composer to add a person first.
+- Choosing **someone new** signs an invitation for this rendezvous. It does not create a human or a second appointment.
+- The creator’s rendezvous is saved locally immediately with the state **waiting for them to join**, and appears in the creator’s upcoming area.
+- The DONE stage shows the join link and a copy action for a **someone new** rendezvous. There is no separate link screen or add-human flow.
+- The link carries the signed invitation and the appointment metadata: appointment ID, inviter identity, scheduled timestamp, and creation timestamp. It never carries photo or voice-note bytes.
+- The link can be generated while the signalling server is offline. Opening it verifies the inviter locally and stores the already-scheduled rendezvous without a second scheduling step.
+- As soon as the invitee opens the link and completes the join, the rendezvous is already in their upcoming area. The recipient does not need to wait for a later server notice to learn the appointment.
+- The inviter pins the invitee’s public key from the join request and attaches the saved rendezvous to that human. No duplicate appointment is created.
+- If the inviter is online, they learn about the join immediately. If not, the signalling server queues the join until the inviter next connects; the invitee already has the appointment locally.
+- If the link is opened by a browser that is already linked to the inviter, the rendezvous is attached to that existing human. No duplicate relationship is created.
+- The first browser to redeem a link binds it to that browser identity. A later redemption from a different browser is refused once the invitation has been bound.
+- Both sides retain each other’s identity permanently until either side deletes the relationship.
+- The link is a bearer credential before it is bound: anyone who has it can join. There is no account, approval screen, or password in v1.
 - Invitation token hashes are stored with the resulting relationship. Deleting the human revokes the token everywhere; an old copied link no longer works.
 - Opening one’s own link does nothing except show a friendly message.
-- Following an already-used link from the same browser is idempotent.
+- Following an already-bound link from the same browser is idempotent.
 - There is no discovery, search, contact list import, or central social graph.
 
 #### US-3b — I can verify a human with a comparison code
@@ -127,7 +133,7 @@ As a person who wants to be sure the link really belongs to my friend, I want a 
   - uses 88 bits of output as eight 11-bit indices into a fixed 2048-word list.
 - Both humans see the same eight words, in the same order, on every reconnection. It does not change when WebRTC DTLS certificates change.
 - The code is shown in a human-detail panel. A “Verified” / “Not verified” badge is always visible on the human.
-- The panel instructs both people to compare the words **out loud or through another app**. It explicitly warns not to compare over the same link/channel that delivered the invitation.
+- The panel instructs both people to compare the words **out loud or through another app**. It explicitly warns not to compare over the same link/channel that carried the rendezvous invite.
 - Either person can mark the human as verified locally after comparing; verification state persists in IndexedDB.
 - Verification is optional and does not block scheduling. It changes the badge from “Not verified” to “Verified”.
 - A pinned-key mismatch or an authentication failure is loud, fails closed, and never silently replaces the stored key or marks the human verified.
@@ -141,7 +147,7 @@ As a person in control of my connections, I want to delete a human, so that they
 - Removing locally immediately removes the human from my UI, revokes their presence subscription, and cancels any scheduled-but-not-completed rendezvous between us.
 - A removal notice is sent through the signalling server. If the other browser is offline, the server queues the notice until it next connects.
 - The other browser removes the human and all pending rendezvous on receipt. Both sides can no longer initiate a handoff.
-- Invitation-token hashes associated with the relationship are revoked locally and recorded by the bootstrap server. Reopening the old link is rejected on both sides; re-adding requires a fresh invitation link.
+- Invitation-token hashes associated with the relationship are revoked locally and recorded by the bootstrap server. Reopening the old link is rejected on both sides; meeting again requires a fresh rendezvous invitation.
 - Revocation is durable on the bootstrap server, so a removed link cannot be reused while the inviter is offline.
 - Photos already delivered remain in each recipient’s local archive until individually deleted; the connection itself is gone.
 - Removing a human never requires deleting the local identity.
@@ -163,45 +169,49 @@ As two linked humans, we want our browsers to find each other again whenever we 
 As a sender, I want the app to distinguish “linked and present” from “not yet connected” and “not verified”, so that I understand why a rendezvous appears in one browser and not the other.
 
 **Acceptance criteria**
-- A human is usable for a rendezvous only after the two-sided link exists: the inviter shared a link, the invitee opened it, both browsers list the other under **your humans**, and both have pinned the other's public key.
+- A human relationship exists only after a rendezvous invitation has been redeemed: the inviter set a rendezvous for **someone new**, the invitee opened its link, both browsers list the other under **your humans**, and both have pinned the other's public key.
+- A rendezvous may exist before that relationship exists. It is addressed to the invitation, not to a peer ID, and is held locally by the creator in the state **waiting for them to join**.
 - The human row shows two independent facts:
   - **connection:** **here now** only while the other browser is connected to the same signalling server; otherwise **away**;
   - **key verification:** **verified** or **not verified**, based on the eight comparison words.
-- Comparing the words and marking verified is the key-safety step. It confirms the pinned key. It does not create the connection, and it does not substitute for the two-sided link.
-- Before the first rendezvous, the flow repeats the delivery prerequisites in plain language: both browsers open, signal live, the human present on both sides, and the comparison words checked.
-- The sender sees their own rendezvous immediately in their upcoming list, even when the human is away. That local row is not evidence that the other browser has it.
-- The recipient sees the rendezvous only after the server notice has been delivered and persisted. If they are away, the notice waits in the store-and-forward queue and appears on their next connection.
-- If one browser does not show a rendezvous the other created, the expected checks are: same public URL/signalling server, same browser profile and identity, signal live, the sender present in **your humans**, and the sender shown as **here now**.
-- The phrase **delivered** is reserved for the photo handoff. An appointment notice is **waiting**, **announced**, or **due**, never **delivered**.
+- Comparing the words and marking verified is the key-safety step. It confirms the pinned key. It does not create the connection, and it does not substitute for the relationship.
+- For photo delivery, restate the prerequisites in plain language: both browsers open, signal live, the human present on both sides, and the comparison words checked.
+- The sender sees their own rendezvous immediately in their upcoming list, first as **waiting for them to join** and later as **waiting for [name] to come online**. That local row is not evidence that the other browser has it.
+- The recipient sees the rendezvous immediately after opening the invitation link, before any later server notice. The appointment travels in the signed invite; the server notice is optional confirmation, not the first source of the appointment.
+- If one browser does not show a rendezvous the other created, the expected checks are: the invitation link was opened in the intended browser profile, both browsers use the same public URL/signalling server, signal is live, both list each other under **your humans**, and the other human is shown as **here now**.
+- The phrase **delivered** is reserved for the photo handoff. An appointment notice is **waiting for them to join**, **waiting**, **announced**, or **due**, never **delivered**.
 - Mobile/desktop testing uses the same public URL for both devices when a tunnel is in use, so both profiles reach the same signalling server.
 
 ### The rendezvous
 
 #### US-6 — I can set a rendezvous
-As a sender, I want to choose one photo, one human, and a time, so that we can meet for the handoff.
+As a sender, I want to choose one photo, one person, and a time, so that we can meet for the handoff even if that person has not joined yet.
 
 **Acceptance criteria**
 - The central action reads **Set a rendezvous**.
 - The flow has exactly three stages:
-  1. **Photo + human.** Select an image from the device, optionally attach a voice note of up to 60 seconds, and select one of my linked humans.
+  1. **Photo + person.** Select an image from the device, optionally attach a voice note of up to 60 seconds, and choose one linked human or **someone new**.
   2. **Time + optional date.** Choose a time. If wanted, choose a date. If no date is chosen, the app resolves the next occurrence of that time (today if still ahead, otherwise tomorrow).
-  3. **DONE.** A clear confirmation shows the chosen human and the resolved local moment.
+  3. **DONE.** A clear confirmation shows the chosen human or **someone new** and the resolved local moment. For **someone new**, it also shows the join link for this rendezvous and a copy action.
 - The photo is validated (image MIME type, maximum 25 MiB) and stored only in the sender’s IndexedDB.
 - A photo may carry one optional voice note, recorded in the browser and no longer than 60 seconds. It travels in the same authenticated handoff and never passes through the server.
 - The photo is not uploaded to, encoded into, or referenced by the signalling server.
 - A unique appointment ID is generated locally.
-- The appointment is saved locally before it is announced, so closing the tab directly after DONE does not lose it.
-- The appointment metadata is sent to the signalling server for store-and-forward delivery to the recipient.
+- The appointment is saved locally before it is announced or its link is shown, so closing the tab directly after DONE does not lose it.
+- For a linked human, the appointment metadata is sent to the signalling server for store-and-forward delivery to the recipient.
+- For **someone new**, the appointment is not addressed to a peer ID yet. It remains **waiting for them to join**, and the signed invitation link carries its metadata. Redeeming the link attaches the existing appointment to the new human; no second appointment is created.
+- Choosing **someone new** never opens a separate add-human screen and never creates an empty human record.
 - The sender may schedule while the signalling server is offline; delivery is retried while the app remains open and on subsequent launches.
 - The completed flow makes the meeting requirement explicit: both browsers must be present.
 - A rendezvous carries at most one photo per participant: the creator’s photo plus an optional reciprocal contribution from the other human (US-10b). The creator’s three-stage flow never waits for a reply.
-- Only one human is selected per direct rendezvous. A circle rendezvous is the group exception: it selects a circle and a shared moment, while each photo transfer remains a direct pairwise handoff.
+- Only one linked human or one **someone new** invitation is selected per direct rendezvous. A circle rendezvous is the group exception: it selects a circle and a shared moment, while each photo transfer remains a direct pairwise handoff.
 
 #### US-7 — The recipient is notified when they return
 As a recipient, I want the appointment to be waiting for me even if I was offline when it was created, so that I know to meet my human.
 
 **Acceptance criteria**
-- The signalling server stores the appointment notice until the recipient acknowledges local persistence.
+- For a rendezvous addressed to **someone new**, the redeemable invitation link is the first delivery path: the recipient already has the appointment as soon as the link is opened, before the inviter is online or any server notice is sent.
+- For a rendezvous addressed to a linked human, the signalling server stores the appointment notice until the recipient acknowledges local persistence.
 - If the recipient is online at creation, the notice is delivered immediately.
 - If the recipient is offline, the notice is queued indefinitely within the retention policy and delivered on their next connection.
 - The notice contains only: appointment ID, sender ID, sender display name, scheduled timestamp, and creation timestamp.
@@ -320,7 +330,7 @@ As a sender, I want to share an existing photograph with another human without c
 **Acceptance criteria**
 - A delivered **outgoing** photograph in the photo viewer offers a **Share again** action.
 - Share again opens the normal three-stage rendezvous composer with the photograph already attached from local storage. No file picker, new upload, or server media reference is required.
-- The sender chooses one linked human and a time; a new appointment ID is created.
+- The sender chooses one person — a linked human or **someone new** — and a time; a new appointment ID is created.
 - The local photo bytes and any attached voice note are reused. The sender may review or replace the voice note before scheduling.
 - Each share is an independent rendezvous and an independent wall print after delivery. Deleting the new appointment or its delivered print must not delete the source photograph, the old appointment, or another share.
 - Delivery remains peer-to-peer; only appointment metadata goes to the signalling server. Nothing is uploaded to a media server.
@@ -364,7 +374,7 @@ As a user, I want to see my upcoming and waiting rendezvous without opening a se
 **Acceptance criteria**
 - A compact “next/upcoming” area presents scheduled and waiting appointments.
 - Each item identifies the human, local time, opening window, and state.
-- Waiting items clearly say who needs to be online.
+- Waiting items clearly say who needs to be online, or that the other person has not joined yet.
 - Delivered photos move onto the ranked wall.
 - Pending and waiting rendezvous are kept in a quiet strip above the wall, separate from the photo sequence.
 - A row for a rendezvous I did not create offers **add a photo** until I contribute or the handoff session begins (US-10b).
@@ -377,7 +387,7 @@ As a recipient, I want to see an upcoming rendezvous and attach a photo of my ow
 **Status:** Implemented in v0.1.
 
 **Acceptance criteria**
-- The rendezvous appears in my upcoming area (US-10) as soon as my client persists its notice, whether I was online when it was created or saw it on my next launch.
+- The rendezvous appears in my upcoming area (US-10) as soon as my client persists it — from the invitation link when I am the **someone new** recipient, or from the server notice when I was already linked — whether I was online when it was created or saw it on my next launch.
 - The row and its detail identify the creator, the local moment, the handoff window, and the current state. The creator’s photo is never previewed, downloaded, or referenced before the handoff.
 - A rendezvous I did not create offers **add a photo** until I attach one or the handoff session begins. The action attaches the photo to the existing appointment ID as my reciprocal contribution. It does not create a second appointment, change the time, or replace the creator’s photo.
 - I can add my photo while the creator is offline; it stays local and is not announced to the signalling server.
@@ -426,7 +436,7 @@ As a circle member, I want the first rendezvous set for a day to win, so that th
 As a person invited to a circle, I want membership to be explicit and auditable, so that joining is recorded and I can leave.
 
 **Acceptance criteria**
-- A circle invitation is signed by a current member and addressed to one public-key identity. Unlike a human invitation link, it cannot be redeemed by whoever holds it.
+- A circle invitation is signed by a current member and addressed to one public-key identity. Unlike a rendezvous invitation link, it cannot be redeemed by whoever holds it.
 - Accepting the invitation creates a signed Join record; declining creates no membership record.
 - For the current build, the client auto-accepts a valid incoming circle invitation. This is a temporary client policy, not a weakening of the signed membership chain; an explicit accept/decline surface remains the later intent.
 - Auto-accept verifies the invitation signature, circle ID, the inviter's current membership, and that the invitation is addressed to this browser's key. Invalid, mismatched, or forwarded invitations are ignored.
@@ -582,7 +592,7 @@ As someone deciding whether to trust Rendezvous with a photograph, I want the pr
 **Acceptance criteria**
 - The headline promise is exactly: **“Your photos, kept alive by the people who love you, for free.”**
 - It describes the relationship, not server storage: photographs persist because the people who care keep them, not because a cloud account does.
-- It appears on the public landing/about surface and in single-tagline share cards; inside the app it must never displace **add human**, **Code Name**, or **Set a rendezvous**.
+- It appears on the public landing/about surface and in single-tagline share cards; inside the app it must never displace **Code Name** or **Set a rendezvous**.
 - Supporting copy may explain the meeting rule: photos move only while both people have the app open, and there is no upload or media server in the private path.
 - It must not imply guaranteed delivery, background sync, permanent server storage, or availability after the tab is closed.
 - “For free” applies to the private v1 service; a future public or paid layer must not retroactively change the claim.
@@ -597,38 +607,39 @@ As someone deciding whether to trust Rendezvous with a photograph, I want the pr
 The visual direction is an editorial, quiet private club: warm paper, black ink, one vermilion accent, and a single loud black invitation control. It should feel more like a printed appointment card than a social app.
 
 ### VDS-1 — First impression
-As a first-time visitor, I see a calm, confident surface with three clear anchors: **add human** beside “No humans yet.”, **Code Name** at top-centre, and **Set a rendezvous** in the middle. I understand the service without reading instructions. After the first human exists, the add human control moves to the top-left.
+As a first-time visitor, I see a calm, confident surface with two clear anchors: **Code Name** at top-centre and **Set a rendezvous** in the middle. I understand that the first meeting begins by setting a rendezvous, not by adding a contact.
 
 Acceptance:
 - Page background is a warm off-white paper tone, not pure white.
 - Typography pairs a large editorial serif with compact sans/monospaced utility labels.
 - One accent (vermilion) is used sparingly for live/attention dots and notification marks.
-- No stock photography, avatars farms, or dashboard chrome.
-- A quiet centred masthead (“rendezvous by InstantHero”) may sit above the header. It is a wordmark, not a control, and must never compete with add human.
+- No stock photography, avatar farms, or dashboard chrome.
+- A quiet centred masthead (“rendezvous by InstantHero”) may sit above the header. It is a wordmark, not a control.
+- There is no **add human** control, link button, or empty-state action in the header or humans area.
+- With no humans, the humans area reads as an invitation to set a rendezvous for **someone new**, not as a missing-contact warning.
 - The first screen fits without scrolling at 1280×800; secondary collections sit below or at the bottom edge.
 
-### VDS-2 — The add human button
-As a visitor with no humans, my eye is caught by the control beside “No humans yet.” Once a human exists, it moves to the top-left.
+### VDS-2 — The someone-new choice
+As a sender with no linked humans, I can start a real relationship from inside the rendezvous flow.
 
 Acceptance:
-- Solid black background, white text, exact visible label **add human** (lowercase), high contrast.
-- With no humans, the button sits inline after “No humans yet.” in the humans section; once a human exists, it returns to the top-left.
-- Compact horizontal pill/rectangle, large enough for touch (minimum 44 px height).
-- Distinct from the flat canvas via a subtle offset shadow or movement on hover.
-- A small pulsing vermilion dot or plus glyph signals “add”.
-- No second button competes beside it in the top-left corner.
-- On press: one-pixel depression/scale; visible keyboard focus ring.
+- The **Photo + person** step always lists linked humans and one **someone new** row.
+- With no linked humans, **someone new** is selected by default and is the only available person choice.
+- The row is visually a peer choice, not an admin action: same avatar-disc language, name **someone new**, and a quiet line explaining that the link will be shown after scheduling.
+- Choosing it never opens a second dialog, link panel, or contact form.
+- The composer remains three stages; **someone new** is not a fourth flow.
+- The primary next action stays **Continue** and is disabled only until both a photo and a person choice exist.
 
-### VDS-3 — The join link panel
-As an inviter, the link appears exactly where I asked for it.
+### VDS-3 — The rendezvous invite link
+As a sender who chose **someone new**, I see the link in the completion step, where the meeting is already defined.
 
 Acceptance:
-- Panel drops down from beneath the add human button, aligned with its edge, with a short transform-origin animation. In the empty humans state it opens above the button so it stays in view.
-- Small panel (max width ~390 px), dark ink surface with light text, like the back of an invitation.
-- Contains: a short heading, one-line explanation that the link permanently links the two browser identities (a connection itself is rebuilt only while both are open), a read-only join link, and a copy button.
-- Close affordance and Escape/outside-click dismissal.
+- The link appears only in the DONE stage of a rendezvous created for **someone new**. It is never available from a standalone header action.
+- The panel is part of the DONE card, visually like the back of an invitation: dark ink surface or a paper inset, with a short heading, the resolved moment, a one-line explanation that opening it creates the human link and delivers this rendezvous, a read-only join link, and a copy action.
+- Copy says plainly that the person can open it at any time; the photo still moves only when both browsers are open at the handoff.
 - A copied state changes text to “Copied” and announces it accessibly.
-- On small screens the panel becomes a sheet that stays within the viewport.
+- Close/finish dismissal leaves the rendezvous saved and the link available again from the upcoming row’s **share link** action.
+- On small screens the DONE card becomes a sheet that stays within the viewport.
 
 ### VDS-4 — Code Name
 As a returning user, I can see and edit how I appear without the name field feeling like a form.
@@ -657,9 +668,9 @@ As a sender, choosing the content feels personal.
 Acceptance:
 - Modal is a warm paper card, visually consistent with the page.
 - Photo dropzone supports click and drag/drop; shows a preview immediately after selection.
-- Selected human choices appear as simple rows with initials/avatar discs, names, and online badges. Only linked humans appear.
-- The primary next action is disabled until both a photo and a human are chosen, with a clear explanation.
-- If there are no humans, the step explains that a human must be added first and offers a way back to add one.
+- Person choices appear as simple rows with initials/avatar discs, names, and online badges for linked humans. A final **someone new** row uses the same language and explains that the join link appears after scheduling.
+- The primary next action is disabled until both a photo and a person choice are chosen, with a clear explanation.
+- If there are no linked humans, **someone new** is selected by default. The step never sends the sender to a separate add-human flow.
 - An optional **add a voice note · up to 1:00** control sits beneath the photo preview. It does not compete with choose/continue.
 - A photo with a note shows a small audio badge in the composer and later on the wall print.
 
@@ -696,9 +707,10 @@ As a sender, I get a satisfying, honest confirmation.
 
 Acceptance:
 - Stage three says **DONE** or **Rendezvous set** prominently.
-- Shows recipient code name and resolved moment.
+- Shows the recipient code name, or **someone new**, and the resolved moment.
 - If a voice note is attached, the summary says so with its duration; it does not auto-play.
-- Shows a status line: “We’ll tell [name] when they next arrive.”
+- For a linked human, shows the status line: “We’ll tell [name] when they next arrive.”
+- For **someone new**, shows the join link and says that opening it gives them this rendezvous immediately, linking the two browsers.
 - Contains the caveat: “The photo stays here until you’re both online.”
 - Provides one clear close/finish action.
 - The modal can be dismissed with Escape or outside click after completion, and the appointment is already saved.
@@ -763,7 +775,7 @@ Acceptance:
 As a returning user, I can see my private circle.
 
 Acceptance:
-- A quiet horizontal list (or wrapped row) beneath the central scene labelled “your humans”.
+- A quiet horizontal list (or wrapped row) beneath the central scene labelled “your humans”. With none, the empty state invites setting a rendezvous for **someone new** rather than offering a separate add action.
 - Each human shows a small avatar/initial, code name, and a live dot when online.
 - Online status is indicated by both dot and text/accessibility label, not colour alone.
 - Remove action is available on the item without hover-only dependence, ideally in a small menu or labelled × with confirmation affordance.
@@ -789,7 +801,7 @@ Acceptance:
 - Ordering is by arrival, freshest first. The freshest is rank **01** at the largest scale. The ranking algorithm is deliberately isolated so a richer relevance/recency algorithm can replace arrival order later.
 - Scale follows a power law: `width = clamp(min, base × rank^-α, max)` where α is a gentle positive exponent (currently 0.24). Each subsequent photograph is a little smaller; a practical minimum keeps old photos usable on small screens.
 - The board is a wrapped wall with whitespace between photos, not a single-row shelf. The largest/freshest photograph anchors the top-left of the board, and every subsequent print clusters toward that same top-left corner; whitespace is allowed to grow to the right and below.
-- There is generous breathing room between the top menu (add human / Code Name / signal) and the board. The board can live below the hero and human strip.
+- There is generous breathing room between the top menu (Code Name / signal) and the board. The board can live below the hero and human strip.
 - Each item is a framed print with a tiny rank marker, direction/sender caption, date, and a voice-note badge when applicable. Slight rotations may be used sparingly; the layout must still read as one composition.
 - Outgoing prints expose a **Share again** action in the viewer; it is not drawn on top of the print itself.
 - Pending, waiting, and failed rendezvous are shown in a separate compact strip above the wall. They do not occupy rank positions reserved for delivered photographs.
@@ -806,7 +818,7 @@ Acceptance:
 - The full-screen photo viewer for an outgoing delivered print includes **Share again** alongside download and delete.
 - It opens the normal rendezvous card with the photograph (and existing voice note) already in place, clearly labelled “reusing this photograph from your wall”.
 - No file chooser appears unless the sender explicitly chooses to replace the photo.
-- The sender still chooses one human and a moment, confirming the same meeting rule. The primary action remains **Set a rendezvous**.
+- The sender still chooses one person — a linked human or **someone new** — and a moment, confirming the same meeting rule. The primary action remains **Set a rendezvous**.
 - DONE identifies that this is another share of an existing photograph and shows the new recipient/moment; the original remains untouched.
 - The wall shows the new delivery as its own print with its own rank when it arrives.
 - If voice-note replacement is offered, it uses the VDS-6b recording surface and never auto-records.
@@ -817,7 +829,7 @@ Acceptance:
 As a phone user, I get the same calm hierarchy.
 
 Acceptance:
-- Header keeps code name centred; add human sits left once a human exists; signal status hides on narrow screens.
+- Header keeps code name centred; there is no add-human control; signal status hides on narrow screens.
 - Hero type and central action scale below 600 px.
 - Modals become bottom sheets with large touch targets and safe-area padding.
 - The circle bar stays pinned to the bottom above the safe area; its icons remain at least 44 px and scroll horizontally.
@@ -831,7 +843,7 @@ Acceptance:
 - Text/background contrast meets WCAG AA for body and controls.
 - Inputs have labels (visually hidden where the design is deliberately flat).
 - States are announced with `aria-live` and not encoded by colour alone.
-- Copy is intimate and plain: “add human”, “Set a rendezvous”, “Waiting for Ana to come online.” No growth-hack language, no exclamation marks.
+- Copy is intimate and plain: “Set a rendezvous”, “someone new”, “Waiting for Ana to come online.” No growth-hack language, no exclamation marks.
 
 ### VDS-15 — Connection diagnostics
 As a user, I can open a calm technical footnote without leaving the page.
@@ -867,49 +879,58 @@ Acceptance:
 
 ## 6. End-to-end flows
 
-### 6.1 Invite and link
+### 6.1 Rendezvous invite and link
 
 ```text
-A: click add human
-A: local signed invite link generated (works without signalling)
-A: shares link
+A: taps "Set a rendezvous"
+A: selects a photo (+ optional voice note), "someone new", and a moment
+A: saves the appointment locally as "waiting for them to join"
+A: signs an invitation bound to that appointment
+A: DONE shows the join link (works without signalling)
+A: shares the link
 
-B: opens link
-B: verifies A's signature locally
-B: adds A to humans immediately
-B: sends signed connection request to server
-   ├─ A online  → server relays now → A adds B
-   └─ A offline → server queues    → A adds B on next connection
-A: acknowledges server queue entry
-Both: presence subscription includes the other; live dots appear when both online.
-Both: pin each other's public key in IndexedDB. No live connection is retained.
+B: opens the link
+B: verifies A's signature and the appointment metadata locally
+B: creates or resumes this browser's identity and Code Name
+B: stores the appointment immediately
+B: sees the rendezvous in the upcoming area and A under "your humans"
+B: sends a signed join to the server
+   ├─ A online  → A pins B and attaches the already-saved appointment
+   └─ A offline → server queues the join; A attaches it on next connection
 
-A future visit re-authenticates the same keypair and re-establishes presence; a direct WebRTC connection is created only when a handoff is due and both are present.
+Both: pin each other's public key in IndexedDB.
+Both: subscribe to each other's presence; live dots appear when both are online.
 ```
 
-The relationship is now two-sided and persists in both browsers. No server-side contact graph is required for future operation; the server only relays presence and queues pending appointment notices.
+The relationship is two-sided and persists in both browsers. The appointment is not created again when the link is opened: it already exists under the creator’s appointment ID, and the invitee receives that same ID. No server-side contact graph is required for future operation; the server only relays presence, queues joins, and queues appointment notices for later changes.
 
-Before either browser can receive a rendezvous, confirm:
+As soon as the invitee opens the link, the rendezvous is in their upcoming area — they do not need to wait for the creator to be online. The creator sees the same rendezvous as **waiting for them to join** until the join arrives, then as **waiting for [name] to come online**.
+
+For photo delivery, confirm:
 
 ```text
+[ ] the invitation link was opened in the intended browser profile
 [ ] both browsers list the other under "your humans"
 [ ] both show signal · live
 [ ] both show the other human as "here now"
 [ ] the eight comparison words match and are marked verified
 ```
 
-If one of the first three lines is missing, the human link is not ready for delivery. A rendezvous created by one browser can still appear locally as an outgoing appointment, but the other browser will not show it until it has the human and receives the server notice. Verification should be completed before the first photo; it confirms the key, but it is not what creates presence.
+If one of the first four lines is missing, the relationship is not ready for delivery. The rendezvous can still exist in one or both upcoming lists; it does not become a photo until both browsers are present. Verification should be completed before the first photo; it confirms the key, but it is not what creates presence.
 
 ### 6.2 Setting a rendezvous
 
 ```text
 1. Sender taps "Set a rendezvous".
-2. Selects local photo, optionally records one voice note (≤60s), and selects one linked human.
+2. Selects a local photo, optionally records one voice note (≤60s), and chooses either a linked human or "someone new".
 3. Picks time (+ optional date).
-4. App resolves local timestamp, saves appointment + photo + optional voice note to IndexedDB.
-5. App sends ONLY appointment metadata to the signalling server.
-6. Server stores notice until recipient acknowledges; delivers immediately if recipient online.
-7. Confirmation: DONE. "Both browsers need to be open at the same time. The handoff opens five minutes early, and lateness does not cancel it."
+4. App resolves the local timestamp and saves the appointment + photo + optional voice note to IndexedDB.
+5. If the person is already linked, the app sends ONLY appointment metadata to the signalling server.
+   If the person is "someone new", the same metadata is bound into the signed invitation link instead.
+6. Linked human: server stores the notice until the recipient acknowledges, or delivers it immediately if they are online.
+   Someone new: opening the signed link stores the same appointment immediately in the invitee's browser.
+7. Confirmation: DONE. Both cases repeat: "Both browsers need to be open at the same time. The handoff opens five minutes early, and lateness does not cancel it."
+   Someone new also receives the join link here, with no separate add-human step.
 ```
 
 ### 6.2b Adding a reciprocal photo to someone else’s rendezvous
@@ -1046,8 +1067,9 @@ Any current member sets a circle rendezvous for local day D
         └─ all other circle records stay local
                 │
         when ≥2 members are online:
-          automatic RTC peer sync of membership, attendance, stats,
-          and full circle records (idempotent; no manual refresh)
+          automatic authenticated peer sync of membership, attendance, stats,
+          and full circle records, relayed opaquely by the server while both
+          are online (idempotent; no manual refresh)
                 │
         each member verifies signatures and merges:
           reject plans outside the window that was active when they were signed
@@ -1060,7 +1082,7 @@ Any current member sets a circle rendezvous for local day D
         all synced members converge on the same canonical rendezvous
 ```
 
-The server holds only the expiring invite. Membership, Join/Leave, attendance, stats, and the record log never leave the browsers except over authenticated RTC. The canonical record is metadata only. A member still meets each other member in a direct pairwise handoff under the normal online and five-minute-window rules; the circle record only fixes the shared day and moment.
+The server holds only the expiring invite. Membership, Join/Leave, attendance, stats, and the record log are never stored by the server; they may be relayed opaquely between connected mutual humans. The canonical record is metadata only. A member still meets each other member in a direct pairwise handoff under the normal online and five-minute-window rules; the circle record only fixes the shared day and moment.
 
 A circle may also set an optional signed time window. It constrains only the scheduled instant of plans signed while it is active; it never shortens the five-minute handoff window, invalidates an earlier valid plan, or changes attendance and stats. A window that crosses midnight still follows the one-canonical-rendezvous-per-local-day rule.
 
@@ -1069,14 +1091,14 @@ A circle may also set an optional signed time window. It constrains only the sch
 ## 7. Functional requirements summary
 
 - **FR-1** One persistent, IndexedDB-backed keypair identity per browser profile + origin.
-- **FR-2** Signed invitation links, two-sided linking, store-and-forward link requests.
+- **FR-2** Rendezvous-bound signed invitation links: setting a rendezvous for **someone new** creates the only path to a new two-sided human relationship, with store-and-forward join requests.
 - **FR-3** Live presence only for linked humans.
-- **FR-4** Three-stage rendezvous creation: photo + human → time (+ optional date) → DONE.
+- **FR-4** Three-stage rendezvous creation: photo + person (a linked human or **someone new**) → time (+ optional date) → DONE. A **someone new** rendezvous shows its join link in DONE.
 - **FR-5** Photos stored only in IndexedDB on the sender until handed off.
 - **FR-6** Server stores only appointment metadata, expiring circle rendezvous invites, and short-lived delivery queues; circle records and history are never server-stored.
 - **FR-7** Automatic direct transfer whenever both peers are online inside the `[T − 5 minutes, T + 5 minutes]` window, including when both are already online beforehand; a later overlap still completes, and lateness never discards the saved photograph.
 - **FR-8** Reliable chunked file transfer with CRC-free size check, ACK, retry, and idempotency by appointment ID.
-- **FR-9** Recipient notification on next connection after server notice, plus local handoff-window/due notification.
+- **FR-9** Recipient notification on next connection after a server notice for a linked human, or immediately from the rendezvous invite link for **someone new**, plus local handoff-window/due notification.
 - **FR-9a** Cumulative ranked photo wall: newest-first arrival rank, power-law scale, pending rendezvous separated, responsive reflow, deletion re-ranks.
 - **FR-10** Stable 8-word local verification code from sorted identity keys, persistent verified badge.
 - **FR-11** Signed live-session handshake binding both DTLS fingerprints before photo bytes.
@@ -1109,7 +1131,7 @@ A circle may also set an optional signed time window. It constrains only the sch
 - Circle rendezvous invites are visible to the signalling operator until they expire. Circle membership, attendance, stats, and record history are never sent to the server. Invites contain no photo or voice bytes, and clients never accept server-selected canonicality in place of signed records.
 - The app should not log photo bytes, voice-note bytes, audio content, SDP bodies, or private keys.
 - Identity private keys are held in IndexedDB as Web Crypto `CryptoKey` objects (non-extractable where possible), not as plaintext elsewhere. Any XSS on the origin can still ask the browser to use the key; isolation and CSP remain necessary.
-- Human invitation links are bearer capabilities. Sharing a link shares access. Circle invitations are addressed to one identity and are not bearer links.
+- Rendezvous invitation links are bearer capabilities until the first successful join binds one. Sharing an unredeemed link shares access. Circle invitations are addressed to one identity and are not bearer links.
 - Voice notes are private media with the same no-server guarantee as photos; microphone access is explicit and never backgrounded.
 - Re-sharing a private photo stays local and peer-to-peer. Public publication, when introduced later, is a separate opt-in surface with its own storage and moderation policies.
 - Presence connections are authenticated with a signed server challenge, and linked peers pin each other's public keys.
@@ -1229,7 +1251,7 @@ JSON over WebSocket at `/signal`. All messages are server-agnostic; no photo dat
 | `hello:ok` | Server accepted authenticated registration; returns ICE config and server time. |
 | `presence` | Online/name change for a subscribed human. |
 | `invite:queued` | Server accepted a join request for delivery. |
-| `invite:request` | An invitation request for this peer to add a new human. |
+| `invite:request` | A signed join for a rendezvous invitation; it binds the invited browser as a new human. |
 | `rendezvous:created` | Sender’s appointment metadata is durable. |
 | `rendezvous:notice` | Appointment notice for the recipient. |
 | `circle:relay` | One opaque signed circle message from a connected mutual human. |
@@ -1537,9 +1559,10 @@ These are explicit follow-ups, not accidental omissions.
 
 ## 17. Acceptance test scenarios
 
-1. **Invite while both online:** A opens add human; B opens link; both see each other and live presence; reloads preserve the relationship.
-2. **Invite while A offline:** B opens link; linked locally; server queues; A connects later; A gains B and sees presence.
-3. **Scheduling + immediate server sync:** photo + human + next occurrence saved; B receives the appointment notice; A sees `rendezvous:created`.
+1. **Rendezvous invite while both online:** A sets a rendezvous for **someone new**; DONE shows its link; B opens the link and immediately sees the same appointment in the upcoming area and A under humans; both see live presence; reloads preserve the relationship and appointment.
+2. **Rendezvous invite while A offline:** A sets a rendezvous for **someone new** and shares the link; B opens it and already has the appointment; the server queues B's join; A connects later, pins B, and attaches the same appointment without creating a second one.
+3. **Scheduling for an existing human:** photo + linked human + next occurrence saved; B receives the appointment notice; A sees `rendezvous:created`.
+3b. **No separate add-human flow:** no header, empty-state, menu, or composer escape hatch offers a standalone human invitation; the only human-invite surface is the DONE link for a **someone new** rendezvous.
 4. **Waiting as recipient:** at due, A is offline; B sees “waiting for A”; no success claim.
 5. **Waiting as sender:** at due, B is offline; A sees “waiting for B”; A's photo remains in IndexedDB across reload.
 6. **Meeting:** both online after due; auto handshake; recipient receives complete image; sender only sees delivered after ACK; reload shows photo in recipient archive.
@@ -1549,7 +1572,7 @@ These are explicit follow-ups, not accidental omissions.
 10. **Identity pinning:** a second browser cannot register a friend's peer ID without the friend's private key; a changed key for a pinned peer is rejected rather than overwriting the stored public key.
 11. **Stable verification code:** both tabs independently show the same eight words after linking; reloading or a new DTLS session keeps them identical; marking verified persists. An intentionally altered pinned key produces different words and fails the live handshake.
 12. **Signed handshake:** an offer/answer with altered DTLS fingerprints (simulated in test) is rejected before any photo bytes are sent.
-13. **Ephemeral RTC:** closing a tab terminates the direct connection; reopening and both being online re-establishes signalling and can complete a pending handoff without re-adding the human.
+13. **Ephemeral RTC:** closing a tab terminates the direct connection; reopening and both being online re-establishes signalling and can complete a pending handoff without another invitation.
 14. **Accessibility:** keyboard-only invite, verify, schedule, dismiss, and remove flows; visible focus; correct live announcements.
 15. **Responsive:** 390×844 and 1280×800 viewports; no horizontal overflow; modals usable.
 16. **Photo wall ranking:** deliver at least three photographs; the newest is rank 01 and largest, every subsequent width is smaller until the practical minimum, all remain present, and clicking any one opens the viewer.
