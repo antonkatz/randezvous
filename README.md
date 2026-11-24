@@ -4,6 +4,8 @@ A private photo handoff between two browsers. Pick a photograph, pick a human, p
 
 > **A rendezvous is a scheduled meeting, not a timed delivery.**
 > The signalling server holds only the appointment metadata. The photo moves only while both browsers are open and connected. The handoff window opens five minutes early and remains exchange-eligible through five minutes late. If both are already online beforehand, they connect when the window opens; if one person is missing, the rendezvous waits and completes at the next overlap.
+>
+> **Specification note:** the updated spec also requires an explicit **cancel rendezvous** action (US-7c) and a hard end at `T + 5 minutes` when the meeting has not happened (US-8c). Those two behaviours are specified but not yet implemented in this reference build.
 
 This repository contains the reference app, the reusable package, and a small store-and-forward signalling server.
 
