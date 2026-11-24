@@ -78,6 +78,18 @@ describe('signed invitations and joins', () => {
     await expect(verifyInviteToken(tampered)).rejects.toThrow();
   });
 
+  it('carries the live-audio flag in a signed rendezvous invitation', async () => {
+    const ana = await makeIdentity('Ana');
+    const token = await createInviteToken(ana, {
+      id: 'rv_liveaudio1',
+      scheduledFor: Date.now() + 60_000,
+      createdAt: Date.now(),
+      liveAudioDisabled: true,
+    });
+    const invite = await verifyInviteToken(token);
+    expect(invite.rendezvous?.liveAudioDisabled).toBe(true);
+  });
+
   it('creates and verifies a join request against the pinned inviter', async () => {
     const ana = await makeIdentity('Ana');
     const baz = await makeIdentity('Baz');

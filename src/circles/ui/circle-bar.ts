@@ -8,13 +8,28 @@ export interface CircleBarItem {
 const STYLES = `
 :host {
   position: fixed;
-  left: 50%;
+  right: calc(16px + env(safe-area-inset-right));
   bottom: calc(16px + env(safe-area-inset-bottom));
+  left: auto;
   z-index: 70;
   display: block;
   width: fit-content;
   max-width: min(760px, calc(100vw - 24px));
-  transform: translateX(-50%);
+}
+
+:host(.is-entering) .bar {
+  animation: circle-dock-in 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes circle-dock-in {
+  from {
+    opacity: 0;
+    transform: translateX(34px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .bar {
@@ -129,6 +144,7 @@ const STYLES = `
 
 @media (max-width: 720px) {
   :host {
+    right: calc(10px + env(safe-area-inset-right));
     bottom: calc(10px + env(safe-area-inset-bottom));
     max-width: calc(100vw - 16px);
   }
@@ -155,6 +171,12 @@ const STYLES = `
     width: 44px;
     height: 44px;
     font-size: 17px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :host(.is-entering) .bar {
+    animation: none;
   }
 }
 `;
@@ -220,6 +242,16 @@ export class CircleBar extends HTMLElement {
 
   connectedCallback(): void {
     this.render();
+    this.classList.add('is-entering');
+    const bar = this.shadowRoot?.querySelector<HTMLElement>('.bar');
+    if (bar) {
+      bar.addEventListener(
+        'animationend',
+        () => this.classList.remove('is-entering'),
+        { once: true },
+      );
+    }
+    window.setTimeout(() => this.classList.remove('is-entering'), 420);
   }
 
   private render(): void {

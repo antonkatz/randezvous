@@ -28,7 +28,7 @@ To use a different frontend port, pass Vite's `--port` flag through `npm run dev
 npm run dev -- --port 5174
 ```
 
-To try the actual link flow, open a second **isolated browser profile or incognito window**, click **add human**, and open the generated link there. Two normal tabs in the same profile share an identity and are treated as the same browser.
+To try the actual link flow, open a second **isolated browser profile or incognito window**, set a rendezvous for **someone new**, and open the generated link there. The recipient already has the rendezvous when the link opens. Two normal tabs in the same profile share an identity and are treated as the same browser.
 
 ### Scripts
 
@@ -73,10 +73,10 @@ npm run dev
 cloudflared tunnel --url http://localhost:5173
 ```
 
-Open the generated `https://….trycloudflare.com` URL **on both devices**. Use that same URL for the `add human` link: if the desktop stays on `localhost:5173`, the link it generates will point at localhost and your phone will not be able to open it.
+Open the generated `https://….trycloudflare.com` URL **on both devices**. Use that same URL for the rendezvous link: if the desktop stays on `localhost:5173`, the link it generates will point at localhost and your phone will not be able to open it.
 
-1. On the desktop tunnel tab, set **Code Name** and click **add human**.
-2. Send/copy the link to the phone and open it in the phone browser.
+1. On the desktop tunnel tab, set **Code Name** and set a rendezvous for **someone new**.
+2. Send/copy the link from DONE to the phone and open it in the phone browser.
 3. Set a different **Code Name** on the phone. Both devices should show each other as online and “not verified”.
 4. Open the human on each device, compare the eight words out loud, then mark them verified.
 5. Schedule a rendezvous a few minutes ahead, keep both pages open and awake at that time, and the photo will move directly browser-to-browser.
@@ -189,7 +189,7 @@ The host is intentionally light: identity, persistence, handshakes, and transfer
 ### Headless client
 
 ```ts
-import { createRendezvousClient } from '@instanthero/rendezvous';
+import { buildInviteUrl, createRendezvousClient } from '@instanthero/rendezvous';
 
 const client = createRendezvousClient({
   signalUrl: 'wss://signal.example.com/signal',
@@ -206,18 +206,22 @@ client.on('transfer', (event) => {});
 await client.start();
 await client.setCodeName('Ana');
 
-const link = await client.createInviteLink();
+const record = await client.scheduleRendezvousForNewPerson({
+  photo: file,
+  scheduledFor: Date.now() + 60 * 60 * 1000,
+});
+const link = buildInviteUrl(record.inviteToken!);
 const words = await client.verificationWordsFor(humanId);
 await client.markHumanVerified(humanId);
 
-const record = await client.scheduleRendezvous({
+const existing = await client.scheduleRendezvous({
   humanId,
   photo: file, // stays local until both peers are online
   scheduledFor: Date.now() + 60 * 60 * 1000,
 });
 ```
 
-Useful methods: `start`, `stop`, `getSnapshot`, `setCodeName`, `createInviteLink`, `verificationWordsFor`, `markHumanVerified`, `removeHuman`, `scheduleRendezvous`, `deleteRendezvous`.
+Useful methods: `start`, `stop`, `getSnapshot`, `setCodeName`, `scheduleRendezvousForNewPerson`, `verificationWordsFor`, `markHumanVerified`, `removeHuman`, `scheduleRendezvous`, `deleteRendezvous`.
 
 ### Fonts when packaging the UI
 
@@ -240,9 +244,9 @@ Browser A ◄══════ WebRTC data channel ══════► Browse
 ```
 
 1. Each browser creates a persistent P-256 identity keypair in IndexedDB.
-2. The invitation link embeds the inviter's public identity, name, and a signature. The invitee pins it.
+2. The invitation link embeds the inviter's public identity, name, signature, and the already-saved rendezvous metadata. The invitee pins it and immediately has the appointment.
 3. Both browsers authenticate to the signalling server with a signed nonce challenge.
-4. The server stores appointment metadata and delivers it to the recipient whenever they next connect. It does not deliver the photo.
+4. For an already-linked human, the server stores appointment metadata and delivers it whenever they next connect. A **someone new** recipient already received the same appointment from the invitation link. The server never delivers the photo.
 5. Inside the five-minute early/late handoff window, if both humans are online, the sender opens a direct RTC session. Both being online beforehand is enough; they connect when the window opens.
 6. Before sending photo bytes, both peers sign both DTLS fingerprints with their long-term keys and verify against the pinned keys.
 7. The photo is chunked over an ordered data channel; the recipient stores the completed Blob and ACKs. Only then does the sender mark it delivered.

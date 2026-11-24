@@ -15,7 +15,6 @@ import {
 import { AudioSession } from './audio';
 import { handoffPhase, isHandoffEligible } from './handoff';
 import {
-  buildInviteUrl,
   clearInviteFromUrl,
   createInviteToken,
   createJoinRequest,
@@ -35,6 +34,7 @@ import {
 } from './possession';
 import type {
   CircleRendezvousInvite,
+  InvitePayload,
   JoinRequest,
   PresenceEntry,
   RendezvousNotice,
@@ -59,6 +59,7 @@ import {
   type ClientNotice,
   type ContributionInput,
   type Human,
+  type NewPersonScheduleInput,
   type PossessionView,
   type PublicIdentity,
   type RendezvousClientEvents,
@@ -488,6 +489,8 @@ export class RendezvousClient {
       record.reciprocal ??= null;
       record.sessionStartedAt ??= null;
       record.audioWindowUsedAt ??= null;
+      record.liveAudioDisabled ??= false;
+      record.inviteToken ??= null;
       if (record.photo && !record.photo.photoId) {
         record.photo = await makePhotoAttachment({
           photo: record.photo.blob,
@@ -573,6 +576,9 @@ export class RendezvousClient {
         inviteHash,
       );
       if (!human) return;
+      if (invite.rendezvous) {
+        await this.storeInvitedRendezvous(invite, human);
+      }
       const join = await createJoinRequest({
         identity: this.identity,
         inviterId: invite.id,
@@ -582,9 +588,12 @@ export class RendezvousClient {
       this.notice({
         tone: 'success',
         code: 'human-added',
-        message: `The link is saved. You and ${displayName(human.name)} will find each other whenever you’re both here.`,
+        message: invite.rendezvous
+          ? `The link opened. Your rendezvous with ${displayName(human.name)} is already here.`
+          : `The link is saved. You and ${displayName(human.name)} will find each other whenever you’re both here.`,
         humanId: human.id,
       });
+      this.emitState();
       void this.flushPending();
     } catch (error) {
       this.notice({
@@ -596,6 +605,53 @@ export class RendezvousClient {
             : 'That invitation link is not valid.',
       });
     }
+  }
+
+  private async storeInvitedRendezvous(
+    invite: InvitePayload,
+    human: Human,
+  ): Promise<void> {
+    const pending = invite.rendezvous;
+    if (!pending) return;
+    const existing = this.rendezvous.get(pending.id);
+    if (existing) {
+      if (existing.direction !== 'incoming') return;
+      existing.peerName = human.name || existing.peerName;
+      existing.scheduledFor = pending.scheduledFor;
+      existing.createdAt = pending.createdAt;
+      existing.liveAudioDisabled = pending.liveAudioDisabled === true;
+      existing.status = isHandoffEligible(existing.scheduledFor)
+        ? existing.status === 'connecting' || existing.status === 'transferring'
+          ? existing.status
+          : 'waiting'
+        : existing.status === 'delivered'
+          ? 'delivered'
+          : 'scheduled';
+      await this.store.putRendezvous(existing);
+      return;
+    }
+    const record: StoredRendezvous = {
+      id: pending.id,
+      direction: 'incoming',
+      peerId: invite.id,
+      peerName: human.name,
+      createdAt: pending.createdAt,
+      scheduledFor: pending.scheduledFor,
+      status: isHandoffEligible(pending.scheduledFor) ? 'waiting' : 'scheduled',
+      photo: null,
+      contribution: null,
+      reciprocal: null,
+      sessionStartedAt: null,
+      audioWindowUsedAt: null,
+      liveAudioDisabled: pending.liveAudioDisabled === true,
+      inviteToken: null,
+      announcedAt: null,
+      lastAttemptAt: null,
+      deliveredAt: null,
+      error: null,
+    };
+    this.rendezvous.set(record.id, record);
+    await this.store.putRendezvous(record);
   }
 
   private handleSignalStatus(status: SignalStatus): void {
@@ -682,6 +738,8 @@ export class RendezvousClient {
     for (const record of this.rendezvous.values()) {
       if (
         record.direction === 'outgoing' &&
+        Boolean(record.peerId) &&
+        record.status !== 'awaiting-join' &&
         !record.deliveredAt &&
         !record.announcedAt &&
         !this.announceInFlight.has(record.id) &&
@@ -702,6 +760,7 @@ export class RendezvousClient {
       toId: record.peerId,
       scheduledFor: record.scheduledFor,
       createdAt: record.createdAt,
+      liveAudioDisabled: record.liveAudioDisabled,
     };
     const sent = transport.send({ type: 'rendezvous:create', rendezvous: wire });
     if (sent) {
@@ -840,6 +899,26 @@ export class RendezvousClient {
     this.emit('state', this.getSnapshot());
   }
 
+  private async attachInvitationRendezvous(
+    invite: InvitePayload,
+    sender: PublicIdentity,
+  ): Promise<void> {
+    const pending = invite.rendezvous;
+    if (!pending) return;
+    const record = this.rendezvous.get(pending.id);
+    if (!record || record.direction !== 'outgoing') return;
+    if (record.peerId && record.peerId !== sender.id) return;
+    record.peerId = sender.id;
+    record.peerName = sender.name;
+    record.status = isHandoffEligible(record.scheduledFor) ? 'waiting' : 'scheduled';
+    record.inviteToken = null;
+    record.announcedAt = record.announcedAt ?? Date.now();
+    record.error = null;
+    await this.store.putRendezvous(record);
+    this.emitState();
+    void this.processDue();
+  }
+
   private async handleIncomingJoin(join: JoinRequest): Promise<void> {
     const identity = this.requireIdentity();
     const inviteHash = await hashToken(join.token);
@@ -886,6 +965,7 @@ export class RendezvousClient {
 
     try {
       const human = await this.addHuman(verified.sender, inviteHash);
+      await this.attachInvitationRendezvous(verified.invite, verified.sender);
       this.joinRetryNotified.delete(join.id);
       if (human && !existing) {
         this.notice({
@@ -987,6 +1067,8 @@ export class RendezvousClient {
         reciprocal: null,
         sessionStartedAt: null,
         audioWindowUsedAt: null,
+        liveAudioDisabled: notice.liveAudioDisabled === true,
+        inviteToken: null,
         announcedAt: null,
         lastAttemptAt: null,
         deliveredAt: null,
@@ -996,6 +1078,9 @@ export class RendezvousClient {
     } else {
       record.scheduledFor = notice.scheduledFor;
       record.peerName = human.name || notice.fromName;
+      if (typeof notice.liveAudioDisabled === 'boolean') {
+        record.liveAudioDisabled = notice.liveAudioDisabled;
+      }
     }
 
     await this.store.putRendezvous(record);
@@ -1145,6 +1230,8 @@ export class RendezvousClient {
       reciprocal: null,
       sessionStartedAt: null,
       audioWindowUsedAt: null,
+      liveAudioDisabled: false,
+      inviteToken: null,
       announcedAt: null,
       lastAttemptAt: null,
       deliveredAt: null,
@@ -1318,7 +1405,7 @@ export class RendezvousClient {
     let changed = false;
     try {
       for (const record of sortRendezvous(this.rendezvous.values())) {
-        if (isDelivered(record)) continue;
+        if (isDelivered(record) || record.status === 'awaiting-join') continue;
         const phase = handoffPhase(record.scheduledFor, now);
         const eligible = phase !== 'scheduled';
         const human = this.humans.get(record.peerId);
@@ -1517,10 +1604,6 @@ export class RendezvousClient {
     this.emitState();
   }
 
-  async createInviteLink(): Promise<string> {
-    return buildInviteUrl(await createInviteToken(this.requireIdentity()));
-  }
-
   async verificationWordsFor(humanId: string): Promise<string[]> {
     const human = this.humans.get(humanId);
     if (!human) throw new RendezvousClientError('no-human', 'That human is not connected.');
@@ -1640,6 +1723,8 @@ export class RendezvousClient {
       reciprocal: null,
       sessionStartedAt: null,
       audioWindowUsedAt: null,
+      liveAudioDisabled: input.liveAudioDisabled === true,
+      inviteToken: null,
       announcedAt: null,
       lastAttemptAt: null,
       deliveredAt: null,
@@ -1649,6 +1734,71 @@ export class RendezvousClient {
     this.rendezvous.set(record.id, record);
     this.emitState();
     this.announce(record);
+    return cloneRecord(record);
+  }
+
+  /**
+   * Schedule a rendezvous for someone who has not joined yet. The invitation
+   * link carries the already-saved appointment; no human is created until the
+   * link is redeemed.
+   */
+  async scheduleRendezvousForNewPerson(
+    input: NewPersonScheduleInput,
+  ): Promise<StoredRendezvous> {
+    const photo = input.photo;
+    if (!photo || photo.size <= 0) {
+      throw new RendezvousClientError('invalid-photo', 'Choose a photograph first.');
+    }
+    if (photo.size > MAX_PHOTO_BYTES) {
+      throw new RendezvousClientError('photo-too-large', 'Photographs must be 25 MB or smaller.');
+    }
+    if (!photo.type.startsWith('image/')) {
+      throw new RendezvousClientError('invalid-photo', 'That file is not an image.');
+    }
+    if (!Number.isFinite(input.scheduledFor) || input.scheduledFor <= Date.now() + 500) {
+      throw new RendezvousClientError('invalid-time', 'Choose a moment in the near future.');
+    }
+    if (input.note && !isValidVoiceNote(input.note)) {
+      throw new RendezvousClientError('invalid-photo', 'That voice note cannot be attached.');
+    }
+    const identity = this.requireIdentity();
+    const id = `rv_${randomToken(12)}`;
+    const createdAt = Date.now();
+    const attachment = await makePhotoAttachment({
+      photo,
+      fileName: input.fileName,
+      note: input.note,
+    });
+    const inviteRendezvous = {
+      id,
+      scheduledFor: input.scheduledFor,
+      createdAt,
+      ...(input.liveAudioDisabled ? { liveAudioDisabled: true } : {}),
+    };
+    const inviteToken = await createInviteToken(identity, inviteRendezvous);
+    const record: StoredRendezvous = {
+      id,
+      direction: 'outgoing',
+      peerId: '',
+      peerName: '',
+      createdAt,
+      scheduledFor: input.scheduledFor,
+      status: 'awaiting-join',
+      photo: attachment,
+      contribution: null,
+      reciprocal: null,
+      sessionStartedAt: null,
+      audioWindowUsedAt: null,
+      liveAudioDisabled: input.liveAudioDisabled === true,
+      inviteToken,
+      announcedAt: null,
+      lastAttemptAt: null,
+      deliveredAt: null,
+      error: null,
+    };
+    await this.store.putRendezvous(record);
+    this.rendezvous.set(record.id, record);
+    this.emitState();
     return cloneRecord(record);
   }
 
@@ -1765,6 +1915,12 @@ export class RendezvousClient {
     }
     if (!isHandoffEligible(record.scheduledFor)) {
       throw new RendezvousClientError('invalid-time', 'The handoff window is not open yet.');
+    }
+    if (record.liveAudioDisabled) {
+      throw new RendezvousClientError(
+        'invalid-time',
+        'Live audio is off for this rendezvous.',
+      );
     }
     if (record.audioWindowUsedAt) {
       throw new RendezvousClientError('invalid-time', 'The minute for this rendezvous is already used.');
@@ -1901,6 +2057,7 @@ export class RendezvousClient {
         !human ||
         human.id !== fromId ||
         typeof message.sessionId !== 'string' ||
+        record.liveAudioDisabled ||
         record.audioWindowUsedAt ||
         !isHandoffEligible(record.scheduledFor)
       ) {
@@ -1963,7 +2120,8 @@ export class RendezvousClient {
         !request ||
         request.sessionId !== message.sessionId ||
         request.peerId !== fromId ||
-        !record
+        !record ||
+        record.liveAudioDisabled
       ) {
         return;
       }
@@ -2008,7 +2166,7 @@ export class RendezvousClient {
     const record = this.rendezvous.get(request.rendezvousId);
     const human = this.humans.get(request.peerId);
     const identity = this.identity;
-    if (!record || !human || !identity) return;
+    if (!record || !human || !identity || record.liveAudioDisabled) return;
     this.audioSessionId = request.sessionId;
     this.audioSessionPeer = request.peerId;
     this.audio = {

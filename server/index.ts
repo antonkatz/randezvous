@@ -201,6 +201,7 @@ function deliverPending(target: ClientState): void {
           fromName: rendezvous.fromName,
           scheduledFor: rendezvous.scheduledFor,
           createdAt: rendezvous.createdAt,
+          liveAudioDisabled: rendezvous.liveAudioDisabled === true,
         },
       });
     }
@@ -238,7 +239,9 @@ function sanitizeRendezvous(value: unknown, state: ClientState): RendezvousWire 
     typeof input.scheduledFor !== 'number' ||
     !Number.isFinite(input.scheduledFor) ||
     input.scheduledFor < 0 ||
-    input.scheduledFor > Date.now() + 10 * 365 * 24 * 60 * 60 * 1000
+    input.scheduledFor > Date.now() + 10 * 365 * 24 * 60 * 60 * 1000 ||
+    (input.liveAudioDisabled !== undefined &&
+      typeof input.liveAudioDisabled !== 'boolean')
   ) {
     return null;
   }
@@ -249,6 +252,7 @@ function sanitizeRendezvous(value: unknown, state: ClientState): RendezvousWire 
     toId: input.toId,
     scheduledFor: input.scheduledFor,
     createdAt: Date.now(),
+    liveAudioDisabled: input.liveAudioDisabled === true,
   };
 }
 
@@ -379,6 +383,7 @@ async function handleInviteJoin(state: ClientState, join: JoinRequest): Promise<
     return;
   }
 
+  let tokenHash: string;
   try {
     const invite = await verifyInviteToken(join.token);
     if (invite.id !== join.to) throw new Error('wrong target');
@@ -387,7 +392,8 @@ async function handleInviteJoin(state: ClientState, join: JoinRequest): Promise<
       name: invite.name,
       publicKey: invite.publicKey,
     });
-    if (store.hasRevokedInvite(await hashToken(join.token))) {
+    tokenHash = await hashToken(join.token);
+    if (store.hasRevokedInvite(tokenHash)) {
       send(state.ws, {
         type: 'invite:rejected',
         joinId: join.id,
@@ -401,10 +407,29 @@ async function handleInviteJoin(state: ClientState, join: JoinRequest): Promise<
     return;
   }
 
+  const binding = store.inviteBinding(tokenHash);
+  if (binding && binding.inviteeId !== join.from.id) {
+    send(state.ws, {
+      type: 'invite:rejected',
+      joinId: join.id,
+      inviterId: join.to,
+      reason: 'This invitation has already been claimed by another browser.',
+    });
+    return;
+  }
+  if (!binding) {
+    store.bindInvite({
+      hash: tokenHash,
+      inviterId: join.to,
+      inviteeId: join.from.id,
+      createdAt: Date.now(),
+    });
+  }
+
   if (!store.joins.some((entry) => entry.id === join.id)) {
     store.addJoin(join);
-    await store.persist();
   }
+  await store.persist();
   send(state.ws, { type: 'invite:queued', joinId: join.id });
   deliverJoin(join);
 }
@@ -494,6 +519,7 @@ async function handleRendezvousCreate(state: ClientState, input: unknown): Promi
         fromName: rendezvous.fromName,
         scheduledFor: rendezvous.scheduledFor,
         createdAt: rendezvous.createdAt,
+        liveAudioDisabled: rendezvous.liveAudioDisabled === true,
       },
     });
   }

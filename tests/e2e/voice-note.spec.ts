@@ -1,29 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-
-async function setName(page: Page, name: string): Promise<void> {
-  await page.locator('#code-name').fill(name);
-  await page.locator('#code-name').blur();
-}
-
-async function link(ana: Page, baz: Page): Promise<void> {
-  await ana.goto('/');
-  await setName(ana, 'Ana');
-  await baz.goto('/');
-  await setName(baz, 'Baz');
-  await ana.waitForTimeout(250);
-  await ana.getByRole('button', { name: 'add human' }).click();
-  await ana.waitForFunction(() => {
-    const root = document.querySelector('rendezvous-app')?.shadowRoot;
-    return Boolean(root?.querySelector<HTMLInputElement>('#invite-link')?.value.startsWith('http'));
-  });
-  const linkUrl = await ana.locator('#invite-link').inputValue();
-  await ana.locator('#invite-close').click();
-  await baz.goto(linkUrl);
-  await expect(ana.locator('#humans-list')).toContainText('Baz');
-  await expect(baz.locator('#humans-list')).toContainText('Ana');
-  await expect(ana.locator('#humans-list')).toContainText('here now');
-  await expect(baz.locator('#humans-list')).toContainText('here now');
-}
+import { linkPages } from './helpers';
 
 async function snapshot(page: Page) {
   return page.evaluate(() => {
@@ -63,7 +39,7 @@ test('a voice note travels with the photo and follows a local re-share', async (
   ana.on('pageerror', (error) => errors.push(`Ana: ${error.message}`));
   baz.on('pageerror', (error) => errors.push(`Baz: ${error.message}`));
 
-  await link(ana, baz);
+  await linkPages(ana, baz);
   const humanId = (await snapshot(ana)).humans[0]?.id;
   expect(humanId).toBeTruthy();
 
@@ -161,7 +137,7 @@ test('a voice note travels with the photo and follows a local re-share', async (
   await expect(ana.locator('#photo-preview')).toBeVisible();
   await expect(ana.locator('#composer-note-attached')).toBeVisible();
   await expect(ana.locator('#composer-note-audio')).toHaveAttribute('src', /^blob:/u);
-  await ana.locator('.human-option').first().click();
+  await ana.locator('.human-option:not(.is-new)').first().click();
   await ana.locator('#rv-next').click();
   const target = await ana.evaluate(() => {
     const date = new Date(Date.now() + 5 * 60_000);

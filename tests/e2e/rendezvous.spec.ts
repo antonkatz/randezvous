@@ -1,10 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createFreshLink, linkPages, setName } from './helpers';
 import { readFile } from 'node:fs/promises';
-
-async function setName(page: Page, name: string): Promise<void> {
-  await page.locator('#code-name').fill(name);
-  await page.locator('#code-name').blur();
-}
 
 async function snapshot(page: Page) {
   return page.evaluate(() => {
@@ -24,33 +20,6 @@ async function snapshot(page: Page) {
       network: { remoteFamily: string; dualStack: boolean; warning: string | null } | null;
     };
   });
-}
-
-async function createInvite(page: Page): Promise<string> {
-  await page.getByRole('button', { name: 'add human' }).click();
-  await page.waitForFunction(() => {
-    const root = document.querySelector('rendezvous-app')?.shadowRoot;
-    const input = root?.querySelector<HTMLInputElement>('#invite-link');
-    return Boolean(input?.value.startsWith('http'));
-  });
-  const link = await page.locator('#invite-link').inputValue();
-  await page.locator('#invite-close').click();
-  return link;
-}
-
-async function linkPages(ana: Page, baz: Page): Promise<string> {
-  await ana.goto('/');
-  await setName(ana, 'Ana');
-  await baz.goto('/');
-  await setName(baz, 'Baz');
-  await ana.waitForTimeout(250);
-  const link = await createInvite(ana);
-  await baz.goto(link);
-  await expect(ana.locator('#humans-list')).toContainText('Baz');
-  await expect(baz.locator('#humans-list')).toContainText('Ana');
-  await expect(ana.locator('#humans-list')).toContainText('here now');
-  await expect(baz.locator('#humans-list')).toContainText('here now');
-  return link;
 }
 
 test('links two browsers, matches verification words, and hands off a photo only when both are present', async ({
@@ -171,7 +140,14 @@ test('links two browsers, matches verification words, and hands off a photo only
   expect(diagnostics).not.toBeNull();
 
   // The production build path through the server's static handler and diagnostics panel works.
-  await ana.getByRole('button', { name: 'Open connection diagnostics' }).click();
+  await expect(ana.locator('#signal-label')).toHaveText('live');
+  const signalBox = await ana.locator('#signal-button').boundingBox();
+  const anaViewport = ana.viewportSize();
+  expect(signalBox).not.toBeNull();
+  expect(anaViewport).not.toBeNull();
+  expect(signalBox!.x + signalBox!.width).toBeGreaterThan(anaViewport!.width - 40);
+  expect(signalBox!.y).toBeLessThan(30);
+  await ana.getByRole('button', { name: /Current status: live/u }).click();
   await expect(ana.locator('#diagnostics-panel')).toContainText(/this socket/iu);
   await expect(ana.locator('#diagnostics-panel')).toContainText('IPv4');
   await expect(ana.locator('#diagnostics-panel')).toContainText('single-stack');
@@ -309,7 +285,7 @@ test('removing a human revokes the old invite so it cannot reconnect', async ({ 
   const bazContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const ana = await anaContext.newPage();
   const baz = await bazContext.newPage();
-  const link = await linkPages(ana, baz);
+  const { link } = await linkPages(ana, baz);
 
   await ana.locator('.human-chip').first().click();
   await ana.locator('#remove-human').click();
@@ -335,7 +311,7 @@ test('removing a human revokes the old invite so it cannot reconnect', async ({ 
   await expect(ana.locator('#humans-list')).toContainText('No humans yet');
 
   // A fresh invitation is a new capability and works.
-  const freshLink = await createInvite(ana);
+  const freshLink = await createFreshLink(ana);
   await cy.goto(freshLink);
   await expect(ana.locator('#humans-list')).toContainText('Cy');
   await expect(cy.locator('#humans-list')).toContainText('Ana');

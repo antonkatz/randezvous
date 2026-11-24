@@ -12,7 +12,12 @@ import {
   verifyDomain,
   verifyText,
 } from './crypto';
-import type { InvitePayload, JoinRequest, PublicIdentityClaim } from './protocol';
+import type {
+  InvitePayload,
+  InviteRendezvous,
+  JoinRequest,
+  PublicIdentityClaim,
+} from './protocol';
 import type { PublicIdentity, StoredIdentity } from './types';
 
 const INVITE_VERSION = 'v1';
@@ -22,6 +27,38 @@ const JOIN_PROOF_TRANSCRIPT_VERSION = 'rendezvous/join-proof/v1';
 
 function invitePayloadBytes(payload: InvitePayload): Uint8Array {
   return utf8(JSON.stringify(payload));
+}
+
+function parseRendezvous(value: unknown): InviteRendezvous | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid invitation');
+  }
+  const rendezvous = value as Partial<InviteRendezvous>;
+  if (
+    typeof rendezvous.id !== 'string' ||
+    rendezvous.id.length === 0 ||
+    rendezvous.id.length > 128 ||
+    typeof rendezvous.scheduledFor !== 'number' ||
+    !Number.isSafeInteger(rendezvous.scheduledFor) ||
+    rendezvous.scheduledFor < 0 ||
+    typeof rendezvous.createdAt !== 'number' ||
+    !Number.isSafeInteger(rendezvous.createdAt) ||
+    rendezvous.createdAt < 0 ||
+    (rendezvous.liveAudioDisabled !== undefined &&
+      typeof rendezvous.liveAudioDisabled !== 'boolean')
+  ) {
+    throw new Error('Invalid invitation');
+  }
+  const parsed: InviteRendezvous = {
+    id: rendezvous.id,
+    scheduledFor: rendezvous.scheduledFor,
+    createdAt: rendezvous.createdAt,
+  };
+  if (typeof rendezvous.liveAudioDisabled === 'boolean') {
+    parsed.liveAudioDisabled = rendezvous.liveAudioDisabled;
+  }
+  return parsed;
 }
 
 function parsePayload(raw: string): InvitePayload {
@@ -42,7 +79,8 @@ function parsePayload(raw: string): InvitePayload {
   ) {
     throw new Error('Invalid invitation');
   }
-  return {
+  const rendezvous = parseRendezvous(payload.rendezvous);
+  const parsedPayload: InvitePayload = {
     v: 1,
     id: payload.id,
     name: normalizeName(payload.name),
@@ -50,9 +88,14 @@ function parsePayload(raw: string): InvitePayload {
     issuedAt: payload.issuedAt,
     nonce: payload.nonce,
   };
+  if (rendezvous) parsedPayload.rendezvous = rendezvous;
+  return parsedPayload;
 }
 
-export async function createInviteToken(identity: StoredIdentity): Promise<string> {
+export async function createInviteToken(
+  identity: StoredIdentity,
+  rendezvous?: InviteRendezvous,
+): Promise<string> {
   const payload: InvitePayload = {
     v: 1,
     id: identity.id,
@@ -61,6 +104,7 @@ export async function createInviteToken(identity: StoredIdentity): Promise<strin
     issuedAt: Date.now(),
     nonce: randomToken(12),
   };
+  if (rendezvous) payload.rendezvous = rendezvous;
   const bytes = invitePayloadBytes(payload);
   const signature = await signDomain(identity.privateKey, INVITE_DOMAIN, bytes);
   return `${INVITE_VERSION}.${bytesToBase64Url(bytes)}.${signature}`;

@@ -41,6 +41,7 @@ import {
 } from '../../circles/ui';
 import { displayName, normalizeName } from '../crypto';
 import { formatCountdown, handoffPhase } from '../handoff';
+import { buildInviteUrl } from '../invite';
 import { formatDuration, MAX_VOICE_NOTE_MS } from '../media';
 import { RendezvousClient } from '../client';
 import { RendezvousStore } from '../store';
@@ -50,6 +51,7 @@ import type {
   AudioSnapshot,
   ClientNotice,
   Human,
+  PhotoAttachment,
   PossessionView,
   RendezvousSnapshot,
   StoredPrint,
@@ -58,36 +60,20 @@ import type {
   VoiceNoteAttachment,
 } from '../types';
 
+const NEW_PERSON_ID = '__someone_new__';
+
 const TEMPLATE = `
 <style>${styles}</style>
 <div class="app is-loading" id="app">
   <p class="masthead">
     <span class="masthead-name">rendezvous</span>
+    <span class="masthead-star" aria-hidden="true">✳</span>
     <span class="masthead-by">by</span>
     <span class="masthead-stamp" role="img" aria-label="InstantHero">${instantHeroMark}</span>
   </p>
 
   <header class="topbar">
-    <div class="add-slot" id="add-slot">
-      <div class="add-area" id="add-area">
-        <button class="add-human" id="add-human" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="invite-popover">
-          <span class="add-glyph" aria-hidden="true">+</span>
-          <span>add human</span>
-        </button>
-        <section class="invite-popover" id="invite-popover" role="dialog" aria-label="Add a human" hidden>
-          <button class="popover-close" id="invite-close" type="button" aria-label="Close">×</button>
-          <p class="popover-kicker">a link with a key inside</p>
-          <h2>Add a human.</h2>
-          <p class="invite-copy">Send this to one person. Their browser and yours become permanently linked, and will find each other whenever you’re both here.</p>
-          <label class="invite-label" for="invite-link">your invitation</label>
-          <div class="link-row">
-            <input class="invite-link" id="invite-link" readonly value="creating your link…">
-            <button class="copy-link" id="copy-link" type="button">copy</button>
-          </div>
-          <p class="invite-fineprint">A live connection is never left open. This link is a standing invitation. Remove the human to revoke it.</p>
-        </section>
-      </div>
-    </div>
+    <div class="add-slot" aria-hidden="true"></div>
 
     <div class="name-area">
       <label class="sr-only" for="code-name">Code name</label>
@@ -101,7 +87,7 @@ const TEMPLATE = `
     <div class="diag-area" id="diag-area">
       <button class="signal-button" id="signal-button" type="button" data-status="starting" aria-expanded="false" aria-controls="diagnostics-panel" aria-label="Connection diagnostics">
         <span class="signal-dot" aria-hidden="true"></span>
-        <span class="signal-label" id="signal-label">signal</span>
+        <span class="signal-label" id="signal-label">starting</span>
       </button>
       <section class="diagnostics" id="diagnostics-panel" role="dialog" aria-label="Connection diagnostics" hidden>
         <div class="diag-title">
@@ -261,6 +247,15 @@ const TEMPLATE = `
         </div>
       </div>
 
+      <label class="speak-option">
+        <input type="checkbox" id="rv-audio-disabled">
+        <span class="speak-option-check" aria-hidden="true"></span>
+        <span class="speak-option-copy">
+          <span class="speak-option-label">I won’t be able to speak</span>
+          <span class="speak-option-note">Live audio will be off for this rendezvous.</span>
+        </span>
+      </label>
+
       <p class="critical-note">This is a meeting. At the chosen moment, the photograph moves only if both browsers are open and online. Otherwise it waits for your next overlap.</p>
       <p class="field-error" id="rv-error" hidden></p>
 
@@ -274,12 +269,21 @@ const TEMPLATE = `
       <div class="done-mark" aria-hidden="true">✓</div>
       <h3>DONE.</h3>
       <p class="done-summary" id="done-summary"></p>
+      <p class="done-audio-off" id="done-audio-off" hidden>Live audio off · I won’t be able to speak.</p>
       <dl class="done-detail">
         <dt>for</dt><dd id="done-human"></dd>
         <dt>at</dt><dd id="done-moment"></dd>
         <dt>the photograph</dt><dd id="done-photo"></dd>
       </dl>
-      <p class="critical-note">The photo is still here. It will only travel when you are both present at the same time. We’ll tell them when they next arrive.</p>
+      <div class="done-link-block" id="done-link-block" hidden>
+        <p class="done-link-kicker">their invitation</p>
+        <p class="done-link-copy">Send this link to one person. Opening it creates your human link and puts this rendezvous in their upcoming list immediately.</p>
+        <div class="link-row">
+          <input class="done-link" id="done-link" readonly value="">
+          <button class="copy-link" id="done-link-copy" type="button">copy</button>
+        </div>
+      </div>
+      <p class="critical-note" id="done-note">The photo is still here. It will only travel when you are both present at the same time. We’ll tell them when they next arrive.</p>
       <div class="done-actions">
         <p>You can close this. Keep Rendezvous open at the appointed time.</p>
         <button class="primary" id="rv-finish" type="button">Done</button>
@@ -322,6 +326,80 @@ const TEMPLATE = `
         <button class="back-button" id="cancel-remove" type="button">Keep</button>
       </div>
     </div>
+  </div>
+</dialog>
+
+<dialog class="modal rendezvous-detail" id="rendezvous-detail-dialog" aria-labelledby="rv-detail-title">
+  <div class="modal-card rv-detail-card">
+    <div class="rv-detail-head">
+      <button class="rv-detail-human" id="rv-detail-human" type="button">
+        <span class="human-avatar" id="rv-detail-avatar" aria-hidden="true"></span>
+        <span class="rv-detail-human-copy">
+          <span class="modal-kicker" id="rv-detail-kicker">a rendezvous</span>
+          <span class="rv-detail-title" id="rv-detail-title">with them</span>
+          <span class="human-sub" id="rv-detail-sub"></span>
+        </span>
+      </button>
+      <button class="modal-close" id="rv-detail-close" type="button" aria-label="Close">×</button>
+    </div>
+
+    <div class="rv-detail-moment">
+      <span class="rv-detail-when" id="rv-detail-moment"></span>
+      <span class="rv-detail-window" id="rv-detail-window"></span>
+      <span class="rv-detail-state" id="rv-detail-state" aria-live="polite"></span>
+    </div>
+
+    <section class="rv-detail-exchange" aria-labelledby="rv-detail-exchange-title">
+      <div class="rv-detail-exchange-head">
+        <p class="modal-kicker" id="rv-detail-exchange-title">what you’re bringing</p>
+        <span class="badge is-unverified" id="rv-detail-direction">toward them</span>
+      </div>
+      <div class="rv-detail-attachment">
+        <img class="rv-detail-photo" id="rv-detail-photo" alt="" hidden>
+        <div class="rv-detail-photo-empty" id="rv-detail-photo-empty" aria-hidden="true">
+          <span class="plus-ring">+</span>
+        </div>
+        <div class="rv-detail-attachment-copy">
+          <p class="rv-detail-photo-state" id="rv-detail-photo-state">your photo · not added yet</p>
+          <p class="rv-detail-photo-meta" id="rv-detail-photo-meta"></p>
+          <div class="voice-note-attached" id="rv-detail-note" hidden>
+            <audio id="rv-detail-note-audio" controls preload="metadata"></audio>
+            <span class="note-duration" id="rv-detail-note-duration"></span>
+          </div>
+        </div>
+      </div>
+      <p class="rv-detail-peer-state" id="rv-detail-peer-state"></p>
+      <p class="rv-detail-audio-off" id="rv-detail-audio-off" hidden>Live audio off for this rendezvous.</p>
+      <div class="rv-detail-actions">
+        <button class="secondary" id="rv-detail-share" type="button" hidden>share link</button>
+        <button class="secondary" id="rv-detail-add" type="button" hidden>add a photo</button>
+        <button class="secondary" id="rv-detail-live" type="button" hidden>live</button>
+        <button class="note-action quiet" id="rv-detail-replace" type="button" hidden>replace</button>
+        <button class="note-action quiet" id="rv-detail-remove" type="button" hidden>remove</button>
+      </div>
+    </section>
+
+    <section class="rv-detail-verify" id="rv-detail-verify-section">
+      <button
+        class="rv-detail-verify-toggle"
+        id="rv-detail-verify-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="rv-detail-verify-panel"
+      >
+        <span>comparison words · <span id="rv-detail-verify-badge">not verified</span></span>
+        <span class="rv-detail-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <div class="rv-detail-verify-panel" id="rv-detail-verify-panel" hidden>
+        <ol class="verification-words" id="rv-detail-verification-words" aria-label="Eight verification words"></ol>
+        <p class="verify-instruction">Say these eight words out loud, or compare them in another app. If they match, nobody swapped your keys. Do not send the words through the same link.</p>
+        <div class="verify-actions">
+          <button class="secondary" id="rv-detail-mark-verified" type="button">Mark as verified</button>
+        </div>
+      </div>
+    </section>
+
+    <p class="rv-detail-footnote" id="rv-detail-footnote">The photo stays on this device until you are both here at the same time.</p>
   </div>
 </dialog>
 
@@ -446,6 +524,7 @@ const TEMPLATE = `
         <button class="back-button" id="live-not-now" type="button">Not now</button>
       </div>
       <p class="live-audio-message" id="live-audio-message" aria-live="polite"></p>
+      <p class="live-audio-disabled" id="live-audio-disabled" hidden>Live audio is off for this rendezvous.</p>
     </div>
     <div class="live-actions">
       <button class="back-button" id="live-close" type="button">back to the wall</button>
@@ -570,7 +649,6 @@ export class RendezvousApp extends HTMLElement {
   private countdownTimer: number | null = null;
   private nameSaveTimer: number | null = null;
   private copyResetTimer: number | null = null;
-  private inviteOpen = false;
   private diagnosticsOpen = false;
   private rvStep = 1;
   private selectedHumanId: string | null = null;
@@ -596,6 +674,12 @@ export class RendezvousApp extends HTMLElement {
   private audioStripOpen = false;
   private activeHumanId: string | null = null;
   private verificationRequest = 0;
+  private detailRecordId: string | null = null;
+  private detailVerificationRequest = 0;
+  private detailPhotoUrl: string | null = null;
+  private detailNoteUrl: string | null = null;
+  private detailAttachmentKey: string | null = null;
+  private detailNoteKey: string | null = null;
   private viewerRecordId: string | null = null;
   private viewerPrintId: string | null = null;
   private viewerPhotoId: string | null = null;
@@ -629,7 +713,6 @@ export class RendezvousApp extends HTMLElement {
 
   private readonly onDocumentPointerDown = (event: PointerEvent): void => {
     const path = event.composedPath();
-    if (this.inviteOpen && !path.includes(this.$('#add-area'))) this.closeInvite();
     if (this.diagnosticsOpen && !path.includes(this.$('#diag-area'))) {
       this.closeDiagnostics();
     }
@@ -642,7 +725,6 @@ export class RendezvousApp extends HTMLElement {
 
   private readonly onDocumentKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== 'Escape') return;
-    if (this.inviteOpen) this.closeInvite();
     if (this.diagnosticsOpen) this.closeDiagnostics();
   };
 
@@ -702,6 +784,7 @@ export class RendezvousApp extends HTMLElement {
     this.toasts.clear();
     this.revokeObjectUrls();
     this.closePhotoViewer();
+    this.closeRendezvousDetail();
     this.client?.stop();
     this.client = null;
     this.state = null;
@@ -1484,9 +1567,7 @@ export class RendezvousApp extends HTMLElement {
   }
 
   private bindStaticEvents(): void {
-    this.$('#add-human').addEventListener('click', () => void this.toggleInvite());
-    this.$('#invite-close').addEventListener('click', () => this.closeInvite());
-    this.$('#copy-link').addEventListener('click', () => void this.copyInviteLink());
+    this.$('#done-link-copy').addEventListener('click', () => void this.copyDoneLink());
     this.$('#signal-button').addEventListener('click', () => this.toggleDiagnostics());
     this.$('#set-rendezvous').addEventListener('click', () => this.openRendezvous());
     const circleBar = this.$<CircleBar>('#circle-bar');
@@ -1506,6 +1587,15 @@ export class RendezvousApp extends HTMLElement {
     this.$('#rv-finish').addEventListener('click', () => this.$<HTMLDialogElement>('#rendezvous-dialog').close());
     this.$('#human-close').addEventListener('click', () => this.$<HTMLDialogElement>('#human-dialog').close());
     this.$('#mark-verified').addEventListener('click', () => void this.markVerified());
+    this.$('#rv-detail-close').addEventListener('click', () => this.closeRendezvousDetail());
+    this.$('#rv-detail-human').addEventListener('click', () => this.openHumanFromDetail());
+    this.$('#rv-detail-share').addEventListener('click', () => this.shareLinkFromDetail());
+    this.$('#rv-detail-verify-toggle').addEventListener('click', () => this.toggleDetailVerification());
+    this.$('#rv-detail-mark-verified').addEventListener('click', () => void this.markDetailVerified());
+    this.$('#rv-detail-add').addEventListener('click', () => this.openContributionFromDetail());
+    this.$('#rv-detail-replace').addEventListener('click', () => this.openContributionFromDetail());
+    this.$('#rv-detail-remove').addEventListener('click', () => void this.removeContributionFromDetail());
+    this.$('#rv-detail-live').addEventListener('click', () => this.openLiveFromDetail());
     this.$('#remove-human').addEventListener('click', () => this.beginHumanRemoval());
     this.$('#cancel-remove').addEventListener('click', () => this.resetHumanRemoval());
     this.$('#confirm-remove').addEventListener('click', () => void this.confirmHumanRemoval());
@@ -1584,6 +1674,9 @@ export class RendezvousApp extends HTMLElement {
         this.$<HTMLDialogElement>('#human-dialog').close();
       }
     });
+    this.$('#rendezvous-detail-dialog').addEventListener('click', (event) => {
+      if (event.target === this.$('#rendezvous-detail-dialog')) this.closeRendezvousDetail();
+    });
     this.$('#photo-dialog').addEventListener('click', (event) => {
       if (event.target === this.$('#photo-dialog')) this.closePhotoViewer();
     });
@@ -1596,6 +1689,9 @@ export class RendezvousApp extends HTMLElement {
     this.$('#human-dialog').addEventListener('close', () => {
       this.activeHumanId = null;
       this.resetHumanRemoval();
+    });
+    this.$('#rendezvous-detail-dialog').addEventListener('close', () => {
+      this.resetDetailState();
     });
     this.$('#photo-dialog').addEventListener('close', () => this.releaseViewerUrl());
     this.$('#photo-input').addEventListener('change', (event) => {
@@ -1653,19 +1749,19 @@ export class RendezvousApp extends HTMLElement {
 
   private renderEmptyState(): void {
     const humans = this.$('#humans-list');
-    let empty = humans.querySelector<HTMLElement>('.humans-empty');
-    if (!empty) {
-      humans.replaceChildren();
-      empty = document.createElement('div');
-      empty.className = 'humans-empty';
-      const copy = document.createElement('span');
-      copy.className = 'humans-empty-copy';
-      copy.textContent = 'No humans yet.';
-      empty.append(copy);
-      humans.append(empty);
-    }
-    const addArea = this.$('#add-area');
-    if (addArea.parentElement !== empty) empty.append(addArea);
+    humans.replaceChildren();
+    const empty = document.createElement('div');
+    empty.className = 'humans-empty';
+    const copy = document.createElement('span');
+    copy.className = 'humans-empty-copy';
+    copy.textContent = 'No humans yet. Set a rendezvous for someone new.';
+    const start = document.createElement('button');
+    start.type = 'button';
+    start.className = 'inline-add';
+    start.textContent = 'Set a rendezvous ↗';
+    start.addEventListener('click', () => this.openRendezvous());
+    empty.append(copy, start);
+    humans.append(empty);
   }
 
   private render(snapshot: RendezvousSnapshot): void {
@@ -1685,6 +1781,7 @@ export class RendezvousApp extends HTMLElement {
     this.renderAudio(snapshot.audio);
     this.maybeOpenLive(snapshot);
     if (this.activeHumanId) this.refreshHumanDialog(snapshot);
+    if (this.detailRecordId) this.refreshRendezvousDetail();
     if (this.rvStep === 1 && this.$<HTMLDialogElement>('#rendezvous-dialog').open) {
       this.renderHumanOptions(snapshot);
     }
@@ -1700,6 +1797,8 @@ export class RendezvousApp extends HTMLElement {
       .filter((record) => record.status !== 'delivered')
       .sort((a, b) => a.scheduledFor - b.scheduledFor);
     const next = pending.find((record) => record.scheduledFor >= now) ?? pending[0];
+    const cta = this.$<HTMLButtonElement>('#set-rendezvous');
+    cta.hidden = Boolean(next);
 
     if (!next) {
       eyebrow.hidden = true;
@@ -1712,8 +1811,11 @@ export class RendezvousApp extends HTMLElement {
       return;
     }
 
+    const awaitingJoin = next.status === 'awaiting-join' || !next.peerId;
     const human = this.state.humans.find((entry) => entry.id === next.peerId);
-    const person = displayName(next.peerName || human?.name || '');
+    const person = awaitingJoin
+      ? 'someone new'
+      : displayName(next.peerName || human?.name || '');
     const phase = handoffPhase(next.scheduledFor, now);
     const main =
       phase === 'scheduled' || phase === 'open-early'
@@ -1738,8 +1840,9 @@ export class RendezvousApp extends HTMLElement {
       `${main}. ${formatMoment(next.scheduledFor)}. ${person}.`,
     );
     lede.hidden = false;
-    lede.textContent =
-      phase === 'scheduled'
+    lede.textContent = awaitingJoin
+      ? 'Share their link. Opening it gives them this rendezvous immediately and connects your browsers.'
+      : phase === 'scheduled'
         ? 'The handoff opens five minutes early. Both browsers need to be here.'
         : phase === 'open-early' || phase === 'due'
           ? 'The handoff is open. Both browsers connect automatically when they are here.'
@@ -1750,14 +1853,18 @@ export class RendezvousApp extends HTMLElement {
     const button = this.$('#signal-button');
     button.dataset.status = snapshot.signal;
     const labels: Record<string, string> = {
-      starting: 'signal · starting',
-      connecting: 'signal · connecting',
-      online: 'signal · live',
-      offline: 'signal · off',
-      replaced: 'signal · another window',
+      starting: 'starting',
+      connecting: 'connecting',
+      online: 'live',
+      offline: 'off',
+      replaced: 'another window',
     };
-    this.$('#signal-label').textContent = labels[snapshot.signal] ?? 'signal';
-    button.setAttribute('aria-label', 'Open connection diagnostics');
+    const label = labels[snapshot.signal] ?? snapshot.signal;
+    this.$('#signal-label').textContent = label;
+    button.setAttribute(
+      'aria-label',
+      `Connection diagnostics. Current status: ${label}.`,
+    );
     this.renderDiagnostics(snapshot);
   }
 
@@ -1826,8 +1933,6 @@ export class RendezvousApp extends HTMLElement {
       this.renderEmptyState();
       return;
     }
-    if (this.inviteOpen) this.closeInvite();
-    this.$('#add-slot').append(this.$('#add-area'));
     list.replaceChildren();
     for (const human of snapshot.humans) {
       const button = document.createElement('button');
@@ -1928,15 +2033,18 @@ export class RendezvousApp extends HTMLElement {
     const liveKeys = new Set<string>();
 
     for (const record of pending) {
+      const awaitingJoin = record.status === 'awaiting-join' || !record.peerId;
       const human = humans.get(record.peerId);
-      const person = displayName(record.peerName || human?.name || '');
+      const person = awaitingJoin
+        ? 'someone new'
+        : displayName(record.peerName || human?.name || '');
       const phase = handoffPhase(record.scheduledFor);
       const wrapRow = document.createElement('div');
       wrapRow.className = 'next-row';
       const card = document.createElement('button');
       card.type = 'button';
       card.className = 'next-card';
-      card.dataset.humanId = record.peerId;
+      card.dataset.rendezvousId = record.id;
       const time = document.createElement('span');
       time.className = 'next-card-time';
       time.textContent = formatClock(record.scheduledFor);
@@ -1944,12 +2052,16 @@ export class RendezvousApp extends HTMLElement {
       copy.className = 'next-card-copy';
       const title = document.createElement('span');
       title.className = 'next-card-title';
-      title.textContent = `${record.direction === 'incoming' ? 'from' : 'to'} ${person}`;
+      title.textContent = awaitingJoin
+        ? 'for someone new'
+        : `${record.direction === 'incoming' ? 'from' : 'to'} ${person}`;
       const state = document.createElement('span');
       state.className = 'next-card-state';
       const needsPerson = !human?.online;
       state.textContent =
-        record.status === 'transferring'
+        awaitingJoin
+          ? 'waiting for them to join · link ready'
+          : record.status === 'transferring'
           ? 'moving directly'
           : record.status === 'failed'
             ? 'retrying when both are here'
@@ -1968,7 +2080,9 @@ export class RendezvousApp extends HTMLElement {
                     : 'still open · connecting';
       const contribution = document.createElement('span');
       contribution.className = 'next-card-contribution';
-      if (record.direction === 'incoming') {
+      if (awaitingJoin) {
+        contribution.textContent = 'their link is ready to share';
+      } else if (record.direction === 'incoming') {
         contribution.textContent = `your photo · ${record.contribution ? 'added' : 'not added'}`;
       } else if (record.reciprocal) {
         contribution.textContent = `${person}’s photo · received`;
@@ -1981,9 +2095,18 @@ export class RendezvousApp extends HTMLElement {
       arrow.className = 'next-card-arrow';
       arrow.textContent = '↗';
       card.append(time, copy, arrow);
-      card.setAttribute('aria-label', `Open ${person} · ${formatMoment(record.scheduledFor)} · ${state.textContent}`);
-      card.addEventListener('click', () => this.openHuman(record.peerId));
+      card.setAttribute('aria-label', `Open rendezvous with ${person} · ${formatMoment(record.scheduledFor)} · ${state.textContent}`);
+      card.addEventListener('click', () => this.openRendezvousDetail(record.id));
       wrapRow.append(card);
+
+      if (awaitingJoin) {
+        const share = document.createElement('button');
+        share.type = 'button';
+        share.className = 'next-action';
+        share.textContent = 'share link';
+        share.addEventListener('click', () => void this.shareRendezvousLink(record));
+        wrapRow.append(share);
+      }
 
       if (
         record.direction === 'incoming' &&
@@ -1998,7 +2121,7 @@ export class RendezvousApp extends HTMLElement {
         add.addEventListener('click', () => this.openContribution(record.id));
         wrapRow.append(add);
       }
-      if (phase !== 'scheduled' && human?.online) {
+      if (!awaitingJoin && phase !== 'scheduled' && human?.online) {
         const live = document.createElement('button');
         live.type = 'button';
         live.className = 'next-action live-action';
@@ -2377,73 +2500,11 @@ export class RendezvousApp extends HTMLElement {
     }
   }
 
-  private async toggleInvite(): Promise<void> {
-    if (this.inviteOpen) {
-      this.closeInvite();
-      return;
-    }
-    this.closeDiagnostics();
-    this.inviteOpen = true;
-    const popover = this.$<HTMLElement>('#invite-popover');
-    popover.hidden = false;
-    this.$('#add-human').setAttribute('aria-expanded', 'true');
-    const input = this.$<HTMLInputElement>('#invite-link');
-    input.value = 'creating your link…';
-    this.$('#copy-link').textContent = 'copy';
-    try {
-      const link = await this.client?.createInviteLink();
-      if (!link) throw new Error('not ready');
-      input.value = link;
-      window.setTimeout(() => this.$('#copy-link').focus(), 30);
-    } catch {
-      input.value = 'Rendezvous is not ready yet. Try again in a moment.';
-    }
-  }
-
-  private closeInvite(): void {
-    if (!this.inviteOpen) return;
-    this.inviteOpen = false;
-    this.$('#invite-popover').hidden = true;
-    this.$('#add-human').setAttribute('aria-expanded', 'false');
-  }
-
-  private async copyInviteLink(): Promise<void> {
-    const input = this.$<HTMLInputElement>('#invite-link');
-    if (!input.value.startsWith('http')) return;
-    let copied = false;
-    try {
-      await navigator.clipboard.writeText(input.value);
-      copied = true;
-    } catch {
-      input.focus();
-      input.select();
-      try {
-        copied = document.execCommand('copy');
-      } catch {
-        copied = false;
-      }
-    }
-    const button = this.$('#copy-link');
-    button.textContent = copied ? 'copied' : 'select';
-    if (this.copyResetTimer !== null) window.clearTimeout(this.copyResetTimer);
-    this.copyResetTimer = window.setTimeout(() => {
-      button.textContent = 'copy';
-    }, 2200);
-    if (!copied) {
-      this.showToast({
-        tone: 'info',
-        title: 'The link is selected.',
-        message: 'Copy it from the field above.',
-      });
-    }
-  }
-
   private toggleDiagnostics(): void {
     if (this.diagnosticsOpen) {
       this.closeDiagnostics();
       return;
     }
-    this.closeInvite();
     this.diagnosticsOpen = true;
     this.$('#diagnostics-panel').hidden = false;
     this.$('#signal-button').setAttribute('aria-expanded', 'true');
@@ -2521,6 +2582,7 @@ export class RendezvousApp extends HTMLElement {
     this.$('#photo-error').hidden = true;
     this.$('#photo-drop').classList.remove('has-photo');
     this.$('#rv-error').hidden = true;
+    this.$<HTMLInputElement>('#rv-audio-disabled').checked = false;
     this.$('#rv-next').setAttribute('disabled', '');
     this.$<HTMLButtonElement>('#rv-schedule').disabled = false;
     this.$('#rv-schedule').innerHTML = 'Set a rendezvous <span aria-hidden="true">↗</span>';
@@ -2551,53 +2613,42 @@ export class RendezvousApp extends HTMLElement {
   private renderHumanOptions(snapshot: RendezvousSnapshot): void {
     const container = this.$('#human-options');
     container.replaceChildren();
-    if (snapshot.humans.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'no-humans';
-      const copy = document.createElement('p');
-      copy.textContent = 'Every rendezvous needs another person. Add one first.';
-      const add = document.createElement('button');
-      add.type = 'button';
-      add.className = 'inline-add';
-      add.textContent = 'add a human ↗';
-      add.addEventListener('click', () => {
-        this.$<HTMLDialogElement>('#rendezvous-dialog').close();
-        void this.toggleInvite();
-      });
-      empty.append(copy, add);
-      container.append(empty);
-      this.$('#human-note').textContent = 'The top-left door is the only way in.';
-      this.updateStepOneState();
-      return;
-    }
+    this.$('#human-note').textContent =
+      snapshot.humans.length === 0
+        ? 'Your first meeting starts here.'
+        : 'Choose a linked human, or invite someone new.';
 
-    this.$('#human-note').textContent = 'Only humans linked to this browser appear here.';
-    for (const human of snapshot.humans) {
+    const addOption = (
+      value: string,
+      nameText: string,
+      stateText: string,
+      online: boolean | null,
+    ): void => {
       const label = document.createElement('label');
-      label.className = 'human-option';
+      label.className = `human-option${value === NEW_PERSON_ID ? ' is-new' : ''}`;
       const input = document.createElement('input');
       input.type = 'radio';
       input.name = 'rv-human';
-      input.value = human.id;
-      input.checked = human.id === this.selectedHumanId;
+      input.value = value;
+      input.checked = value === this.selectedHumanId;
       input.addEventListener('change', () => {
-        this.selectedHumanId = human.id;
+        this.selectedHumanId = value;
         this.$('#rv-error').hidden = true;
         this.updateStepOneState();
       });
       const avatar = document.createElement('span');
       avatar.className = 'human-avatar';
-      avatar.dataset.online = String(human.online);
+      avatar.dataset.online = online === null ? 'new' : String(online);
       avatar.setAttribute('aria-hidden', 'true');
-      avatar.textContent = initialFor(human.name);
+      avatar.textContent = online === null ? '+' : initialFor(nameText);
       const copy = document.createElement('span');
       copy.className = 'human-option-copy';
       const name = document.createElement('span');
       name.className = 'human-option-name';
-      name.textContent = displayName(human.name);
+      name.textContent = nameText;
       const state = document.createElement('span');
       state.className = 'human-option-state';
-      state.textContent = `${human.online ? 'here now' : 'away'} · ${human.verifiedAt ? 'verified' : 'not verified'}`;
+      state.textContent = stateText;
       copy.append(name, state);
       const check = document.createElement('span');
       check.className = 'human-option-check';
@@ -2605,9 +2656,32 @@ export class RendezvousApp extends HTMLElement {
       check.textContent = '✓';
       label.append(input, avatar, copy, check);
       container.append(label);
+    };
+
+    addOption(
+      NEW_PERSON_ID,
+      'someone new',
+      'the join link appears after you set the rendezvous',
+      null,
+    );
+    for (const human of snapshot.humans) {
+      addOption(
+        human.id,
+        displayName(human.name),
+        `${human.online ? 'here now' : 'away'} · ${human.verifiedAt ? 'verified' : 'not verified'}`,
+        human.online,
+      );
     }
-    if (this.selectedHumanId && !snapshot.humans.some((human) => human.id === this.selectedHumanId)) {
+
+    if (
+      this.selectedHumanId !== NEW_PERSON_ID &&
+      this.selectedHumanId &&
+      !snapshot.humans.some((human) => human.id === this.selectedHumanId)
+    ) {
       this.selectedHumanId = null;
+    }
+    if (!this.selectedHumanId && snapshot.humans.length === 0) {
+      this.selectedHumanId = NEW_PERSON_ID;
     }
     this.updateStepOneState();
   }
@@ -2650,9 +2724,13 @@ export class RendezvousApp extends HTMLElement {
 
   private goToStepTwo(): void {
     if (!this.photo || !this.selectedHumanId) return;
-    const human = this.state?.humans.find((entry) => entry.id === this.selectedHumanId);
-    if (!human) return;
-    this.$('#pick-name').textContent = displayName(human.name);
+    if (this.selectedHumanId === NEW_PERSON_ID) {
+      this.$('#pick-name').textContent = 'someone new';
+    } else {
+      const human = this.state?.humans.find((entry) => entry.id === this.selectedHumanId);
+      if (!human) return;
+      this.$('#pick-name').textContent = displayName(human.name);
+    }
     const thumb = this.$<HTMLImageElement>('#pick-thumb');
     if (this.photoUrl) thumb.src = this.photoUrl;
     const timeInput = this.$<HTMLInputElement>('#rv-time');
@@ -2738,16 +2816,27 @@ export class RendezvousApp extends HTMLElement {
     button.disabled = true;
     button.textContent = 'Setting it…';
     error.hidden = true;
+    const liveAudioDisabled = this.$<HTMLInputElement>('#rv-audio-disabled').checked;
 
     try {
-      const record = await this.client.scheduleRendezvous({
-        humanId: this.selectedHumanId,
-        photo: this.photo,
-        fileName: this.photo.name,
-        photoId: this.resharePrint?.photoId,
-        note: this.composerNote,
-        scheduledFor: resolved.timestamp,
-      });
+      const record =
+        this.selectedHumanId === NEW_PERSON_ID
+          ? await this.client.scheduleRendezvousForNewPerson({
+              photo: this.photo,
+              fileName: this.photo.name,
+              note: this.composerNote,
+              scheduledFor: resolved.timestamp,
+              liveAudioDisabled,
+            })
+          : await this.client.scheduleRendezvous({
+              humanId: this.selectedHumanId,
+              photo: this.photo,
+              fileName: this.photo.name,
+              photoId: this.resharePrint?.photoId,
+              note: this.composerNote,
+              scheduledFor: resolved.timestamp,
+              liveAudioDisabled,
+            });
       this.showDone(record);
     } catch (scheduleError) {
       error.textContent =
@@ -2762,15 +2851,451 @@ export class RendezvousApp extends HTMLElement {
 
   private showDone(record: StoredRendezvous): void {
     const human = this.state?.humans.find((entry) => entry.id === record.peerId);
-    const who = displayName(record.peerName || human?.name || '');
-    this.$('#done-summary').textContent = `For ${who}. ${formatMoment(record.scheduledFor)}.`;
+    const isNewPerson = Boolean(record.inviteToken);
+    const who = isNewPerson ? 'someone new' : displayName(record.peerName || human?.name || '');
+    this.$('#done-summary').textContent = isNewPerson
+      ? `For someone new. ${formatMoment(record.scheduledFor)}. Share their link below.`
+      : `For ${who}. ${formatMoment(record.scheduledFor)}.`;
+    this.$('#done-audio-off').hidden = !record.liveAudioDisabled;
     this.$('#done-human').textContent = who;
     this.$('#done-moment').textContent = formatMoment(record.scheduledFor);
     this.$('#done-photo').textContent = record.photo
       ? `${record.photo.name} · ${formatBytes(record.photo.size)}`
       : 'the photograph';
+    const linkBlock = this.$<HTMLElement>('#done-link-block');
+    const linkInput = this.$<HTMLInputElement>('#done-link');
+    const copy = this.$<HTMLButtonElement>('#done-link-copy');
+    if (isNewPerson && record.inviteToken) {
+      linkBlock.hidden = false;
+      linkInput.value = buildInviteUrl(record.inviteToken);
+      copy.textContent = 'copy';
+      this.$('#done-note').textContent =
+        'Send this link to one person. The rendezvous is already saved here; opening the link puts it in their upcoming list and creates your human link.';
+    } else {
+      linkBlock.hidden = true;
+      linkInput.value = '';
+      this.$('#done-note').textContent =
+        'The photo is still here. It will only travel when you are both present at the same time. We’ll tell them when they next arrive.';
+    }
     this.setStep(3);
-    window.setTimeout(() => this.$<HTMLButtonElement>('#rv-finish').focus(), 40);
+    window.setTimeout(
+      () =>
+        this.$<HTMLButtonElement>(isNewPerson ? '#done-link-copy' : '#rv-finish').focus(),
+      40,
+    );
+  }
+
+  private async copyText(
+    text: string,
+    button: HTMLButtonElement,
+    resetLabel = 'copy',
+  ): Promise<boolean> {
+    if (!text.startsWith('http')) return false;
+    button.textContent = 'copied';
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } catch {
+      const input = document.createElement('textarea');
+      input.value = text;
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.append(input);
+      input.select();
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      }
+      input.remove();
+    }
+    button.textContent = copied ? 'copied' : 'select';
+    if (this.copyResetTimer !== null) window.clearTimeout(this.copyResetTimer);
+    this.copyResetTimer = window.setTimeout(() => {
+      button.textContent = resetLabel;
+    }, 2200);
+    return copied;
+  }
+
+  private async copyDoneLink(): Promise<void> {
+    const input = this.$<HTMLInputElement>('#done-link');
+    const copied = await this.copyText(input.value, this.$('#done-link-copy'));
+    if (!copied) {
+      input.focus();
+      input.select();
+      this.showToast({
+        tone: 'info',
+        title: 'The link is selected.',
+        message: 'Copy it from the field above.',
+      });
+    }
+  }
+
+  private async shareRendezvousLink(record: StoredRendezvous): Promise<void> {
+    if (!record.inviteToken) return;
+    const link = buildInviteUrl(record.inviteToken);
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(link);
+      copied = true;
+    } catch {
+      copied = false;
+    }
+    if (!copied) {
+      window.prompt('Copy this rendezvous link', link);
+      return;
+    }
+    this.showToast({
+      tone: 'success',
+      title: 'Link copied.',
+      message: 'Send it to the person you want to meet.',
+    });
+  }
+
+  private getActiveDetailRecord(): StoredRendezvous | null {
+    if (!this.detailRecordId) return null;
+    return this.state?.rendezvous.find((entry) => entry.id === this.detailRecordId) ?? null;
+  }
+
+  private openRendezvousDetail(rendezvousId: string): void {
+    const record = this.state?.rendezvous.find((entry) => entry.id === rendezvousId);
+    if (!record || record.status === 'delivered') return;
+    this.detailRecordId = rendezvousId;
+    this.detailVerificationRequest += 1;
+    this.resetDetailVerification();
+    this.refreshRendezvousDetail(record);
+    const dialog = this.$<HTMLDialogElement>('#rendezvous-detail-dialog');
+    if (!dialog.open) dialog.showModal();
+  }
+
+  private closeRendezvousDetail(): void {
+    this.detailRecordId = null;
+    this.detailVerificationRequest += 1;
+    const dialog = this.$<HTMLDialogElement>('#rendezvous-detail-dialog');
+    if (dialog.open) dialog.close();
+    this.releaseDetailUrls();
+    this.resetDetailVerification();
+  }
+
+  private refreshRendezvousDetail(record?: StoredRendezvous): void {
+    const active = record ?? this.getActiveDetailRecord();
+    if (!active) {
+      this.closeRendezvousDetail();
+      return;
+    }
+    const human = active.peerId
+      ? this.state?.humans.find((entry) => entry.id === active.peerId)
+      : undefined;
+    const awaitingJoin = active.status === 'awaiting-join' || !active.peerId;
+    const person = awaitingJoin
+      ? 'someone new'
+      : displayName(active.peerName || human?.name || '');
+    const phase = handoffPhase(active.scheduledFor);
+    const directionWord = active.direction === 'incoming' ? 'from' : 'to';
+
+    const humanButton = this.$<HTMLButtonElement>('#rv-detail-human');
+    this.$('#rv-detail-avatar').textContent = initialFor(person);
+    this.$('#rv-detail-kicker').textContent = awaitingJoin
+      ? 'a rendezvous waiting for its person'
+      : 'a rendezvous with';
+    this.$('#rv-detail-title').textContent = person;
+    this.$('#rv-detail-sub').textContent = awaitingJoin
+      ? 'their link is ready'
+      : human?.online
+        ? 'here now'
+        : 'away';
+    humanButton.disabled = !human;
+    humanButton.setAttribute(
+      'aria-label',
+      human ? `Open ${person}’s human details` : `${person} is not linked yet`,
+    );
+
+    this.$('#rv-detail-moment').textContent = formatMoment(active.scheduledFor);
+    this.$('#rv-detail-window').textContent =
+      phase === 'scheduled'
+        ? `opens ${formatClock(active.scheduledFor - 5 * 60_000)} · both browsers need to be here`
+        : phase === 'still-open'
+          ? 'still open · lateness never cancels it'
+          : 'open now · both browsers connect automatically';
+
+    const needsPerson = !human?.online;
+    this.$('#rv-detail-state').textContent = awaitingJoin
+      ? 'waiting for them to join'
+      : active.status === 'failed'
+        ? 'couldn’t connect · retrying when both are here'
+        : active.status === 'transferring'
+          ? 'moving directly'
+          : active.status === 'connecting'
+            ? 'connecting directly…'
+            : phase === 'scheduled'
+              ? `set · ${formatShortDay(active.scheduledFor)}`
+              : phase === 'open-early'
+                ? needsPerson
+                  ? `open early · waiting for ${person}`
+                  : 'both here · connecting early'
+                : phase === 'due'
+                  ? needsPerson
+                    ? `waiting for ${person}`
+                    : 'both here · connecting'
+                  : needsPerson
+                    ? `still open · waiting for ${person}`
+                    : 'still open · connecting';
+    this.$('#rv-detail-direction').textContent = awaitingJoin
+      ? `to ${person}`
+      : `${directionWord} ${person}`;
+
+    const attachment = active.direction === 'outgoing' ? active.photo : active.contribution;
+    const missing = active.direction === 'outgoing' && !active.photo;
+    this.$('#rv-detail-photo-state').textContent = attachment
+      ? 'your photo · added'
+      : missing
+        ? 'your photo · missing'
+        : 'your photo · not added yet';
+    this.$('#rv-detail-photo-meta').textContent = attachment
+      ? `${attachment.name || 'photograph'} · ${formatBytes(attachment.size)}`
+      : missing
+        ? 'This browser no longer has the file. Choose a new photograph to keep the rendezvous ready.'
+        : 'Optional. It stays in this browser until you are both here.';
+    this.syncDetailPhoto(attachment);
+    this.syncDetailNote(attachment?.note ?? null);
+
+    this.$('#rv-detail-peer-state').textContent =
+      active.direction === 'outgoing'
+        ? active.reciprocal
+          ? `${person}’s photo · received`
+          : active.sessionStartedAt
+            ? `${person}’s photo · not added`
+            : `${person}’s photo · waiting`
+        : active.photo
+          ? `${person}’s photo · delivered`
+          : active.status === 'transferring'
+            ? `${person}’s photo · moving now`
+            : active.status === 'failed'
+              ? `${person}’s photo · retrying`
+              : `${person}’s photo · waiting`;
+
+    const contributionEditable =
+      active.direction === 'incoming' &&
+      !active.sessionStartedAt &&
+      active.status !== 'transferring';
+    this.$('#rv-detail-share').hidden = !(awaitingJoin && active.inviteToken);
+    this.$('#rv-detail-add').hidden = !(contributionEditable && !active.contribution);
+    this.$('#rv-detail-replace').hidden = !(contributionEditable && Boolean(active.contribution));
+    this.$('#rv-detail-remove').hidden = !(contributionEditable && Boolean(active.contribution));
+    this.$('#rv-detail-live').hidden = !(
+      !awaitingJoin &&
+      phase !== 'scheduled' &&
+      Boolean(human?.online)
+    );
+    this.$('#rv-detail-audio-off').hidden = !active.liveAudioDisabled;
+
+    this.$('#rv-detail-footnote').textContent = awaitingJoin
+      ? 'The photo stays here. Opening their link puts this rendezvous in their upcoming list.'
+      : active.direction === 'incoming' && !active.contribution
+        ? 'Your photo is optional. The rendezvous is complete for you either way.'
+        : 'The photo stays on this device until you are both here at the same time.';
+
+    const verifySection = this.$('#rv-detail-verify-section');
+    verifySection.hidden = !human;
+    if (human) {
+      this.$('#rv-detail-verify-badge').textContent = human.verifiedAt
+        ? 'verified'
+        : 'not verified';
+      const mark = this.$<HTMLButtonElement>('#rv-detail-mark-verified');
+      mark.disabled = Boolean(human.verifiedAt);
+      mark.textContent = human.verifiedAt ? 'Verified' : 'Mark as verified';
+    }
+  }
+
+  private syncDetailPhoto(attachment: PhotoAttachment | null): void {
+    const key = attachment
+      ? `${attachment.photoId}:${attachment.size}:${attachment.name}`
+      : null;
+    if (key === this.detailAttachmentKey) return;
+    if (this.detailPhotoUrl) URL.revokeObjectURL(this.detailPhotoUrl);
+    this.detailPhotoUrl = null;
+    this.detailAttachmentKey = key;
+    const image = this.$<HTMLImageElement>('#rv-detail-photo');
+    const empty = this.$('#rv-detail-photo-empty');
+    if (!attachment) {
+      image.hidden = true;
+      image.removeAttribute('src');
+      empty.hidden = false;
+      return;
+    }
+    this.detailPhotoUrl = URL.createObjectURL(attachment.blob);
+    image.src = this.detailPhotoUrl;
+    image.alt = 'Your photograph for this rendezvous';
+    image.hidden = false;
+    empty.hidden = true;
+  }
+
+  private syncDetailNote(note: VoiceNoteAttachment | null): void {
+    const key = note ? `${note.name}:${note.size}:${note.durationMs}` : null;
+    if (key === this.detailNoteKey) return;
+    if (this.detailNoteUrl) URL.revokeObjectURL(this.detailNoteUrl);
+    this.detailNoteUrl = null;
+    this.detailNoteKey = key;
+    const container = this.$('#rv-detail-note');
+    const audio = this.$<HTMLAudioElement>('#rv-detail-note-audio');
+    if (!note) {
+      container.hidden = true;
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      this.$('#rv-detail-note-duration').textContent = '';
+      return;
+    }
+    this.detailNoteUrl = URL.createObjectURL(note.blob);
+    audio.src = this.detailNoteUrl;
+    container.hidden = false;
+    this.$('#rv-detail-note-duration').textContent = formatDuration(note.durationMs);
+  }
+
+  private releaseDetailUrls(): void {
+    if (this.detailPhotoUrl) URL.revokeObjectURL(this.detailPhotoUrl);
+    if (this.detailNoteUrl) URL.revokeObjectURL(this.detailNoteUrl);
+    this.detailPhotoUrl = null;
+    this.detailNoteUrl = null;
+    this.detailAttachmentKey = null;
+    this.detailNoteKey = null;
+  }
+
+  private resetDetailVerification(): void {
+    this.$('#rv-detail-verify-toggle').setAttribute('aria-expanded', 'false');
+    this.$('#rv-detail-verify-panel').hidden = true;
+    this.$('#rv-detail-verification-words').replaceChildren();
+  }
+
+  private toggleDetailVerification(): void {
+    const toggle = this.$<HTMLButtonElement>('#rv-detail-verify-toggle');
+    const panel = this.$('#rv-detail-verify-panel');
+    const open = toggle.getAttribute('aria-expanded') === 'true';
+    if (open) {
+      toggle.setAttribute('aria-expanded', 'false');
+      panel.hidden = true;
+      this.detailVerificationRequest += 1;
+      return;
+    }
+    toggle.setAttribute('aria-expanded', 'true');
+    panel.hidden = false;
+    void this.loadDetailVerification();
+  }
+
+  private async loadDetailVerification(): Promise<void> {
+    const record = this.getActiveDetailRecord();
+    const human = record
+      ? this.state?.humans.find((entry) => entry.id === record.peerId)
+      : undefined;
+    if (!record || !human) return;
+    const list = this.$('#rv-detail-verification-words');
+    if (list.childElementCount > 0) return;
+    const request = this.detailVerificationRequest;
+    for (let index = 0; index < 8; index += 1) {
+      const item = document.createElement('li');
+      item.className = 'is-placeholder';
+      item.textContent = '••••';
+      list.append(item);
+    }
+    try {
+      const words = await this.client?.verificationWordsFor(human.id);
+      if (request !== this.detailVerificationRequest || this.detailRecordId !== record.id || !words) {
+        return;
+      }
+      list.replaceChildren();
+      for (const word of words) {
+        const item = document.createElement('li');
+        item.textContent = word;
+        list.append(item);
+      }
+    } catch {
+      if (request !== this.detailVerificationRequest) return;
+      this.showToast({
+        tone: 'error',
+        title: 'The words are unavailable.',
+        message: 'Rendezvous could not read both pinned keys.',
+      });
+    }
+  }
+
+  private async markDetailVerified(): Promise<void> {
+    const record = this.getActiveDetailRecord();
+    if (!record || !this.client) return;
+    const mark = this.$<HTMLButtonElement>('#rv-detail-mark-verified');
+    mark.disabled = true;
+    mark.textContent = 'Saving…';
+    try {
+      await this.client.markHumanVerified(record.peerId);
+    } catch {
+      this.showToast({
+        tone: 'error',
+        title: 'Verification did not save.',
+        message: 'The local identity store is unavailable.',
+      });
+      mark.disabled = false;
+      mark.textContent = 'Mark as verified';
+    }
+  }
+
+  private openHumanFromDetail(): void {
+    const record = this.getActiveDetailRecord();
+    if (!record) return;
+    const human = this.state?.humans.find((entry) => entry.id === record.peerId);
+    if (!human) return;
+    this.closeRendezvousDetail();
+    this.openHuman(record.peerId);
+  }
+
+  private shareLinkFromDetail(): void {
+    const record = this.getActiveDetailRecord();
+    if (!record) return;
+    void this.shareRendezvousLink(record);
+  }
+
+  private openContributionFromDetail(): void {
+    const record = this.getActiveDetailRecord();
+    if (!record) return;
+    this.closeRendezvousDetail();
+    this.openContribution(record.id);
+  }
+
+  private async removeContributionFromDetail(): Promise<void> {
+    const record = this.getActiveDetailRecord();
+    if (!record || !this.client) return;
+    const button = this.$<HTMLButtonElement>('#rv-detail-remove');
+    button.disabled = true;
+    try {
+      await this.client.removeContribution(record.id);
+      this.showToast({
+        tone: 'info',
+        title: 'Your photo was removed.',
+        message: 'The rendezvous is still set.',
+      });
+      this.refreshRendezvousDetail();
+    } catch (error) {
+      this.showToast({
+        tone: 'error',
+        title: 'Your photo could not be removed.',
+        message: error instanceof Error ? error.message : 'Try again while the app is open.',
+      });
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  private openLiveFromDetail(): void {
+    const record = this.getActiveDetailRecord();
+    if (!record) return;
+    this.closeRendezvousDetail();
+    this.openLive(record.id, true);
+  }
+
+  private resetDetailState(): void {
+    this.detailRecordId = null;
+    this.detailVerificationRequest += 1;
+    this.releaseDetailUrls();
+    this.resetDetailVerification();
   }
 
   private openHuman(humanId: string): void {
@@ -3084,7 +3609,9 @@ export class RendezvousApp extends HTMLElement {
     this.renderLive();
     if (!dialog.open) {
       dialog.show();
-      window.setTimeout(() => this.$<HTMLButtonElement>('#live-start-audio').focus(), 30);
+      const record = this.state?.rendezvous.find((entry) => entry.id === rendezvousId);
+      const focusTarget = record?.liveAudioDisabled ? '#live-close' : '#live-start-audio';
+      window.setTimeout(() => this.$<HTMLButtonElement>(focusTarget).focus(), 30);
     }
   }
 
@@ -3163,6 +3690,7 @@ export class RendezvousApp extends HTMLElement {
     const controls = this.$<HTMLElement>('#live-audio-controls');
     const consent = this.$<HTMLElement>('#live-consent');
     const message = this.$<HTMLElement>('#live-audio-message');
+    const disabled = this.$<HTMLElement>('#live-audio-disabled');
     const isAudioForThis = audio?.rendezvousId === record.id;
     const live = isAudioForThis && audio?.phase === 'live';
     const incoming = isAudioForThis && audio?.phase === 'incoming';
@@ -3170,10 +3698,12 @@ export class RendezvousApp extends HTMLElement {
       isAudioForThis &&
       (audio?.phase === 'requesting' || audio?.phase === 'connecting');
     const used = Boolean(record.audioWindowUsedAt);
-    start.hidden = live || incoming || busy;
+    const audioOff = record.liveAudioDisabled;
+    disabled.hidden = !audioOff;
+    start.hidden = audioOff || live || incoming || busy;
     controls.hidden = !live;
-    consent.hidden = !incoming;
-    start.disabled = used || !human?.online || phase === 'scheduled';
+    consent.hidden = audioOff || !incoming;
+    start.disabled = audioOff || used || !human?.online || phase === 'scheduled';
     start.setAttribute(
       'aria-label',
       used ? 'the minute is over' : 'start audio 1min',
@@ -3181,7 +3711,7 @@ export class RendezvousApp extends HTMLElement {
     if (used && !live) {
       start.disabled = true;
       start.querySelector('span:nth-child(2)')!.textContent = 'the minute is over';
-    } else {
+    } else if (!audioOff) {
       start.querySelector('span:nth-child(2)')!.textContent = 'start audio 1min';
     }
     this.$('#live-countdown').textContent = formatDuration(audio?.remainingMs ?? 60_000);

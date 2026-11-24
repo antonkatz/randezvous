@@ -6,6 +6,13 @@ export interface PublicIdentityClaim {
   publicKey: string;
 }
 
+export interface InviteRendezvous {
+  id: string;
+  scheduledFor: number;
+  createdAt: number;
+  liveAudioDisabled?: boolean;
+}
+
 export interface InvitePayload {
   v: 1;
   id: string;
@@ -13,6 +20,11 @@ export interface InvitePayload {
   publicKey: string;
   issuedAt: number;
   nonce: string;
+  /**
+   * The already-saved appointment this invitation carries. Older links omit
+   * it and only establish the human relationship.
+   */
+  rendezvous?: InviteRendezvous;
 }
 
 export interface JoinRequest {
@@ -83,6 +95,7 @@ export interface RendezvousWire {
   toId: string;
   scheduledFor: number;
   createdAt: number;
+  liveAudioDisabled?: boolean;
 }
 
 export interface SignalRendezvousCreate {
@@ -198,6 +211,7 @@ export interface RendezvousNotice {
   fromName: string;
   scheduledFor: number;
   createdAt: number;
+  liveAudioDisabled?: boolean;
 }
 
 export interface SignalChallenge {

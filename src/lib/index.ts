@@ -5,6 +5,7 @@ export {
 } from './client';
 export { defineRendezvousApp, RendezvousApp } from './ui/rendezvous-app';
 export { deriveVerificationWords, displayName, normalizeName } from './crypto';
+export { buildInviteUrl } from './invite';
 export {
   HANDOFF_WINDOW_MS,
   formatCountdown,
@@ -28,6 +29,7 @@ export type {
   Human,
   IceFamilyCounts,
   IpFamily,
+  NewPersonScheduleInput,
   NoticeCode,
   PhotoAttachment,
   PossessionState,

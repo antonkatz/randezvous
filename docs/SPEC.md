@@ -1,8 +1,8 @@
 # Rendezvous — Product & Technical Specification
 
-**Status:** v0.1 · reciprocal photo contributions, the live rendezvous screen, one-minute live audio, photo voice notes, local re-sharing, and per-photo possession inventory are implemented. The five-minute early/late handoff window, delivery celebration, canonical circle rendezvous, optional circle time window, circle auto-accept, expiring circle rendezvous invites, and online circle sync are implemented. The public-photo layer (US-20) remains explicitly deferred. The rendezvous-driven invitation flow that removes the standalone add-human action is specified here but not yet implemented in the reference app.
+**Status:** v0.1 · reciprocal photo contributions, the live rendezvous screen, one-minute live audio, photo voice notes, local re-sharing, and per-photo possession inventory are implemented. The five-minute early/late handoff window, delivery celebration, canonical circle rendezvous, optional circle time window, circle auto-accept, expiring circle rendezvous invites, and online circle sync are implemented. The public-photo layer (US-20) remains explicitly deferred. The rendezvous-driven invitation flow that removes the standalone add-human action is implemented. The upcoming-rendezvous exchange detail (US-10c, VDS-10c), the right-hand circle dock with its 2.5-circle overflow cue (VDS-16), the top-corner `live` indicator (US-13b, VDS-15), and hiding the large `Set a rendezvous` action while an upcoming rendezvous exists (US-6, VDS-5, VDS-9) are implemented. The per-rendezvous **I won’t be able to speak** live-audio flag (US-6, US-9b, VDS-7, VDS-10b) is specified here but not yet implemented.
 
-**Date:** 22 November 2026  
+**Date:** 23 November 2026  
 **Codename:** rendezvous  
 **Package:** `@instanthero/rendezvous`
 
@@ -19,7 +19,7 @@
 
 ## 1. What this is
 
-> **Implementation note:** v0.1 implements the private browser-to-browser photo handoff, invites, verification, revocation, ranked wall, diagnostics, the five-minute early/late handoff window, and the delivery confetti animation. It also implements reciprocal photo contributions, the live rendezvous screen, per-photo voice notes, local re-sharing, the one-minute live voice window, and a per-photo possession inventory. Circle records, membership, canonical daily plans, the optional signed time window, auto-accept, expiring server-side rendezvous invites, and automatic online sync are wired into the app. The future public-photo re-share layer remains deferred. The rendezvous-driven invitation flow in US-3 is specified here but is not yet implemented: the current reference build still exposes the older standalone add-human control and does not yet bind a pre-join appointment into the invitation link.
+> **Implementation note:** v0.1 implements the private browser-to-browser photo handoff, invites, verification, revocation, ranked wall, diagnostics, the five-minute early/late handoff window, and the delivery confetti animation. It also implements reciprocal photo contributions, the live rendezvous screen, per-photo voice notes, local re-sharing, the one-minute live voice window, and a per-photo possession inventory. Circle records, membership, canonical daily plans, the optional signed time window, auto-accept, expiring server-side rendezvous invites, and automatic online sync are wired into the app. The future public-photo re-share layer remains deferred. The rendezvous-driven invitation flow in US-3 is implemented: the composer can address an already-saved rendezvous to **someone new**, and opening that link stores the same appointment immediately before the join reaches the creator. The upcoming-rendezvous exchange detail (US-10c, VDS-10c), the right-hand circle dock with its 2.5-circle overflow cue (VDS-16), the very-top-corner `live` indicator (US-13b, VDS-15), and hiding the large `Set a rendezvous` action while a rendezvous is upcoming (US-6, VDS-5, VDS-9) are also implemented in this build.
 
 Rendezvous is a tiny, private photo-sharing service that runs entirely in the browser. Two people link their browsers once, then leave photographs for each other at chosen times. Photos travel directly from browser to browser over WebRTC. There is no photo upload, no media server, and no account in the private path. (A future, separate opt-in public-photo layer is sketched in US-20 and explicitly deferred.)
 
@@ -51,9 +51,10 @@ This distinction drives every flow in this document:
 | **Code name** | The non-unique display name shown to your humans. You can change it at any time. |
 | **Invitation** | A signed, shareable link that grants the bearer a permanent link to your browser identity. |
 | **Circle** | A named, private group of linked humans that shares at most one canonical rendezvous per local day. |
-| **Active circle** | The circle currently shown on the main surface, selected from the bottom circle bar. |
+| **Active circle** | The circle currently shown on the main surface, selected from the right-hand circle dock. |
 | **Circle invitation** | A signed offer addressed to one public-key identity to join a circle. It is not a bearer link. |
 | **Rendezvous** | A scheduled photo handoff between two humans at one moment. The creator contributes a photo; the other human may contribute one reciprocal photo. |
+| **Rendezvous detail** | The panel opened from an upcoming rendezvous row. It foregrounds the local attachment to be exchanged, shows the counterpart’s contribution only as state before handoff, and keeps the comparison words in a collapsed-by-default disclosure. |
 | **Creator** | The human who sets the rendezvous, chooses its moment, and attaches the first photo. |
 | **Reciprocal contribution** | The optional one photo the non-creator attaches to an existing rendezvous, delivered to the creator at the same meeting. |
 | **Circle rendezvous** | The one shared appointment for a circle on a local calendar day; metadata only. |
@@ -61,6 +62,7 @@ This distinction drives every flow in this document:
 | **Circle rendezvous invite** | A circle rendezvous notice delivered to members. The server stores only this circle invite, and only until the scheduled rendezvous time has passed. |
 | **Circle time window** | An optional signed interval, in the circle's IANA timezone, that limits the scheduled instant of new circle rendezvous. It never shortens the handoff window or changes existing rendezvous. |
 | **Rendezvous time** | The local date and time chosen by the creator. Stored as an absolute Unix timestamp. |
+| **Live audio disabled** | A per-rendezvous flag set by the creator through **I won’t be able to speak**. It removes the live one-minute voice option for that rendezvous on both sides, while leaving photo voice notes and the photo handoff unchanged. |
 | **Online** | The browser app is open and connected to the signalling server. This is only a presence signal; the direct RTC link is established when the handoff begins. |
 | **Waiting** | The handoff window is open but the handoff cannot happen because one or both browsers are not present. |
 | **Handoff window** | The normal on-time window is `[T − 5 minutes, T + 5 minutes]`. If both humans are online anywhere inside it, they connect and exchange automatically, including when both are already online beforehand. Later arrival does not expire the saved photograph. |
@@ -106,7 +108,7 @@ As a sender, I want to set a rendezvous and generate its invitation link at the 
 - Choosing **someone new** signs an invitation for this rendezvous. It does not create a human or a second appointment.
 - The creator’s rendezvous is saved locally immediately with the state **waiting for them to join**, and appears in the creator’s upcoming area.
 - The DONE stage shows the join link and a copy action for a **someone new** rendezvous. There is no separate link screen or add-human flow.
-- The link carries the signed invitation and the appointment metadata: appointment ID, inviter identity, scheduled timestamp, and creation timestamp. It never carries photo or voice-note bytes.
+- The link carries the signed invitation and the appointment metadata: appointment ID, inviter identity, scheduled timestamp, creation timestamp, and the live-audio-disabled flag. It never carries photo or voice-note bytes.
 - The link can be generated while the signalling server is offline. Opening it verifies the inviter locally and stores the already-scheduled rendezvous without a second scheduling step.
 - As soon as the invitee opens the link and completes the join, the rendezvous is already in their upcoming area. The recipient does not need to wait for a later server notice to learn the appointment.
 - The inviter pins the invitee’s public key from the join request and attaches the saved rendezvous to that human. No duplicate appointment is created.
@@ -132,7 +134,7 @@ As a person who wants to be sure the link really belongs to my friend, I want a 
   - hashes a domain-separated, length-prefixed transcript with SHA-256;
   - uses 88 bits of output as eight 11-bit indices into a fixed 2048-word list.
 - Both humans see the same eight words, in the same order, on every reconnection. It does not change when WebRTC DTLS certificates change.
-- The code is shown in a human-detail panel. A “Verified” / “Not verified” badge is always visible on the human.
+- The code is shown in a human-detail panel. The same words remain available in the upcoming rendezvous detail (US-10c) inside a disclosure that is collapsed by default every time the detail opens. A “Verified” / “Not verified” badge is always visible on the human.
 - The panel instructs both people to compare the words **out loud or through another app**. It explicitly warns not to compare over the same link/channel that carried the rendezvous invite.
 - Either person can mark the human as verified locally after comparing; verification state persists in IndexedDB.
 - Verification is optional and does not block scheduling. It changes the badge from “Not verified” to “Verified”.
@@ -175,10 +177,10 @@ As a sender, I want the app to distinguish “linked and present” from “not 
   - **connection:** **here now** only while the other browser is connected to the same signalling server; otherwise **away**;
   - **key verification:** **verified** or **not verified**, based on the eight comparison words.
 - Comparing the words and marking verified is the key-safety step. It confirms the pinned key. It does not create the connection, and it does not substitute for the relationship.
-- For photo delivery, restate the prerequisites in plain language: both browsers open, signal live, the human present on both sides, and the comparison words checked.
+- For photo delivery, restate the prerequisites in plain language: both browsers open, the connection live, the human present on both sides, and the comparison words checked.
 - The sender sees their own rendezvous immediately in their upcoming list, first as **waiting for them to join** and later as **waiting for [name] to come online**. That local row is not evidence that the other browser has it.
 - The recipient sees the rendezvous immediately after opening the invitation link, before any later server notice. The appointment travels in the signed invite; the server notice is optional confirmation, not the first source of the appointment.
-- If one browser does not show a rendezvous the other created, the expected checks are: the invitation link was opened in the intended browser profile, both browsers use the same public URL/signalling server, signal is live, both list each other under **your humans**, and the other human is shown as **here now**.
+- If one browser does not show a rendezvous the other created, the expected checks are: the invitation link was opened in the intended browser profile, both browsers use the same public URL/signalling server, the top-right indicator reads **live**, both list each other under **your humans**, and the other human is shown as **here now**.
 - The phrase **delivered** is reserved for the photo handoff. An appointment notice is **waiting for them to join**, **waiting**, **announced**, or **due**, never **delivered**.
 - Mobile/desktop testing uses the same public URL for both devices when a tunnel is in use, so both profiles reach the same signalling server.
 
@@ -189,10 +191,11 @@ As a sender, I want to choose one photo, one person, and a time, so that we can 
 
 **Acceptance criteria**
 - The central action reads **Set a rendezvous**.
+- The large central action is present only when no rendezvous is still upcoming. It is hidden as soon as at least one locally known appointment is pending — including **waiting**, **waiting for them to join**, failed, or overdue meetings — and returns automatically only when no such appointment remains. “Upcoming” here means any appointment whose status is not **delivered** and that has not been deleted.
 - The flow has exactly three stages:
   1. **Photo + person.** Select an image from the device, optionally attach a voice note of up to 60 seconds, and choose one linked human or **someone new**.
-  2. **Time + optional date.** Choose a time. If wanted, choose a date. If no date is chosen, the app resolves the next occurrence of that time (today if still ahead, otherwise tomorrow).
-  3. **DONE.** A clear confirmation shows the chosen human or **someone new** and the resolved local moment. For **someone new**, it also shows the join link for this rendezvous and a copy action.
+  2. **Time + optional date + live audio.** Choose a time. If wanted, choose a date. If no date is chosen, the app resolves the next occurrence of that time (today if still ahead, otherwise tomorrow). The step also offers the optional **I won’t be able to speak** flag.
+  3. **DONE.** A clear confirmation shows the chosen human or **someone new** and the resolved local moment. For **someone new**, it also shows the join link for this rendezvous and a copy action. If live audio is disabled, the confirmation says so.
 - The photo is validated (image MIME type, maximum 25 MiB) and stored only in the sender’s IndexedDB.
 - A photo may carry one optional voice note, recorded in the browser and no longer than 60 seconds. It travels in the same authenticated handoff and never passes through the server.
 - The photo is not uploaded to, encoded into, or referenced by the signalling server.
@@ -203,6 +206,11 @@ As a sender, I want to choose one photo, one person, and a time, so that we can 
 - Choosing **someone new** never opens a separate add-human screen and never creates an empty human record.
 - The sender may schedule while the signalling server is offline; delivery is retried while the app remains open and on subsequent launches.
 - The completed flow makes the meeting requirement explicit: both browsers must be present.
+- The time step includes an off-by-default option labelled exactly **I won’t be able to speak**, with the helper **Live audio will be off for this rendezvous.** Checking it sets a per-rendezvous `liveAudioDisabled` flag.
+- The flag disables only the one-minute live voice option (US-9b) for that rendezvous. It does not disable photo voice notes, change the human relationship, affect any other rendezvous, or alter photo delivery.
+- The flag is part of the appointment metadata and is delivered to both humans through the invitation link or server notice. Both sides must honor the creator’s flag; neither can clear it locally.
+- The flag is fixed when the rendezvous is scheduled. To enable live audio, the creator schedules a new rendezvous without the flag. The earlier rendezvous remains in history under the normal deletion rules.
+- When the flag is set, neither human is offered **start audio 1min** for that rendezvous and no audio consent request is sent.
 - A rendezvous carries at most one photo per participant: the creator’s photo plus an optional reciprocal contribution from the other human (US-10b). The creator’s three-stage flow never waits for a reply.
 - Only one linked human or one **someone new** invitation is selected per direct rendezvous. A circle rendezvous is the group exception: it selects a circle and a shared moment, while each photo transfer remains a direct pairwise handoff.
 
@@ -214,8 +222,9 @@ As a recipient, I want the appointment to be waiting for me even if I was offlin
 - For a rendezvous addressed to a linked human, the signalling server stores the appointment notice until the recipient acknowledges local persistence.
 - If the recipient is online at creation, the notice is delivered immediately.
 - If the recipient is offline, the notice is queued indefinitely within the retention policy and delivered on their next connection.
-- The notice contains only: appointment ID, sender ID, sender display name, scheduled timestamp, and creation timestamp.
+- The notice contains only: appointment ID, sender ID, sender display name, scheduled timestamp, creation timestamp, and the live-audio-disabled flag.
 - The recipient’s client persists the notice locally.
+- The recipient sees the live-audio flag as read-only. It cannot be cleared in the recipient’s browser.
 - The persisted appointment appears in the recipient’s upcoming area and offers **add a photo** for an optional reciprocal contribution (US-10b).
 - An upcoming appointment produces a quiet in-app notice. When the handoff window opens at five minutes before the scheduled time, an online recipient receives a prominent in-app notification; an overdue appointment that is still waiting also shows prominently.
 - The server notice may arrive earlier; the local handoff alert is timed to the open window.
@@ -250,13 +259,14 @@ As a participant in a happening rendezvous, I want a focused screen when both of
 **Status:** Implemented in v0.1.
 
 **Acceptance criteria**
-- The live rendezvous screen appears when the appointment’s handoff window is open and both humans are online. It is the appointment’s live surface; the compact upcoming row remains as a persistent way back if the screen is dismissed.
+- The live rendezvous screen appears when the appointment’s handoff window is open and both humans are online. It is the appointment’s live surface; the compact upcoming row and its **live** action remain a persistent way back if the screen is dismissed. Selecting the row itself opens the rendezvous detail (US-10c), whose live action opens this screen.
 - The screen shows both code names, the scheduled moment, the handoff state (waiting, connecting, transferring, delivered, or retrying), and the state of each photo contribution. It does not auto-open a photo full-screen.
-- It presents one primary action, labelled exactly **start audio 1min**. The action is enabled when both humans are online, the window is open, and the single audio window for this rendezvous is unused. Pressing it starts the consent flow; the audio peer session must then authenticate both pinned identities before any microphone audio flows. It is never started automatically.
+- It presents one primary action, labelled exactly **start audio 1min**, unless live audio is disabled for the rendezvous. The action is enabled when both humans are online, the window is open, the rendezvous does not carry the **I won’t be able to speak** flag, and the single audio window for this rendezvous is unused. Pressing it starts the consent flow; the audio peer session must then authenticate both pinned identities before any microphone audio flows. It is never started automatically.
+- When the rendezvous carries the **I won’t be able to speak** flag, the primary audio action is replaced by a quiet read-only line: **Live audio is off for this rendezvous.** The reason is available as **I won’t be able to speak.** No consent request is sent or accepted, and no audio window exists to consume.
 - Pressing **start audio 1min** sends the consent request from US-9b. If the other person declines or microphone permission is denied, the screen stays usable, explains why audio did not start, and does not block the photo handoff.
 - While audio is live, the screen shows the one-minute countdown, mute, and end controls. Minimising the screen collapses it to the persistent audio strip (VDS-10b) without ending the audio.
 - If a live audio window ends at 60 seconds, on explicit end, or through disconnection, the screen shows “the minute is over” and disables **start audio 1min** for that rendezvous. A live audio window is not cut short merely because a photo finished transferring; it still ends at the 60-second cap or on disconnection.
-- If one human disconnects, the screen changes to a waiting state and audio ends if it was live. The screen returns to the live state when both are present again; **start audio 1min** becomes available again only if the single audio window was not consumed (US-9b).
+- If one human disconnects, the screen changes to a waiting state and audio ends if it was live. The screen returns to the live state when both are present again; **start audio 1min** becomes available again only if live audio is not disabled and the single audio window was not consumed (US-9b).
 - The screen can be dismissed or minimised at any time without cancelling the appointment, closing the peer connection, or stopping an in-progress photo transfer.
 - When the appointment completes, the screen shows an honest delivered state and offers a return to the wall. It never claims delivery before the recipient’s ACK.
 - The screen is not a general call surface. It exists only for an appointment that is currently live and leaves the main surface when the meeting ends.
@@ -282,12 +292,14 @@ As a recipient, I want to know when a photo actually arrives and be able to view
 
 As two people meeting for a photo handoff, we want a short live voice channel at the rendezvous, so that the moment can include a greeting, context, or goodbye without leaving Rendezvous.
 
-**Status:** Implemented in v0.1.
+**Status:** Implemented in v0.1, except the **I won’t be able to speak** disable flag, which is specified here and not yet implemented.
 
 **Acceptance criteria**
-- Audio is offered only for a rendezvous whose handoff window is open, while both humans are online. It is attached to that appointment, not a general calling feature.
+- Audio is offered only for a rendezvous whose handoff window is open, whose creator did not set **I won’t be able to speak**, and while both humans are online. It is attached to that appointment, not a general calling feature.
 - The request is made from the live rendezvous screen (US-8b) through the control labelled exactly **start audio 1min**. Consent, countdown, mute, and end states live on that screen.
-- Either human can request a one-minute audio window; both must explicitly accept and grant microphone permission before any audio flows.
+- When the appointment carries the live-audio-disabled flag, neither human can request, accept, or restart live audio for that rendezvous. The control is replaced by the read-only line **Live audio is off for this rendezvous.** No consent message is sent, and no audio window is consumed because none exists.
+- The flag affects only live audio. Photo voice notes, the photo handoff, notifications, and the wall are unchanged.
+- Unless live audio is disabled, either human can request a one-minute audio window; both must explicitly accept and grant microphone permission before any audio flows.
 - The window is one minute of **connected airtime**, maximum. Only one successful audio window exists per rendezvous.
 - Both sides show a visible and screen-reader-announced countdown. At 60 seconds, both clients stop microphone tracks, close the audio peer connection, show an unambiguous “the minute is over” state, and disable the audio action for that rendezvous.
 - Either person can mute locally or end the window early. Mute state is visible to both. Ending early consumes the window.
@@ -373,11 +385,13 @@ As a user, I want to see my upcoming and waiting rendezvous without opening a se
 
 **Acceptance criteria**
 - A compact “next/upcoming” area presents scheduled and waiting appointments.
+- While at least one rendezvous is pending, this area and the hero countdown are the primary surface; the large **Set a rendezvous** action is hidden (US-6, VDS-5) until no pending appointment remains.
 - Each item identifies the human, local time, opening window, and state.
+- Selecting an upcoming item opens that rendezvous’s detail (US-10c), not the human-detail or verification panel. The detail leads with the attachment this browser will exchange and keeps the eight comparison words available in a collapsed-by-default disclosure.
 - Waiting items clearly say who needs to be online, or that the other person has not joined yet.
 - Delivered photos move onto the ranked wall.
 - Pending and waiting rendezvous are kept in a quiet strip above the wall, separate from the photo sequence.
-- A row for a rendezvous I did not create offers **add a photo** until I contribute or the handoff session begins (US-10b).
+- A row and the rendezvous detail for a rendezvous I did not create offer **add a photo** until I contribute or the handoff session begins (US-10b).
 - A user can delete a photo or pending appointment locally. Deleting a photo removes it from IndexedDB and re-ranks the remaining wall items.
 
 #### US-10b — I can add my photo to a rendezvous I did not create
@@ -399,6 +413,28 @@ As a recipient, I want to see an upcoming rendezvous and attach a photo of my ow
 - My contribution state is visible in my upcoming row. The other participant learns whether I contributed only over the authenticated peer session; contribution metadata is not added to the server notice and carries no image bytes.
 - Delivered photos follow US-9: each is persisted on its recipient’s wall, and the sender’s existing outgoing print remains under the normal direction labels. Deleting one local print never deletes the other participant’s print or the source on another device.
 - Deleting the appointment or removing the human follows existing rules; delivered prints remain until individually deleted, and the server never holds either photo.
+
+#### US-10c — An upcoming rendezvous opens on what I have attached
+
+As a participant checking a meeting, I want selecting an upcoming rendezvous to show the photograph and voice note I am bringing, so that I can confirm the exchange without landing in a key-verification panel.
+
+**Status:** Implemented in v0.1.
+
+**Acceptance criteria**
+- Selecting an upcoming rendezvous row opens that rendezvous’s detail panel. It does not open the human-detail or verification panel.
+- The detail leads with the exchange. It shows the photograph this browser has attached for this meeting, its optional voice note with duration and explicit play/pause (never autoplay), and a plain state such as **your photo · added** or **your photo · not added yet**.
+- For a rendezvous I did not create, the detail offers **add a photo** when I have no reciprocal contribution and the handoff session has not begun. After attachment it offers preview, replace, and remove under US-10b rules.
+- The counterpart’s contribution is shown only as state — for example **Ana’s photo · waiting**, **added**, or **delivered**. It is never shown as a thumbnail, blurred preview, placeholder image, filename, size, voice-note player, or object URL before the handoff.
+- The panel repeats the local moment, the handoff window, the direction (**from** or **to** the human), and the honest handoff state under US-10 and US-12. The live action appears only under the existing US-8b conditions.
+- If the rendezvous was marked **I won’t be able to speak**, the detail shows the quiet read-only line **Live audio off for this rendezvous.** It never offers an audio action.
+- The eight comparison words remain available in a disclosure inside the detail, labelled with the human’s verification state. The disclosure is **collapsed by default every time the detail opens**; the words are not rendered, focused, or announced until the person expands it.
+- Expanding verification shows the same eight words, comparison instruction, and **Mark as verified** action as the human panel (US-3b, VDS-11b). Collapsing it does not discard or change verification.
+- The human’s name and avatar remain a separate path to the full human panel (verify, forget) without competing with the exchange content.
+- If my own attached photo or voice note is missing locally, the detail says so plainly and offers to choose a replacement. It never presents the meeting as ready when the attachment is gone.
+- Selecting a delivered photograph opens the photo viewer, not this detail.
+- Closing the detail with Escape, the close control, or an outside click never cancels the appointment, unlocks a locked contribution, or changes any attachment.
+- Keyboard focus moves into the detail on open. The verification disclosure is a button with `aria-expanded`; focus never lands inside collapsed content. Handoff-state changes use `aria-live`.
+- The detail adds no preview of the counterpart’s media and no new server message. Everything shown comes from local IndexedDB and existing appointment metadata.
 
 ### Circles
 
@@ -542,8 +578,12 @@ As a future Instant Hero component, I want to import the Rendezvous service with
 #### US-13b — I can see what kind of connection I have
 As a curious or troubleshooting user, I want honest network diagnostics, so that I can tell whether the bootstrap path and the direct path are using IPv4 or IPv6.
 
+**Status:** Diagnostics, the very-top-right placement, and the exact **live** label are implemented in v0.1.
+
 **Acceptance criteria**
-- The top-right signal indicator opens a small diagnostics panel.
+- The live indicator sits in the very top-right corner of the page, in the safe area on mobile. It opens a small diagnostics panel.
+- When the signalling connection is live, the indicator’s visible text is exactly **live**. It is not prefixed with, or accompanied by, the word “signal”; other states read **connecting**, **off**, or **another window** without that prefix. Its accessible name may explain that it reports the signalling status.
+- The indicator is a quiet text-and-dot trigger, not another loud button. The dot and word together carry the state, never colour alone.
 - The panel shows the signalling status and how many linked humans are online.
 - It shows the bootstrap connection's observed address family (IPv4 or IPv6), the server's advertised dual-stack capability, and any single-stack warning.
 - It shows the most recent direct connection's selected local and remote candidate families, candidate types, and transport protocol.
@@ -657,6 +697,8 @@ As a sender, the central action is the calm focal point.
 
 Acceptance:
 - Centred in the primary scene, clearly interactive, labelled exactly **Set a rendezvous**.
+- Present only when no rendezvous is upcoming or pending. While one exists, the large stamp is removed entirely — not disabled, faded, or replaced by another large CTA in the hero — and the hero gives its space to the next meeting countdown and moment.
+- The large stamp returns automatically when the last pending rendezvous is delivered or deleted.
 - More expressive than a standard rounded rectangle: a large circular stamp/portal or similarly distinctive action, in the black/ink language, with a precise arrow.
 - Hover/focus causes a restrained fill or orbit movement; nothing bounces or loops distractingly.
 - The action remains obviously tappable on mobile.
@@ -700,6 +742,8 @@ Acceptance:
 - Past dates/times are rejected with an inline, non-destructive message.
 - The meeting requirement is restated in small print: **Both browsers need to be open at the same time. The handoff opens five minutes early; arriving up to five minutes late is fine.**
 - The resolved copy explains that the handoff remains open after the nominal moment if you are both late, rather than implying a hard expiry.
+- Below the date control sits a quiet, off-by-default option labelled exactly **I won’t be able to speak**, with the helper **Live audio will be off for this rendezvous.** It is part of the time step, not a fourth stage.
+- Selecting the option does not change the time, date, photo, or voice note. The DONE summary repeats that live audio is off.
 - Back and Schedule actions are visually distinct.
 
 ### VDS-8 — DONE
@@ -709,6 +753,7 @@ Acceptance:
 - Stage three says **DONE** or **Rendezvous set** prominently.
 - Shows the recipient code name, or **someone new**, and the resolved moment.
 - If a voice note is attached, the summary says so with its duration; it does not auto-play.
+- If live audio was disabled, the summary includes a quiet line: **Live audio off · I won’t be able to speak.** It does not imply that photo voice notes are blocked.
 - For a linked human, shows the status line: “We’ll tell [name] when they next arrive.”
 - For **someone new**, shows the join link and says that opening it gives them this rendezvous immediately, linking the two browsers.
 - Contains the caveat: “The photo stays here until you’re both online.”
@@ -720,8 +765,9 @@ Acceptance:
 As two people meeting, the screen feels like a shared room, not a call app.
 
 Acceptance:
-- The live screen is a warm paper scene over a quiet scrim on desktop, and a full-height sheet above the circle bar and safe area on mobile.
+- The live screen is a warm paper scene over a quiet scrim on desktop, and a full-height sheet above the circle dock and safe area on mobile.
 - Both code names are set large, with the moment in small caps and the current state in plain language. The largest control is **start audio 1min** with a microphone glyph and a small 1:00 mark; it is the only loud element.
+- If the rendezvous carries **I won’t be able to speak**, the audio control is replaced by the quiet read-only line **Live audio is off for this rendezvous.** There is no request card, countdown, mute, end, or audio strip.
 - At most two contribution lines appear, for example “your photo · added” and “Ana’s photo · waiting”; there are no thumbnails or early photo previews.
 - Connecting, transferring, delivered, and retrying states reuse the calm vocabulary of VDS-9 and never show a bare spinner.
 - While audio is live, the button is replaced in place by the countdown, mute, and end controls. A minimised screen leaves the VDS-10b strip visible.
@@ -735,7 +781,7 @@ As a sender or recipient, I immediately know why nothing is transferring.
 Acceptance:
 - Never show a generic “delivered” when waiting.
 - Show the handoff as **open** from five minutes before the scheduled moment; label it “early” before the nominal time, “due” at the time, and “still open” through the five-minute late tolerance. Both early and late presence trigger the connection automatically. Lateness beyond five minutes must never look like failure or expiry.
-- While a rendezvous is pending, the main hero shows a live countdown to the scheduled moment as its primary text, with the resolved date/time as subtext. After the moment passes it reads “now” or “still open”. The ticking value is not announced every second by assistive technology.
+- While a rendezvous is pending, the main hero shows a live countdown to the scheduled moment as its primary text, with the resolved date/time as subtext, and the large **Set a rendezvous** action is hidden (US-6, VDS-5). After the moment passes it reads “now” or “still open”. The ticking value is not announced every second by assistive technology.
 - If only I am online: “Waiting for [name] to come online.”
 - If only they are online: “[Name] is here. Your photo is with them and will move when they are online too.” (for the recipient, “with them” = with the sender; for the sender, “Waiting for [name]”.)
 - If both are online, the state changes to connecting/transferring automatically and the live rendezvous screen (VDS-8b) becomes available.
@@ -759,7 +805,8 @@ Acceptance:
 As a participant, the audio moment feels like a small, deliberate window rather than a permanent call bar.
 
 Acceptance:
-- The audio action is quiet and contextual: it appears on the live rendezvous screen (VDS-8b) as the control **start audio 1min**, only when both humans are present. It is never a global always-on call control.
+- The audio action is quiet and contextual: it appears on the live rendezvous screen (VDS-8b) as the control **start audio 1min**, only when both humans are present and the rendezvous was not marked **I won’t be able to speak**. It is never a global always-on call control.
+- When the rendezvous carries the flag, the screen shows only **Live audio is off for this rendezvous.** None of the request, countdown, mute, end, or audio-strip states appear, and no consent message is sent.
 - Request/accept uses a small card with the counterpart’s name, a microphone explanation, and **Allow a minute** / **Not now** actions. Copy states plainly: “Nothing is recorded. Your microphone is live for at most sixty seconds.”
 - During the window, a slim ink strip sits above the footer/bottom safe area (never covering the photo wall): counterpart name, circular or linear 60-second countdown, mute toggle, and end action.
 - The countdown is typographic and calm, not a panic siren. Final ten seconds may gain a subtle accent; there is an audible/announced cue at 10 seconds and at the end.
@@ -770,6 +817,21 @@ Acceptance:
 - Accessibility includes a non-colour countdown label, focusable mute/end controls, and `aria-live` announcements without announcing every second.
 - No recording indicator should appear because nothing is recorded; the microphone indicator and copy should say “live voice, not recorded.”
 
+### VDS-10c — Upcoming rendezvous detail
+
+As a participant checking a meeting, I see what I am bringing first, and the security footnote only when I ask for it.
+
+Acceptance:
+- Selecting an upcoming row opens a warm paper detail card in the same modal/sheet language as the composer. It replaces the current behaviour of opening the human verification panel.
+- The top of the card is the exchange: my attached photograph as a calm print preview from local storage only, the line **your photo · added**, and the voice-note player or its duration when present. For an incoming appointment without a contribution, the quiet **add a photo** action takes that place.
+- The other side is one line of honest state — **Ana’s photo · waiting**, **added**, or **delivered** — not an image. No blurred preview, thumbnail skeleton, filename, size, or duration hints at media this browser does not hold yet.
+- The human’s name and avatar, the local moment, the window, and the handoff state sit above or beside the exchange. The live action appears only when the live rules allow it and opens the live rendezvous screen.
+- If the rendezvous was marked **I won’t be able to speak**, the detail shows **Live audio off for this rendezvous.** in place of any audio action.
+- The comparison words live near the bottom as a collapsed row: **comparison words · not verified** (or **· verified**), with a chevron. It opens in place to the same two-by-four poem on demand, and is collapsed again the next time the detail is opened.
+- The disclosure is a real button with `aria-expanded`; its content is not rendered while collapsed. Reduced-motion preferences remove any reveal animation.
+- On mobile the detail is a sheet above the circle dock and safe area, with the local attachment and **add a photo** action above the fold.
+- Hierarchy is exchange first, meeting details second, verification last. Verification must not look like the main content of an upcoming rendezvous.
+
 ### VDS-11 — Humans
 
 As a returning user, I can see my private circle.
@@ -778,6 +840,7 @@ Acceptance:
 - A quiet horizontal list (or wrapped row) beneath the central scene labelled “your humans”. With none, the empty state invites setting a rendezvous for **someone new** rather than offering a separate add action.
 - Each human shows a small avatar/initial, code name, and a live dot when online.
 - Online status is indicated by both dot and text/accessibility label, not colour alone.
+- Selecting a human opens the human detail panel (verification and removal). Selecting an upcoming rendezvous opens the rendezvous detail instead (VDS-10c). The two paths never open the same panel.
 - Remove action is available on the item without hover-only dependence, ideally in a small menu or labelled × with confirmation affordance.
 - Empty state is an invitation-like line, not a blank area.
 
@@ -787,6 +850,7 @@ As a human with a new connection, I can comfortably verify without the interface
 Acceptance:
 - Each human item shows a small, honest status: **Verified** or **Not verified** (with a shield/check mark; never colour alone).
 - Opening a human’s small detail panel shows their name, the eight-word code, the comparison instruction, and a “Mark as verified” action.
+- In the upcoming rendezvous detail (VDS-10c), the same words are a collapsed disclosure beneath the exchange content, closed by default each time; they are not rendered or announced until expanded. The human panel remains the direct verification path.
 - The eight words are typeset as a calm poem-like sequence (two lines of four), at a comfortable reading size, selectable but not presented as a copyable secret.
 - Copy reads: “Say these words out loud, or compare them in another app. Don’t send them through this one.”
 - A verified human’s badge has a quiet filled treatment; unverified is an outlined mark.
@@ -801,7 +865,7 @@ Acceptance:
 - Ordering is by arrival, freshest first. The freshest is rank **01** at the largest scale. The ranking algorithm is deliberately isolated so a richer relevance/recency algorithm can replace arrival order later.
 - Scale follows a power law: `width = clamp(min, base × rank^-α, max)` where α is a gentle positive exponent (currently 0.24). Each subsequent photograph is a little smaller; a practical minimum keeps old photos usable on small screens.
 - The board is a wrapped wall with whitespace between photos, not a single-row shelf. The largest/freshest photograph anchors the top-left of the board, and every subsequent print clusters toward that same top-left corner; whitespace is allowed to grow to the right and below.
-- There is generous breathing room between the top menu (Code Name / signal) and the board. The board can live below the hero and human strip.
+- There is generous breathing room between the top menu (Code Name / live indicator) and the board. The board can live below the hero and human strip.
 - Each item is a framed print with a tiny rank marker, direction/sender caption, date, and a voice-note badge when applicable. Slight rotations may be used sparingly; the layout must still read as one composition.
 - Outgoing prints expose a **Share again** action in the viewer; it is not drawn on top of the print itself.
 - Pending, waiting, and failed rendezvous are shown in a separate compact strip above the wall. They do not occupy rank positions reserved for delivered photographs.
@@ -829,10 +893,10 @@ Acceptance:
 As a phone user, I get the same calm hierarchy.
 
 Acceptance:
-- Header keeps code name centred; there is no add-human control; signal status hides on narrow screens.
+- Header keeps code name centred; there is no add-human control. The live indicator stays in the very top-right corner and remains compact rather than disappearing on narrow screens.
 - Hero type and central action scale below 600 px.
 - Modals become bottom sheets with large touch targets and safe-area padding.
-- The circle bar stays pinned to the bottom above the safe area; its icons remain at least 44 px and scroll horizontally.
+- The circle dock stays pinned to the bottom-right above the safe area. When its row overflows, its visible lane always shows at least 2.5 circular items; icons remain at least 44 px and scroll horizontally.
 - Photo preview, date/time controls, and human selection are usable without horizontal scrolling.
 - Reduced-motion preference removes non-essential animation.
 
@@ -849,7 +913,8 @@ Acceptance:
 As a user, I can open a calm technical footnote without leaving the page.
 
 Acceptance:
-- The top-right signal text/dot is a quiet, text-sized trigger — not another loud button.
+- The live indicator is pinned to the very top-right corner of the page, inside the safe area on mobile. It is a quiet, text-sized text-and-dot trigger — not another loud button.
+- When connected, the visible label is exactly **live**, without a **signal** prefix or companion word. Other states use **connecting**, **off**, or **another window** with the same restraint. The word **signal** belongs inside the diagnostics panel, not in the page chrome.
 - The panel is paper-coloured, compact, and uses monospaced labels with readable values.
 - Rows cover signal, this socket's family/address, bootstrap dual-stack state, the last direct route, and candidate-family counts.
 - Single-stack warnings use the accent bar and plain language, not alarm styling.
@@ -857,19 +922,21 @@ Acceptance:
 - Copy reminds the user that the app can use IPv6 only when the operating network provides it; the app cannot create an address.
 - No IPv6 toggles or fake controls are added.
 
-### VDS-16 — The circle bar
+### VDS-16 — The circle dock
 
-As a member of several circles, I can switch circles from a persistent bottom bar, so that every circle is one tap away without competing with the main actions.
+As a member of several circles, I can switch circles from a persistent right-hand dock, so that every circle is one tap away without competing with the main actions.
 
 Acceptance:
-- A persistent bottom bar spans the bottom of the main app on desktop and mobile.
-- The **`+ circle`** button is the leftmost item, pinned to the left edge of the bar. Its visible label is exactly `+ circle`.
+- A persistent circle dock is anchored to the bottom-right corner of the main app on desktop and mobile. Its right edge aligns to the page’s right safe margin; it does not span the viewport, sit at the centre, or grow from the left.
+- It reads and appears from the right-hand edge of the page. Any entry or width-change motion comes in from the right, never from the left or out of the centre; reduced-motion preferences remove the movement.
+- The **`+ circle`** button is the leading item, pinned to the bar’s left edge. Its visible label is exactly `+ circle`.
 - The `+ circle` button must always be an actual circle: equal width and height with a fully circular outline, at least 44 px in both dimensions. It is never a pill, rounded rectangle, or rectangular tab, at any viewport size.
 - Every circle the person belongs to appears exactly once to the right of the button as a perfectly circular icon, never as a rectangular tab or pill.
 - Each icon is at least 44 px in both dimensions, shows the circle’s initial or a quiet mark, and has an accessible name equal to the circle’s name.
 - The active circle has a clear selected treatment (a ring or filled mark, plus a text or accessibility state), not colour alone.
 - Selecting a circle icon makes it the active circle and updates the main surface. Selecting `+ circle` opens the create/join circle flow.
 - The circle icons sit in a single horizontally scrollable row. The `+ circle` button stays at the left edge while the row scrolls; icons never shrink below 44 px.
+- Whenever the row has more items than fit, the visible lane always shows at least 2.5 circular items — two complete circles plus half of the next — even on the narrowest viewport. The half-clipped circle is the overflow cue: it is cut by the dock, never compressed below its 44 px geometry, and becomes fully visible when the row is scrolled. The page itself never gains horizontal overflow.
 - With no circles, the bar shows only `+ circle`; there are no empty placeholders.
 - The bar respects the mobile safe area and never covers `Set a rendezvous`, the photo wall, or a modal’s primary actions. Toasts stack above it.
 - Every item is keyboard reachable with a visible focus ring and is operable by keyboard and screen reader.
@@ -911,7 +978,7 @@ For photo delivery, confirm:
 ```text
 [ ] the invitation link was opened in the intended browser profile
 [ ] both browsers list the other under "your humans"
-[ ] both show signal · live
+[ ] both show live
 [ ] both show the other human as "here now"
 [ ] the eight comparison words match and are marked verified
 ```
@@ -923,22 +990,29 @@ If one of the first four lines is missing, the relationship is not ready for del
 ```text
 1. Sender taps "Set a rendezvous".
 2. Selects a local photo, optionally records one voice note (≤60s), and chooses either a linked human or "someone new".
-3. Picks time (+ optional date).
-4. App resolves the local timestamp and saves the appointment + photo + optional voice note to IndexedDB.
+3. Picks time (+ optional date) and may mark "I won't be able to speak" to disable live audio for this rendezvous.
+4. App resolves the local timestamp and saves the appointment + photo + optional voice note + live-audio flag to IndexedDB.
 5. If the person is already linked, the app sends ONLY appointment metadata to the signalling server.
    If the person is "someone new", the same metadata is bound into the signed invitation link instead.
 6. Linked human: server stores the notice until the recipient acknowledges, or delivers it immediately if they are online.
    Someone new: opening the signed link stores the same appointment immediately in the invitee's browser.
 7. Confirmation: DONE. Both cases repeat: "Both browsers need to be open at the same time. The handoff opens five minutes early, and lateness does not cancel it."
    Someone new also receives the join link here, with no separate add-human step.
+   If live audio was disabled, the confirmation also says "Live audio off · I won't be able to speak."
 ```
+
+The large **Set a rendezvous** action is only on screen while no appointment is pending. Once step 4 saves the first pending rendezvous, the hero countdown takes its place; the button returns when the last pending rendezvous is delivered or deleted.
 
 ### 6.2b Adding a reciprocal photo to someone else’s rendezvous
 
 ```text
 Recipient sees the appointment in the upcoming area
         │
-        ├─ taps "add a photo"
+        ├─ taps the upcoming row
+        │     └─ rendezvous detail opens: my photo/note and contribution state first;
+        │        the counterpart's media is state only; comparison words are collapsed
+        │
+        ├─ taps "add a photo" in the row or detail
         ├─ selects/validates one local image (+ optional voice note)
         ├─ photo stays in the recipient’s IndexedDB, attached to the existing appointment ID
         │     (no second appointment, no server upload)
@@ -951,6 +1025,22 @@ At the meeting (both online):
 ```
 
 The creator’s appointment and photo are unchanged. The reciprocal contribution is optional and never makes the creator’s handoff conditional on a reply. No contribution bytes or contribution metadata are sent to the signalling server.
+
+### 6.2c Opening an upcoming rendezvous
+
+```text
+Participant taps an upcoming rendezvous row
+        │
+        ├─ the rendezvous detail opens (not the human verification panel)
+        ├─ top: my local photo (+ optional voice note) and its state
+        │       counterpart state only: waiting / added / delivered
+        ├─ middle: human, local moment, window, honest handoff state
+        └─ bottom: comparison words disclosure, collapsed every time
+                │
+                └─ expand → same eight words + "Mark as verified"
+
+Closing the detail never cancels the appointment or unlocks a contribution.
+```
 
 ### 6.3 The meeting
 
@@ -986,6 +1076,11 @@ If the recipient attached a reciprocal photo (US-10b), the same authenticated se
 ```text
 Both online, handoff window open, appointment still active
         │
+        ├─ appointment carries liveAudioDisabled?
+        │       └─ yes → no audio action or consent request; show
+        │                "Live audio is off for this rendezvous."
+        │                the photo handoff continues normally
+        │
         ├─ Either person taps "start audio 1min" on the live rendezvous screen
         │       │
         │       └─ other person must accept + both grant microphone
@@ -1000,7 +1095,7 @@ Both online, handoff window open, appointment still active
         └─ photo handoff is independent and continues normally
 ```
 
-The audio offer exists only while both humans are present for the due appointment. It is not a mailbox, a wake-up call, a recording, or a general voice service. A missed call cannot be replayed.
+The audio offer exists only while both humans are present for the due appointment and the creator has not marked **I won’t be able to speak**. It is not a mailbox, a wake-up call, a recording, or a general voice service. A missed call cannot be replayed. The live-audio flag is appointment metadata, not media; it is visible to the signalling server and to both humans, and it never disables photo voice notes.
 
 ### 6.3c Photo voice notes
 
@@ -1105,10 +1200,10 @@ A circle may also set an optional signed time window. It constrains only the sch
 - **FR-12** Human removal propagates both ways and cancels pending meetings.
 - **FR-13** Reusable headless client + custom-element UI, ESM, no framework requirement.
 - **FR-14** Dual-stack bootstrap server by default, with startup and in-app warnings for single-stack deployments.
-- **FR-15** Connection diagnostics for signalling family, dual-stack capability, ICE candidate families, and selected direct route.
+- **FR-15** Connection diagnostics for signalling family, dual-stack capability, ICE candidate families, and selected direct route, opened from a very-top-right live indicator.
 - **FR-16** Revoked invite-token hashes, enforced locally and by the bootstrap server.
 - **FR-17** One optional voice note of up to 60 seconds attached to a photograph, stored and transferred with it over the authenticated P2P handoff, never server-stored.
-- **FR-18** One authenticated, one-to-one, camera-off live voice window of at most 60 seconds while a rendezvous's handoff window is open; explicit mutual consent; no recording; no server media.
+- **FR-18** One authenticated, one-to-one, camera-off live voice window of at most 60 seconds while a rendezvous's handoff window is open, unless the creator set **I won’t be able to speak**; explicit mutual consent; no recording; no server media.
 - **FR-19** Re-share an outgoing delivered photograph (and its note) from local storage to a new rendezvous without re-upload or file picker; all shares independent.
 - **FR-20 (later)** Opt-in public-photo layer with re-sharing, attribution, revocation, moderation, and separate storage — not part of the private photo path.
 - **FR-21** Responsive, keyboard-accessible interface matching §5.
@@ -1117,11 +1212,15 @@ A circle may also set an optional signed time window. It constrains only the sch
 - **FR-24** Circle invitations are signed and addressed to one public-key identity; the current build auto-accepts valid invitations and still records a signed Join.
 - **FR-25** The signalling server stores only the circle rendezvous invite, until the scheduled rendezvous time has passed, and delivers it to current members; all other circle records may be relayed only between connected mutual humans but are never stored, and the server cannot create, alter, re-sign, choose, or promote them.
 - **FR-26** When at least two circle members are online, their clients automatically sync signed circle records over authenticated peer channels, relayed opaquely by the signalling server while both are online.
-- **FR-27** A persistent bottom circle bar lists every circle as a circular icon, with `+ circle` pinned at the left as an actual circle; selecting an icon switches the active circle.
+- **FR-27** A persistent circle dock anchored to the bottom-right lists every circle as a circular icon, with `+ circle` as the circular leading item; whenever the row overflows, at least 2.5 circular items remain visible as the scroll cue; selecting an icon switches the active circle.
 - **FR-28** A non-creator may attach at most one reciprocal photo to an existing rendezvous; it stays local, locks when the handoff session begins, and travels over the same authenticated P2P session with independent per-direction ACKs.
 - **FR-29** A live rendezvous screen appears while an appointment is active and both participants are connected, with the exact **start audio 1min** action; it never gates or blocks the photo handoff.
 - **FR-30** A circle may define an optional signed time window. A circle rendezvous is valid only when its scheduled instant falls inside the window active at the plan's signed creation time. The window constrains scheduling only: it never shortens the handoff window, invalidates an earlier valid plan, or changes attendance, stats, or media transfer, and it is never server-stored.
 - **FR-31** The owner of a photograph can see a per-`photoId` inventory of humans who received a private copy through Rendezvous, based on signed possession claims and releases, with honest confirmed/last-confirmed/deleted states. The inventory is local to the owner, uses no server-side possession ledger, does not track copies exported outside Rendezvous, and never enables remote recall.
+- **FR-32** Selecting an upcoming rendezvous opens its exchange detail, leading with the local photo and voice note to be exchanged and the counterpart’s contribution state; the eight comparison words remain available there in a disclosure that is collapsed by default. No counterpart media is fetched or previewed before the handoff.
+- **FR-33** The live connection indicator sits in the very top-right corner and reads exactly **live** when connected, without the word **signal** in the page chrome; it opens the diagnostics panel.
+- **FR-34** The large central **Set a rendezvous** action is hidden while any rendezvous is pending or upcoming and returns when no such appointment remains; the hero countdown and upcoming area take its place.
+- **FR-35** The rendezvous time step offers **I won’t be able to speak**, stored as a per-rendezvous `liveAudioDisabled` flag in the appointment metadata. The flag is delivered to both humans and disables live one-minute voice for that rendezvous only; it does not affect photo voice notes, photos, notifications, or any other rendezvous.
 
 ## 8. Non-functional requirements
 
@@ -1370,7 +1469,8 @@ The wall is a client-side presentation of delivered photos, never a server featu
 This feature is a deliberate exception to the otherwise photo-only surface. It must not compromise the privacy or reliability invariants of the handoff.
 
 **Availability**
-- The request action is the **start audio 1min** control on the live rendezvous screen (US-8b). It is visible only on a rendezvous whose handoff window is open and where both humans are online.
+- The request action is the **start audio 1min** control on the live rendezvous screen (US-8b). It is visible only on a rendezvous whose handoff window is open, where both humans are online, and where the creator did not set **I won’t be able to speak**.
+- If the appointment carries the live-audio-disabled flag, no request action appears and no request is accepted on either side. No audio window exists or is consumed; the photo handoff and photo voice notes remain unchanged.
 - The action can be used while the photograph is waiting, connecting, or transferring. The photo path never depends on audio succeeding.
 - One successful audio window per rendezvous. After it ends, no restart is offered for that appointment.
 - Microphone permission is per request, explicit, and revocable in the browser.
@@ -1450,6 +1550,7 @@ Until those are designed, all photos are private and re-sharing is limited to lo
 ```ts
 import {
   RendezvousClient,
+  buildInviteUrl,
   createRendezvousClient,
   defineRendezvousApp,
 } from '@instanthero/rendezvous';
@@ -1463,8 +1564,12 @@ await client.start();
 client.on('state', render);
 
 await client.setCodeName('Ana');
-const link = await client.createInviteLink();
-const code = await client.verificationCodeFor(humanId); // 8 words, local
+const record = await client.scheduleRendezvousForNewPerson({
+  photo,
+  scheduledFor: timestamp,
+});
+const link = buildInviteUrl(record.inviteToken!);
+const code = await client.verificationWordsFor(humanId); // 8 words, local
 await client.markHumanVerified(humanId);
 await client.scheduleRendezvous({
   humanId,
@@ -1573,8 +1678,8 @@ These are explicit follow-ups, not accidental omissions.
 11. **Stable verification code:** both tabs independently show the same eight words after linking; reloading or a new DTLS session keeps them identical; marking verified persists. An intentionally altered pinned key produces different words and fails the live handshake.
 12. **Signed handshake:** an offer/answer with altered DTLS fingerprints (simulated in test) is rejected before any photo bytes are sent.
 13. **Ephemeral RTC:** closing a tab terminates the direct connection; reopening and both being online re-establishes signalling and can complete a pending handoff without another invitation.
-14. **Accessibility:** keyboard-only invite, verify, schedule, dismiss, and remove flows; visible focus; correct live announcements.
-15. **Responsive:** 390×844 and 1280×800 viewports; no horizontal overflow; modals usable.
+14. **Accessibility:** keyboard-only invite, verify, schedule, dismiss, remove, open an upcoming rendezvous detail, and expand its comparison words; visible focus; correct live announcements.
+15. **Responsive:** 390×844, 320×568, and 1280×800 viewports; no horizontal overflow; modals usable; the `live` indicator stays in the very top-right corner; the circle dock still exposes at least 2.5 circular items when its row overflows.
 16. **Photo wall ranking:** deliver at least three photographs; the newest is rank 01 and largest, every subsequent width is smaller until the practical minimum, all remain present, and clicking any one opens the viewer.
 17. **Server contains no photos:** test with two browsers; inspect all server messages/storage for image data; none present.
 18. **One-minute voice:** with both present at an open-handoff rendezvous, open the live rendezvous screen, press **start audio 1min**, request/accept microphone consent, verify audio flows only after the authenticated handshake, countdown ends at 60 seconds, tracks stop, the action cannot be reused, and a microphone denial leaves the photo path functional.
@@ -1586,11 +1691,15 @@ These are explicit follow-ups, not accidental omissions.
 24. **Circle invite auto-accept:** a valid addressed invitation is auto-accepted and produces a signed Join; a bundle forwarded to another key is rejected; leaving still works.
 25. **Circle invite, not circle storage:** an offline member receives the expiring invite on next connection; the server contains no circle membership, attendance, stats, or record log and no photo bytes; the invite is deleted once its scheduled rendezvous time has passed; duplicate delivery is idempotent. All other circle records sync only over authenticated RTC.
 26. **Circle auto-sync:** two online members with different arrival orders converge without manual action; when one reconnects, sync resumes.
-27. **Circle bar:** with zero, one, and many circles, every circle appears exactly once as a circular icon, `+ circle` is leftmost, pinned, and an actual circle, the active state is accessible, the row scrolls without shrinking icons, and the bar covers neither the wall nor primary controls at 390×844 and 1280×800.
+27. **Circle dock:** with zero, one, and many circles, every circle appears exactly once as a circular icon, `+ circle` is the leading item and an actual circle, the dock is anchored to the bottom-right and enters from the right, the active state is accessible, the row scrolls without shrinking icons, and whenever it overflows at 390×844, 320×568, and 1280×800 it exposes at least two complete circles plus half of the next without page-level horizontal overflow; the dock covers neither the wall nor primary controls.
 28. **Reciprocal photo:** B opens an appointment A created, attaches a photo while A is offline, and sees it in the upcoming row; no photo bytes or contribution metadata reach the server; when both are online, A's photo reaches B and B's photo reaches A, each with its own ACK; a missing contribution on one side still completes the other direction.
 29. **Live rendezvous screen:** when both are online inside the window, the live screen appears; **start audio 1min** is disabled after the single window is consumed, and audio cannot flow before both peers authenticate; dismissing or minimising it does not pause the transfer; audio consent/countdown works; microphone denial leaves the photo path functional.
 30. **Circle time window:** a circle sets a single-evening window; a plan at 21:30 is accepted and canonical, plans exactly at either boundary are accepted, and plans before the start, after the end, and on the next day are rejected; a later window does not invalidate the accepted plan; a window crossing midnight still yields at most one canonical rendezvous per local day; an offline member merges the same window records and reaches the same verdicts without the server storing the window.
 31. **Photo possession inventory:** a recipient receives, ACKs and claims a photo; the owner's inventory shows **confirmed recently/last confirmed** with the correct time. The recipient deletes the local copy and a signed release reaches the owner; the state becomes **deleted**, but not before. An offline recipient is shown as **last confirmed**, never as currently holding. A re-share to a second human adds a holder under the same `photoId`. Removing a human leaves the last known state without remote recall. A copy downloaded and sent outside Rendezvous never appears. The server contains no possession ledger.
+32. **Upcoming rendezvous detail:** selecting an upcoming rendezvous opens the exchange detail, not the human verification panel. The local photo and voice note (if any) are shown from IndexedDB; the counterpart’s photo appears only as state. The comparison words are collapsed by default and absent from the accessibility tree until expanded. No incoming object URL, thumbnail, filename, size, or voice-note metadata is created before delivery. The human chip still opens the human panel; a delivered print still opens the viewer.
+33. **Live indicator:** at the top-right corner, the connected state shows exactly **live** with no **signal** prefix in the page chrome, has an accessible name that says what state it reports, and opens the diagnostics panel; narrow screens keep it compact in the corner rather than removing it.
+34. **Upcoming hides the large action:** with no pending rendezvous, the large **Set a rendezvous** action is visible. After one is set, it disappears completely while the appointment is scheduled, waiting, failed, or overdue, and the hero countdown/upcoming area takes its place. Delivering or deleting the last pending appointment brings the action back. It is never shown disabled or faded in this state.
+35. **Live audio disabled:** set a rendezvous with **I won’t be able to speak** checked. Both browsers receive the flag; the live rendezvous screen shows **Live audio is off for this rendezvous.** on both sides; no **start audio 1min** control or consent request appears; the photo handoff and any photo voice note still work; other rendezvous remain unaffected; a later rendezvous without the flag can use live audio normally.
 
 ---
 

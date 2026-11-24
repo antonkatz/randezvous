@@ -1,29 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-
-async function setName(page: Page, name: string): Promise<void> {
-  await page.locator('#code-name').fill(name);
-  await page.locator('#code-name').blur();
-}
-
-async function link(ana: Page, baz: Page): Promise<void> {
-  await ana.goto('/');
-  await setName(ana, 'Ana');
-  await baz.goto('/');
-  await setName(baz, 'Baz');
-  await ana.waitForTimeout(250);
-  await ana.getByRole('button', { name: 'add human' }).click();
-  await ana.waitForFunction(() => {
-    const root = document.querySelector('rendezvous-app')?.shadowRoot;
-    return Boolean(root?.querySelector<HTMLInputElement>('#invite-link')?.value.startsWith('http'));
-  });
-  const linkUrl = await ana.locator('#invite-link').inputValue();
-  await ana.locator('#invite-close').click();
-  await baz.goto(linkUrl);
-  await expect(ana.locator('#humans-list')).toContainText('Baz');
-  await expect(baz.locator('#humans-list')).toContainText('Ana');
-  await expect(ana.locator('#humans-list')).toContainText('here now');
-  await expect(baz.locator('#humans-list')).toContainText('here now');
-}
+import { linkPages } from './helpers';
 
 function localInput(date: Date): string {
   const pad = (value: number): string => String(value).padStart(2, '0');
@@ -41,7 +17,7 @@ test('a circle sets a canonical plan and an optional window, and invitations aut
   ana.on('pageerror', (error) => errors.push(`Ana: ${error.message}`));
   baz.on('pageerror', (error) => errors.push(`Baz: ${error.message}`));
 
-  await link(ana, baz);
+  await linkPages(ana, baz);
 
   const bar = ana.locator('circle-bar');
   await bar.getByRole('button', { name: 'Create a circle' }).click();
@@ -101,7 +77,7 @@ test('an offline member receives the expiring circle rendezvous invite on reconn
   ana.on('pageerror', (error) => errors.push(`Ana: ${error.message}`));
   baz.on('pageerror', (error) => errors.push(`Baz: ${error.message}`));
 
-  await link(ana, baz);
+  await linkPages(ana, baz);
   const bar = ana.locator('circle-bar');
   await bar.getByRole('button', { name: 'Create a circle' }).click();
   const form = ana.locator('circle-create-form');

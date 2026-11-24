@@ -35,6 +35,7 @@ export interface Human extends StoredHuman {
 export type RendezvousDirection = 'outgoing' | 'incoming';
 
 export type RendezvousStatus =
+  | 'awaiting-join'
   | 'scheduled'
   | 'waiting'
   | 'connecting'
@@ -116,6 +117,10 @@ export interface StoredRendezvous {
   sessionStartedAt: number | null;
   /** Set when a live audio minute started successfully. */
   audioWindowUsedAt: number | null;
+  /** Creator chose "I won't be able to speak" for this rendezvous. */
+  liveAudioDisabled: boolean;
+  /** Local-only invitation token while the creator waits for someone new. */
+  inviteToken: string | null;
   announcedAt: number | null;
   lastAttemptAt: number | null;
   deliveredAt: number | null;
@@ -305,6 +310,17 @@ export interface ScheduleInput {
   photoId?: string;
   note?: VoiceNoteAttachment | null;
   scheduledFor: number;
+  /** Set when the creator cannot speak during this rendezvous. */
+  liveAudioDisabled?: boolean;
+}
+
+export interface NewPersonScheduleInput {
+  photo: File | Blob;
+  fileName?: string;
+  note?: VoiceNoteAttachment | null;
+  scheduledFor: number;
+  /** Set when the creator cannot speak during this rendezvous. */
+  liveAudioDisabled?: boolean;
 }
 
 export interface ContributionInput {

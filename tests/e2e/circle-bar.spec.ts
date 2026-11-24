@@ -6,6 +6,12 @@ test('the circle bar creates, selects, and marks the active circle', async ({ pa
 
   const bar = page.locator('circle-bar');
   await expect(bar).toBeVisible();
+  await page.waitForTimeout(500);
+  const dockBox = await bar.boundingBox();
+  const viewport = page.viewportSize();
+  expect(dockBox).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(dockBox!.x + dockBox!.width).toBeGreaterThan(viewport!.width - 40);
   const create = bar.getByRole('button', { name: 'Create a circle' });
   await expect(create).toBeVisible();
 

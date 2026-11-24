@@ -54,7 +54,7 @@ await sync.start();
 
 The stats brief defines the signed `Invite` and `Join` records and the membership chain, but it does not define delivery. This module adds a complete invitation bundle on top of the existing direct-human connection:
 
-1. **Add the person as a human first.** Circle membership is not an identity link. The host app's existing add-human flow creates the persistent direct connection and pins the public key.
+1. **Meet the person first.** Circle membership is not an identity link. In the reference app, redeeming a rendezvous invitation creates the persistent direct connection and pins the public key.
 2. **A current member creates an invitation.**
    ```ts
    const bundle = await createCircleInvite({
@@ -99,7 +99,7 @@ The circle page element can show direct friends who are not yet members: compute
 
 Records name their authors by public-key id. They do not embed public keys, and this module does not invent a key-transparency protocol. `Identity.verify(peerId, bytes, sig)` must already be able to resolve that id to a key.
 
-- Direct humans are normally pinned by the existing add-human flow.
+- Direct humans are normally pinned by redeeming a rendezvous invitation.
 - An invitation offer is delivered over an authenticated direct channel, so the inviter/invitee keys are already known.
 - A **transitive member** (someone listed in `unconnectedToYou`) may be unknown to this browser. Their records cannot be verified until the host learns their public key. The current app's peer id is a hash of the public key, not the key itself, so the key must be delivered out of band.
 

@@ -1,21 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
-
-async function setName(page: Page, name: string): Promise<void> {
-  await page.locator('#code-name').fill(name);
-  await page.locator('#code-name').blur();
-}
-
-async function createInvite(page: Page): Promise<string> {
-  await page.getByRole('button', { name: 'add human' }).click();
-  await page.waitForFunction(() => {
-    const root = document.querySelector('rendezvous-app')?.shadowRoot;
-    const input = root?.querySelector<HTMLInputElement>('#invite-link');
-    return Boolean(input?.value.startsWith('http'));
-  });
-  const link = await page.locator('#invite-link').inputValue();
-  await page.locator('#invite-close').click();
-  return link;
-}
+import { expect, test } from '@playwright/test';
+import { createRendezvousLink, setName } from './helpers';
 
 test('an unacknowledged join is retried until the inviter saves the human', async ({
   browser,
@@ -52,7 +36,7 @@ test('an unacknowledged join is retried until the inviter saves the human', asyn
   await desktop.goto('/');
   await setName(desktop, 'Desktop');
 
-  const link = await createInvite(mobile);
+  const { link } = await createRendezvousLink(mobile);
   await desktop.goto(link);
 
   await expect(desktop.locator('#humans-list')).toContainText('Mobile');

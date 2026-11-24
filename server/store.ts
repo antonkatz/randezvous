@@ -29,6 +29,13 @@ export interface StoredCircleRendezvous {
   expiresAt: number;
 }
 
+export interface StoredInviteBinding {
+  hash: string;
+  inviterId: string;
+  inviteeId: string;
+  createdAt: number;
+}
+
 interface StoreData {
   version: 1;
   joins: JoinRequest[];
@@ -37,6 +44,7 @@ interface StoreData {
   revokedInvites: string[];
   appMessages: StoredAppMessage[];
   circleRendezvous: StoredCircleRendezvous[];
+  inviteBindings: StoredInviteBinding[];
 }
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -50,6 +58,7 @@ function emptyStore(): StoreData {
     revokedInvites: [],
     appMessages: [],
     circleRendezvous: [],
+    inviteBindings: [],
   };
 }
 
@@ -94,6 +103,9 @@ export class SignalStore {
         : [];
       data.circleRendezvous = Array.isArray(parsed.circleRendezvous)
         ? parsed.circleRendezvous.filter(isStoredCircleRendezvous)
+        : [];
+      data.inviteBindings = Array.isArray(parsed.inviteBindings)
+        ? parsed.inviteBindings.filter(isInviteBinding)
         : [];
       this.data = data;
     } catch (error) {
@@ -154,6 +166,15 @@ export class SignalStore {
       (entry) => entry.expiresAt > now,
     );
     return this.data.circleRendezvous;
+  }
+
+  inviteBinding(hash: string): StoredInviteBinding | null {
+    return this.data.inviteBindings.find((entry) => entry.hash === hash) ?? null;
+  }
+
+  bindInvite(binding: StoredInviteBinding): void {
+    if (this.data.inviteBindings.some((entry) => entry.hash === binding.hash)) return;
+    this.data.inviteBindings.push(binding);
   }
 
   addAppMessage(message: StoredAppMessage): void {
@@ -222,6 +243,9 @@ export class SignalStore {
     const known = new Set(this.data.revokedInvites);
     for (const hash of hashes) known.add(hash);
     this.data.revokedInvites = [...known];
+    this.data.inviteBindings = this.data.inviteBindings.filter(
+      (binding) => !hashes.includes(binding.hash),
+    );
   }
 
   removeRemoval(id: string): void {
@@ -287,7 +311,9 @@ function isRendezvousWire(value: unknown): value is RendezvousWire {
     typeof value.fromName === 'string' &&
     typeof value.toId === 'string' &&
     typeof value.scheduledFor === 'number' &&
-    typeof value.createdAt === 'number'
+    typeof value.createdAt === 'number' &&
+    (value.liveAudioDisabled === undefined ||
+      typeof value.liveAudioDisabled === 'boolean')
   );
 }
 
@@ -325,6 +351,16 @@ function isCircleRendezvousInvite(value: unknown): value is CircleRendezvousInvi
     typeof value.scheduledAt === 'number' &&
     typeof value.createdAt === 'number' &&
     'plan' in value
+  );
+}
+
+function isInviteBinding(value: unknown): value is StoredInviteBinding {
+  return (
+    isObject(value) &&
+    typeof value.hash === 'string' &&
+    typeof value.inviterId === 'string' &&
+    typeof value.inviteeId === 'string' &&
+    typeof value.createdAt === 'number'
   );
 }
 
