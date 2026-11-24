@@ -127,6 +127,8 @@ interface StoredCircleRecord {
 - `verifyStoredRecord` rejects a bad shape, bad signature, unsorted list, or an id that does not match the content.
 - A signature is outside the id, so the same content signed twice has one id. Merge keeps the lexicographically smaller signature for deterministic output.
 
+> **Legacy model:** `Plan`, `PlanJoin`, `Window`, and `WindowClear` remain in the module for compatibility and older tests. The reference app now creates a normal multi-person rendezvous on a circle channel and hides the old offer/window controls. A circle rendezvous uses ordinary appointment notices, not these records.
+
 | Record | Signed by | Notes |
 | --- | --- | --- |
 | `CircleCreated { circleId, name, timezone, creator, createdAt }` | creator | IANA timezone; one canonical creation per circle id |
@@ -344,9 +346,9 @@ dashboard.addEventListener('circle-create', async (event) => {
 });
 ```
 
-For `circle-select`, load that circle, set `dashboard.stats`, `dashboard.view`, `dashboard.offers` and `dashboard.inviteCandidates`. For `circle-plan-request`, sign a new offer with `createCirclePlan`. For `circle-plan-join`, sign a `PlanJoin` with `createPlanJoin`. For `circle-invite-request`, call `createCircleInvite` and send the bundle through `createRelayPeerChannel`/`sendCircleInvite`. For `circle-invite-accept`, call `acceptCircleInvite`, append the returned records and send the acceptance back.
+For `circle-select`, load that circle, set `dashboard.stats`, `dashboard.view`, `dashboard.rendezvous` and `dashboard.inviteCandidates`. A circle rendezvous is created through the normal app composer with the circle preselected; the app submits ordinary appointment notices to every current non-banned direct-human member. For `circle-invite-request`, call `createCircleInvite` and send the bundle through `createRelayPeerChannel`/`sendCircleInvite`. For `circle-invite-accept`, call `acceptCircleInvite`, append the returned records and send the acceptance back. The older `createCirclePlan`/`createPlanJoin`/window controls remain available in this module but are superseded by normal circle-channel rendezvous and are hidden in the reference UI.
 
-The existing `<rendezvous-app>` mounts a persistent bottom `<circle-bar>` with **`+ circle` pinned left** and one circular button per circle. Choosing `+ circle` opens the create flow; choosing a circle opens that circle’s dashboard. Creation, local listing/stats, independent offers and per-offer joins, the optional gathering window, online relay invitation delivery, auto-acceptance, and circle sync are wired through the existing signalling server. The signed plan also goes to the server's expiring offer-invite queue for offline members.
+The existing `<rendezvous-app>` mounts a persistent bottom `<circle-bar>` with **`+ circle` pinned left** and one circular button per circle. Choosing `+ circle` opens the create flow; choosing a circle opens that circle’s dashboard. Creation, local listing/stats, circle-channel multi-person rendezvous, online relay invitation delivery, auto-acceptance, and circle sync are wired through the existing signalling server. Circle rendezvous use ordinary appointment notices, one per recipient; the server stores no circle record history. Members without a direct human link are shown as not yet direct and receive a rendezvous after linking. The earlier offer/PlanJoin/window controls are superseded and hidden; the gathering window is deferred.
 
 ## Tests
 
@@ -354,7 +356,7 @@ The existing `<rendezvous-app>` mounts a persistent bottom `<circle-bar>` with *
 npm test
 ```
 
-The suite covers canonical encoding, merge laws and rejections, window edges with and without skew, one-sided and five-person swaps, timezone/DST/day rollover, the pair cap, independent offers and per-offer joins, membership chains, leave/ban/override edge cases, cross-circle counting, sync with out-of-order/duplicate delivery, BanVote delivery restrictions, prompt determinism, invitations, adapters, stores and leaderboard determinism.
+The suite covers canonical encoding, merge laws and rejections, window edges with and without skew, one-sided and five-person swaps, timezone/DST/day rollover, the pair cap, legacy offers and per-offer joins, membership chains, leave/ban/override edge cases, cross-circle counting, sync with out-of-order/duplicate delivery, BanVote delivery restrictions, prompt determinism, invitations, adapters, stores and leaderboard determinism. End-to-end coverage uses normal circle-channel rendezvous.
 
 ## File map
 

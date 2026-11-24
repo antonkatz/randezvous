@@ -11,6 +11,7 @@ import type { CircleInviteBundle } from '../invitations';
 import type { RankedCircle } from '../leaderboard';
 import type { CircleDayPlans, CircleOffer } from '../plans';
 import type { CircleStats, MemberView } from '../types';
+import type { StoredRendezvous } from '../../lib/types';
 
 type Panel = 'list' | 'create' | 'circle';
 
@@ -33,6 +34,7 @@ export class CircleDashboard extends HTMLElement {
   private statePendingInvite: CircleInviteBundle | null = null;
   private statePlans: readonly CircleDayPlans[] = [];
   private stateOffers: readonly CircleOffer[] = [];
+  private stateRendezvous: readonly StoredRendezvous[] = [];
   private stateWindow: { start: number; end: number } | null = null;
   private stateNewInviteLink = '';
   private stateBusy = false;
@@ -114,6 +116,15 @@ export class CircleDashboard extends HTMLElement {
 
   get offers(): readonly CircleOffer[] {
     return this.stateOffers;
+  }
+
+  set rendezvous(value: readonly StoredRendezvous[]) {
+    this.stateRendezvous = value;
+    this.render();
+  }
+
+  get rendezvous(): readonly StoredRendezvous[] {
+    return this.stateRendezvous;
   }
 
   set window(value: { start: number; end: number } | null) {
@@ -276,6 +287,7 @@ export class CircleDashboard extends HTMLElement {
       page.inviteCandidates = this.stateInviteCandidates;
       page.plans = this.statePlans;
       page.offers = this.stateOffers;
+      page.rendezvous = this.stateRendezvous;
       page.window = this.stateWindow;
       page.newInviteLink = this.stateNewInviteLink;
       body.append(page);

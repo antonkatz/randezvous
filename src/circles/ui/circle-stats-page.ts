@@ -7,6 +7,7 @@ import {
 } from './presentation';
 import type { CircleOffer, CircleDayPlans } from '../plans';
 import type { CircleStats, MemberView, PlanJoinRecord, PlanRecord, PublicKeyId } from '../types';
+import type { StoredRendezvous } from '../../lib/types';
 
 const EMPTY_STATS = `
   <p class="empty">No circle stats yet. Merge a circle to begin.</p>
@@ -42,6 +43,7 @@ export class CircleStatsPage extends HTMLElement {
   private stateOffers: readonly CircleOffer[] = [];
   private stateWindow: { start: number; end: number } | null = null;
   private stateNewInviteLink = '';
+  private stateRendezvous: readonly StoredRendezvous[] = [];
 
   constructor() {
     super();
@@ -85,6 +87,28 @@ export class CircleStatsPage extends HTMLElement {
             input.focus();
             input.select();
           },
+        );
+        return;
+      }
+      if (target.getAttribute('data-action') === 'new-rendezvous') {
+        this.dispatchEvent(
+          new CustomEvent('circle-rendezvous-new', {
+            detail: { circleId: this.stateStats.circleId },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        return;
+      }
+      if (target.getAttribute('data-action') === 'open-rendezvous') {
+        const rendezvousId = target.getAttribute('data-rendezvous-id');
+        if (!rendezvousId) return;
+        this.dispatchEvent(
+          new CustomEvent('circle-rendezvous-open', {
+            detail: { circleId: this.stateStats.circleId, rendezvousId },
+            bubbles: true,
+            composed: true,
+          }),
         );
         return;
       }
@@ -193,6 +217,15 @@ export class CircleStatsPage extends HTMLElement {
 
   get newInviteLink(): string {
     return this.stateNewInviteLink;
+  }
+
+  set rendezvous(value: readonly StoredRendezvous[]) {
+    this.stateRendezvous = value;
+    this.render();
+  }
+
+  get rendezvous(): readonly StoredRendezvous[] {
+    return this.stateRendezvous;
   }
 
   set stats(value: CircleStats | null) {
@@ -312,60 +345,52 @@ export class CircleStatsPage extends HTMLElement {
         </section>`;
 
     const selfKey = this.stateView?.selfKey ?? '';
-    const offers = this.stateOffers.filter(
-      (offer) =>
-        (offer.plan.record as PlanRecord).scheduledAt >= Date.now() - 5 * 60_000,
-    );
-    const offerRows =
-      offers.length > 0
-        ? offers
-            .map((offer) => {
-              const plan = offer.plan.record as PlanRecord;
-              const joined = offer.joins.some(
-                (entry) => (entry.record as PlanJoinRecord).member === selfKey,
+    const upcoming = this.stateRendezvous
+      .filter(
+        (record) =>
+          record.circleId === stats.circleId &&
+          record.status !== 'cancelled' &&
+          record.status !== 'missed' &&
+          record.scheduledFor >= Date.now() - 5 * 60_000,
+      )
+      .sort((left, right) => left.scheduledFor - right.scheduledFor);
+    const rendezvousRows =
+      upcoming.length > 0
+        ? upcoming
+            .map((record) => {
+              const others = (record.participants ?? []).filter(
+                (entry) => entry.id !== selfKey,
               );
-              const organizer = plan.organizer === selfKey;
-              const people = offer.participants.map((key) => shortenKey(key)).join(' · ');
+              const creator = record.participants?.find(
+                (entry) => entry.id === (record.creatorId ?? record.peerId),
+              );
+              const kept = Boolean(record.keptAt) || record.status === 'kept';
+              const delivered = record.status === 'delivered';
+              const state = delivered
+                ? 'delivered'
+                : kept
+                  ? `kept · ${(record.deliveredTo ?? []).length} delivered`
+                  : record.status === 'transferring'
+                    ? 'moving directly'
+                    : `${others.length} invited · ${record.confirmedBy?.length ?? 0} confirmed`;
               return `
-                <div class="circle-offer" data-plan-id="${escapeHtml(offer.plan.id)}">
-                  <p class="canonical-plan">${escapeHtml(formatWindowMoment(plan.scheduledAt))} <span>by ${escapeHtml(shortenKey(plan.organizer))}</span></p>
-                  <p class="offer-state ${offer.confirmed ? 'is-confirmed' : 'is-pending'}">${offer.confirmed ? `confirmed · ${offer.participants.length} going` : 'pending · waiting for someone to join'}${people ? ` · ${escapeHtml(people)}` : ''}</p>
+                <div class="circle-offer" data-rendezvous-id="${escapeHtml(record.id)}">
+                  <p class="canonical-plan">${escapeHtml(formatWindowMoment(record.scheduledFor))} <span>by ${escapeHtml(shortenKey(creator?.name || record.peerName || 'you'))}</span></p>
+                  <p class="offer-state ${kept || delivered ? 'is-confirmed' : 'is-pending'}">${escapeHtml(state)}</p>
                   <div class="plan-row">
-                    <button type="button" class="invite-button" data-action="join-plan" data-plan-id="${escapeHtml(offer.plan.id)}" ${organizer || joined ? 'disabled' : ''}>${organizer ? 'your offer' : joined ? 'joined' : 'join this moment'}</button>
-                    <button type="button" class="dashboard-button" data-action="offer-link" data-plan-id="${escapeHtml(offer.plan.id)}">invite by link</button>
+                    <button type="button" class="invite-button" data-action="open-rendezvous" data-rendezvous-id="${escapeHtml(record.id)}">open</button>
                   </div>
                 </div>`;
             })
             .join('')
-        : '<p class="canonical-plan is-empty">no circle rendezvous offered yet</p>';
+        : '<p class="canonical-plan is-empty">no circle rendezvous yet</p>';
     const planBlock = `
       <section class="circle-plan" part="plan">
-        <h2>circle rendezvous offers</h2>
-        <p>Anyone can offer a moment and anyone can join any offer. Several offers may run independently at different times; nobody has to wait for the whole circle.</p>
-        ${offerRows}
-        <label class="plan-label" for="circle-plan-at">propose a moment</label>
+        <h2>circle rendezvous</h2>
+        <p>A circle rendezvous is a normal rendezvous on this circle channel. Every current non-banned member receives it; any two people who show up keep the meeting.</p>
+        ${rendezvousRows}
         <div class="plan-row">
-          <input id="circle-plan-at" type="datetime-local" min="${localInputValue(Date.now())}">
-          <button type="button" class="invite-button" data-action="set-plan">offer a circle rendezvous</button>
-        </div>
-      </section>`;
-
-    const windowBlock = `
-      <section class="circle-window" part="window">
-        <h2>gathering window</h2>
-        <p>Optional. Plans signed while the window is active must fall inside it. It never shortens the five-minute handoff.</p>
-        ${
-          this.stateWindow
-            ? `<p class="canonical-plan">active · ${escapeHtml(formatWindowMoment(this.stateWindow.start))} → ${escapeHtml(formatWindowMoment(this.stateWindow.end))}</p>`
-            : '<p class="canonical-plan is-empty">no window · any moment is allowed</p>'
-        }
-        <div class="plan-row">
-          <input id="circle-window-start" type="datetime-local">
-          <input id="circle-window-end" type="datetime-local">
-        </div>
-        <div class="plan-row">
-          <button type="button" class="invite-button" data-action="set-window">set window</button>
-          <button type="button" class="dashboard-button" data-action="clear-window">clear window</button>
+          <button type="button" class="invite-button" data-action="new-rendezvous">set a circle rendezvous</button>
         </div>
       </section>`;
 
@@ -378,7 +403,6 @@ export class CircleStatsPage extends HTMLElement {
           <p class="sync">${escapeHtml(asOfLine(stats.asOf, stats.timezone))}</p>
         </header>
         ${planBlock}
-        ${windowBlock}
         <section class="stats" part="stats" aria-label="circle progress">
           ${lines}
         </section>

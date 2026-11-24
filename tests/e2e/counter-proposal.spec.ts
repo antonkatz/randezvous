@@ -10,6 +10,8 @@ interface RecordView {
   revision: number;
   status: string;
   photo: { size: number } | null;
+  participants?: Array<{ id: string; name: string }>;
+  creatorId?: string;
 }
 
 async function recordFor(page: Page, id: string): Promise<RecordView | undefined> {
@@ -25,7 +27,16 @@ async function recordFor(page: Page, id: string): Promise<RecordView | undefined
   }, id);
 }
 
-test('both humans confirm, then either can counter-propose without losing the photo', async ({
+async function confirm(page: Page, id: string): Promise<void> {
+  await page.evaluate(async (rendezvousId) => {
+    const app = document.querySelector('rendezvous-app') as unknown as {
+      clientInstance: { confirmRendezvous: (value: string) => Promise<unknown> };
+    };
+    await app.clientInstance.confirmRendezvous(rendezvousId);
+  }, id);
+}
+
+test('both humans confirm, then a counter-proposal creates another rendezvous', async ({
   browser,
 }) => {
   const anaContext = await browser.newContext({ viewport: { width: 1400, height: 1000 } });
@@ -78,12 +89,7 @@ test('both humans confirm, then either can counter-propose without losing the ph
   await expect(baz.locator('#rv-detail-confirm')).toBeVisible();
   await baz.locator('#rv-detail-close').click();
 
-  await baz.evaluate(async (id) => {
-    const app = document.querySelector('rendezvous-app') as unknown as {
-      clientInstance: { confirmRendezvous: (value: string) => Promise<unknown> };
-    };
-    await app.clientInstance.confirmRendezvous(id);
-  }, created.id);
+  await confirm(baz, created.id);
   await expect
     .poll(async () => (await recordFor(ana, created.id))?.confirmedBy.length, {
       timeout: 20_000,
@@ -91,12 +97,7 @@ test('both humans confirm, then either can counter-propose without losing the ph
     .toBe(1);
   expect((await recordFor(ana, created.id))?.confirmation).toBe('pending');
 
-  await ana.evaluate(async (id) => {
-    const app = document.querySelector('rendezvous-app') as unknown as {
-      clientInstance: { confirmRendezvous: (value: string) => Promise<unknown> };
-    };
-    await app.clientInstance.confirmRendezvous(id);
-  }, created.id);
+  await confirm(ana, created.id);
   await expect
     .poll(async () => (await recordFor(ana, created.id))?.confirmation, { timeout: 20_000 })
     .toBe('confirmed');
@@ -105,52 +106,49 @@ test('both humans confirm, then either can counter-propose without losing the ph
     .toBe('confirmed');
 
   const proposed = scheduledFor + 60 * 60_000;
-  await baz.evaluate(
+  const nextId = await baz.evaluate(
     async ({ id, when }) => {
       const app = document.querySelector('rendezvous-app') as unknown as {
         clientInstance: {
           counterProposeRendezvous: (input: {
             rendezvousId: string;
             scheduledFor: number;
-          }) => Promise<unknown>;
+          }) => Promise<{ id: string }>;
         };
       };
-      await app.clientInstance.counterProposeRendezvous({ rendezvousId: id, scheduledFor: when });
+      const next = await app.clientInstance.counterProposeRendezvous({
+        rendezvousId: id,
+        scheduledFor: when,
+      });
+      return next.id;
     },
     { id: created.id, when: proposed },
   );
+  expect(nextId).not.toBe(created.id);
 
+  // The original is untouched and stays confirmed.
+  expect((await recordFor(ana, created.id))?.scheduledFor).toBe(scheduledFor);
+  expect((await recordFor(ana, created.id))?.confirmation).toBe('confirmed');
+  expect((await recordFor(ana, created.id))?.photo?.size).toBe(created.photo?.size);
+
+  // The new rendezvous is independent, pending, and reaches every participant.
   await expect
-    .poll(async () => (await recordFor(ana, created.id))?.scheduledFor, { timeout: 20_000 })
+    .poll(async () => (await recordFor(ana, nextId))?.scheduledFor, { timeout: 20_000 })
     .toBe(proposed);
-  await expect
-    .poll(async () => (await recordFor(ana, created.id))?.confirmation, { timeout: 20_000 })
-    .toBe('pending');
-  await expect(ana.locator('.next-card-confirmation')).toContainText('pending');
-  const anaRecord = await recordFor(ana, created.id);
-  expect(anaRecord?.photo?.size).toBe(created.photo?.size);
+  expect((await recordFor(ana, nextId))?.confirmation).toBe('pending');
+  expect((await recordFor(ana, nextId))?.participants?.length).toBe(2);
 
-  await ana.evaluate(async (id) => {
-    const app = document.querySelector('rendezvous-app') as unknown as {
-      clientInstance: { confirmRendezvous: (value: string) => Promise<unknown> };
-    };
-    await app.clientInstance.confirmRendezvous(id);
-  }, created.id);
-  await baz.evaluate(async (id) => {
-    const app = document.querySelector('rendezvous-app') as unknown as {
-      clientInstance: { confirmRendezvous: (value: string) => Promise<unknown> };
-    };
-    await app.clientInstance.confirmRendezvous(id);
-  }, created.id);
-
+  await confirm(ana, nextId);
+  await confirm(baz, nextId);
   await expect
-    .poll(async () => (await recordFor(ana, created.id))?.confirmation, { timeout: 20_000 })
+    .poll(async () => (await recordFor(ana, nextId))?.confirmation, { timeout: 20_000 })
     .toBe('confirmed');
   await expect
-    .poll(async () => (await recordFor(baz, created.id))?.confirmation, { timeout: 20_000 })
+    .poll(async () => (await recordFor(baz, nextId))?.confirmation, { timeout: 20_000 })
     .toBe('confirmed');
-  expect((await recordFor(ana, created.id))?.scheduledFor).toBe(proposed);
-  expect((await recordFor(baz, created.id))?.photo).toBeNull();
+
+  expect((await recordFor(baz, created.id))?.scheduledFor).toBe(scheduledFor);
+  expect((await recordFor(baz, created.id))?.confirmation).toBe('confirmed');
 
   expect(errors).toEqual([]);
   await anaContext.close();

@@ -58,6 +58,14 @@ import { buildInviteUrl } from '../invite';
 import type { InviteCircle } from '../protocol';
 import { formatDuration, MAX_VOICE_NOTE_MS } from '../media';
 import { RendezvousClient } from '../client';
+import {
+  creatorIdFor,
+  isMultiPerson,
+  otherParticipants,
+  ownPhoto,
+  participantsFor,
+  photoFrom,
+} from '../rendezvous-record';
 import { RendezvousStore } from '../store';
 import { wallPhotoWidth } from './wall';
 import type {
@@ -700,7 +708,9 @@ export class RendezvousApp extends HTMLElement {
   private copyResetTimer: number | null = null;
   private diagnosticsOpen = false;
   private rvStep = 1;
-  private selectedHumanId: string | null = null;
+  private selectedHumanIds = new Set<string>();
+  private selectedNewPerson = false;
+  private composerCircleId: string | null = null;
   private photo: File | null = null;
   private photoUrl: string | null = null;
   private composerNote: VoiceNoteAttachment | null = null;
@@ -1046,6 +1056,18 @@ export class RendezvousApp extends HTMLElement {
       dashboard.addEventListener('circle-offer-link', (event) =>
         void this.createCircleOfferLink(event),
       );
+      dashboard.addEventListener('circle-rendezvous-new', (event) => {
+        const detail = (event as CustomEvent<{ circleId?: string }>).detail;
+        if (!detail?.circleId) return;
+        this.$<HTMLDialogElement>('#circle-dialog').close();
+        this.openRendezvous(undefined, detail.circleId);
+      });
+      dashboard.addEventListener('circle-rendezvous-open', (event) => {
+        const detail = (event as CustomEvent<{ rendezvousId?: string }>).detail;
+        if (!detail?.rendezvousId) return;
+        this.$<HTMLDialogElement>('#circle-dialog').close();
+        this.openRendezvousDetail(detail.rendezvousId);
+      });
       this.circleDashboard = dashboard;
     }
 
@@ -1069,6 +1091,10 @@ export class RendezvousApp extends HTMLElement {
       statsList.push(computeCircleStats(records, view, now, { circleId }));
     }
     this.circleEntries = rankCircles(statsList);
+    if (this.state) {
+      this.renderHero();
+      this.renderWall(this.state);
+    }
     if (
       this.activeCircleId &&
       !this.circleEntries.some((entry) => entry.circleId === this.activeCircleId)
@@ -1119,6 +1145,9 @@ export class RendezvousApp extends HTMLElement {
     );
     dashboard.stats = computeCircleStats(records, view, Date.now(), { circleId });
     dashboard.newInviteLink = '';
+    dashboard.rendezvous = (this.state?.rendezvous ?? []).filter(
+      (record) => record.circleId === circleId,
+    );
     dashboard.plans = canonicalPlans(records, circleId, view.timezone, view.members);
     dashboard.offers = circleOffers(records, circleId, Date.now(), view.members);
     const windowEntry = activeWindowRecord(records, circleId, Date.now());
@@ -1319,9 +1348,9 @@ export class RendezvousApp extends HTMLElement {
         at: Date.now(),
         friends: this.circleFriends,
       });
-      const peer = this.circlePeers.get(detail.peerKey);
-      if (!peer) throw new Error('No relay channel is open for that human.');
-      await sendCircleInvite(peer.channel, bundle);
+      const peer = await this.waitForCirclePeer(detail.peerKey, 20_000);
+      if (!peer) throw new Error('No relay channel is open for that human yet.');
+      await sendCircleInvite(peer, bundle);
       dashboard.inviteCandidates = dashboard.inviteCandidates.filter(
         (candidate) => candidate.peerKey !== detail.peerKey,
       );
@@ -2190,6 +2219,11 @@ export class RendezvousApp extends HTMLElement {
 
   private render(snapshot: RendezvousSnapshot): void {
     this.state = snapshot;
+    if (this.circleDashboard && this.activeCircleId) {
+      this.circleDashboard.rendezvous = snapshot.rendezvous.filter(
+        (record) => record.circleId === this.activeCircleId,
+      );
+    }
     if (!snapshot.ready) return;
     this.$('#app').classList.remove('is-loading');
     const codeName = this.$<HTMLInputElement>('#code-name');
@@ -2218,7 +2252,12 @@ export class RendezvousApp extends HTMLElement {
     const lede = this.$('#hero-lede');
     const now = Date.now();
     const pending = this.state.rendezvous
-      .filter((record) => record.status !== 'delivered')
+      .filter(
+        (record) =>
+          record.status !== 'delivered' &&
+          record.status !== 'cancelled' &&
+          record.status !== 'missed',
+      )
       .sort((a, b) => a.scheduledFor - b.scheduledFor);
     const next = pending.find((record) => record.scheduledFor >= now) ?? pending[0];
     const cta = this.$<HTMLButtonElement>('#set-rendezvous');
@@ -2235,11 +2274,19 @@ export class RendezvousApp extends HTMLElement {
       return;
     }
 
-    const awaitingJoin = next.status === 'awaiting-join' || !next.peerId;
-    const human = this.state.humans.find((entry) => entry.id === next.peerId);
+    const identity = this.state.identity;
+    const others = otherParticipants(next, identity.id, identity.name);
+    const circle = next.circleId
+      ? this.circleEntries.find((entry) => entry.circleId === next.circleId)
+      : null;
+    const awaitingJoin = next.status === 'awaiting-join' || others.length === 0;
     const person = awaitingJoin
       ? 'someone new'
-      : displayName(next.peerName || human?.name || '');
+      : circle
+        ? `the circle ${circle.stats.name || circle.circleId}`
+        : others.length > 1
+          ? `${others.length} people`
+          : displayName(others[0]?.name || next.peerName || '');
     const phase = handoffPhase(next.scheduledFor, now);
     const main =
       phase === 'scheduled' || phase === 'open-early'
@@ -2434,7 +2481,12 @@ export class RendezvousApp extends HTMLElement {
       return arrival !== 0 ? arrival : a.id.localeCompare(b.id);
     });
     const pending = snapshot.rendezvous
-      .filter((record) => record.status !== 'delivered')
+      .filter(
+        (record) =>
+          record.status !== 'delivered' &&
+          record.status !== 'cancelled' &&
+          record.status !== 'missed',
+      )
       .sort((a, b) => a.scheduledFor - b.scheduledFor);
     const humans = new Map(snapshot.humans.map((human) => [human.id, human]));
 
@@ -2461,11 +2513,26 @@ export class RendezvousApp extends HTMLElement {
     const liveKeys = new Set<string>();
 
     for (const record of pending) {
-      const awaitingJoin = record.status === 'awaiting-join' || !record.peerId;
-      const human = humans.get(record.peerId);
+      const others = otherParticipants(
+        record,
+        snapshot.identity.id,
+        snapshot.identity.name,
+      );
+      const awaitingJoin =
+        record.status === 'awaiting-join' || others.length === 0;
+      const circle = record.circleId
+        ? this.circleEntries.find((entry) => entry.circleId === record.circleId)
+        : null;
       const person = awaitingJoin
         ? 'someone new'
-        : displayName(record.peerName || human?.name || '');
+        : circle
+          ? `the circle ${circle.stats.name || circle.circleId}`
+          : others.length > 1
+            ? `${others.length} people`
+            : displayName(others[0]?.name || record.peerName || '');
+      const present = others.filter(
+        (entry) => humans.get(entry.id)?.online,
+      ).length;
       const phase = handoffPhase(record.scheduledFor);
       const wrapRow = document.createElement('div');
       wrapRow.className = 'next-row';
@@ -2482,52 +2549,64 @@ export class RendezvousApp extends HTMLElement {
       title.className = 'next-card-title';
       title.textContent = awaitingJoin
         ? 'for someone new'
-        : `${record.direction === 'incoming' ? 'from' : 'to'} ${person}`;
+        : circle
+          ? `in ${person}`
+          : `${record.direction === 'incoming' ? 'from' : 'to'} ${person}`;
       const state = document.createElement('span');
       state.className = 'next-card-state';
-      const needsPerson = !human?.online;
+      const kept = Boolean(record.keptAt) || record.status === 'kept';
+      const needsPerson = present < 1;
       state.textContent =
         awaitingJoin
           ? 'waiting for them to join · link ready'
-          : record.status === 'transferring'
-          ? 'moving directly'
-          : record.status === 'failed'
-            ? 'retrying when both are here'
-            : phase === 'scheduled'
-              ? `set · ${formatShortDay(record.scheduledFor)}`
-              : phase === 'open-early'
-                ? needsPerson
-                  ? `open early · waiting for ${person}`
-                  : 'both here · connecting early'
-                : phase === 'due'
-                  ? needsPerson
-                    ? `waiting for ${person}`
-                    : 'both here · connecting'
-                  : needsPerson
-                    ? `still open · waiting for ${person}`
-                    : 'still open · connecting';
+          : record.status === 'missed'
+            ? 'missed · the window closed before two people met'
+            : record.status === 'cancelled'
+              ? 'cancelled'
+              : record.status === 'transferring'
+                ? 'moving directly'
+                : record.status === 'failed'
+                  ? 'retrying when at least two are here'
+                  : kept
+                    ? `kept · ${present + 1} here`
+                    : phase === 'scheduled'
+                      ? `set · ${formatShortDay(record.scheduledFor)}`
+                      : phase === 'open-early'
+                        ? needsPerson
+                          ? 'open early · waiting for someone else'
+                          : 'two here · connecting early'
+                        : phase === 'due'
+                          ? needsPerson
+                            ? 'waiting for someone else'
+                            : 'two here · connecting'
+                          : needsPerson
+                            ? 'still open · waiting for someone else'
+                            : 'still open · connecting';
       const confirmation = document.createElement('span');
       confirmation.className = 'next-card-confirmation';
       if (!awaitingJoin) {
         const mine = record.confirmedBy.includes(snapshot.identity.id);
+        const total = participantsFor(
+          record,
+          snapshot.identity.id,
+          snapshot.identity.name,
+        ).length;
         confirmation.textContent =
           record.confirmation === 'confirmed'
-            ? 'confirmed by both'
+            ? 'confirmed by all'
             : mine
-              ? `pending · waiting for ${person} to confirm`
+              ? `pending · ${record.confirmedBy.length} of ${total} confirmed`
               : 'pending · confirm or propose another time';
         if (record.confirmation === 'confirmed') confirmation.dataset.confirmed = 'true';
       }
       const contribution = document.createElement('span');
       contribution.className = 'next-card-contribution';
+      const own = ownPhoto(record, snapshot.identity.id);
+      const received = others.filter((entry) => photoFrom(record, entry.id)).length;
       if (awaitingJoin) {
         contribution.textContent = 'their link is ready to share';
-      } else if (record.direction === 'incoming') {
-        contribution.textContent = `your photo · ${record.contribution ? 'added' : 'not added'}`;
-      } else if (record.reciprocal) {
-        contribution.textContent = `${person}’s photo · received`;
-      } else if (record.sessionStartedAt) {
-        contribution.textContent = `${person}’s photo · not added`;
+      } else {
+        contribution.textContent = `your photo · ${own ? 'added' : 'not added'}${others.length > 1 ? ` · received ${received} of ${others.length}` : received > 0 ? ' · their photo received' : ''}`;
       }
       copy.append(title, state);
       if (confirmation.textContent) copy.append(confirmation);
@@ -2946,10 +3025,18 @@ export class RendezvousApp extends HTMLElement {
     }
   }
 
-  private openRendezvous(print?: StoredPrint): void {
+  private openRendezvous(print?: StoredPrint, circleId?: string): void {
     if (!this.state?.ready) return;
     const dialog = this.$<HTMLDialogElement>('#rendezvous-dialog');
     this.resetRendezvousFlow();
+    this.composerCircleId =
+      circleId && this.circleEntries.some((entry) => entry.circleId === circleId)
+        ? circleId
+        : null;
+    if (this.composerCircleId) {
+      this.selectedHumanIds.clear();
+      this.selectedNewPerson = false;
+    }
     this.resharePrint = print ?? null;
     if (print) {
       const file = new File([print.photo.blob], print.photo.name || 'photograph', {
@@ -2976,7 +3063,9 @@ export class RendezvousApp extends HTMLElement {
 
   private resetRendezvousFlow(): void {
     this.rvStep = 1;
-    this.selectedHumanId = null;
+    this.selectedHumanIds.clear();
+    this.selectedNewPerson = false;
+    this.composerCircleId = null;
     this.resharePrint = null;
     this.stopRecorder(true);
     if (this.photoUrl) URL.revokeObjectURL(this.photoUrl);
@@ -3024,33 +3113,38 @@ export class RendezvousApp extends HTMLElement {
     const container = this.$('#human-options');
     container.replaceChildren();
     this.$('#human-note').textContent =
-      snapshot.humans.length === 0
+      snapshot.humans.length === 0 && this.circleEntries.length === 0
         ? 'Your first meeting starts here.'
-        : 'Choose a linked human, or invite someone new.';
+        : 'Choose one or more humans, a circle, or someone new.';
 
     const addOption = (
+      kind: 'new' | 'human' | 'circle',
       value: string,
       nameText: string,
       stateText: string,
       online: boolean | null,
+      checked: boolean,
+      onSelect: () => void,
     ): void => {
       const label = document.createElement('label');
-      label.className = `human-option${value === NEW_PERSON_ID ? ' is-new' : ''}`;
+      label.className = `human-option${kind === 'new' ? ' is-new' : ''}${kind === 'circle' ? ' is-circle' : ''}`;
       const input = document.createElement('input');
-      input.type = 'radio';
-      input.name = 'rv-human';
+      input.type = 'checkbox';
+      input.name = 'rv-target';
       input.value = value;
-      input.checked = value === this.selectedHumanId;
+      input.checked = checked;
       input.addEventListener('change', () => {
-        this.selectedHumanId = value;
+        onSelect();
         this.$('#rv-error').hidden = true;
         this.updateStepOneState();
+        this.renderHumanOptions(snapshot);
       });
       const avatar = document.createElement('span');
       avatar.className = 'human-avatar';
-      avatar.dataset.online = online === null ? 'new' : String(online);
+      avatar.dataset.online = online === null ? (kind === 'circle' ? 'circle' : 'new') : String(online);
       avatar.setAttribute('aria-hidden', 'true');
-      avatar.textContent = online === null ? '+' : initialFor(nameText);
+      avatar.textContent =
+        kind === 'new' ? '+' : kind === 'circle' ? '◎' : initialFor(nameText);
       const copy = document.createElement('span');
       copy.className = 'human-option-copy';
       const name = document.createElement('span');
@@ -3069,36 +3163,89 @@ export class RendezvousApp extends HTMLElement {
     };
 
     addOption(
+      'new',
       NEW_PERSON_ID,
       'someone new',
       'the join link appears after you set the rendezvous',
       null,
+      this.selectedNewPerson,
+      () => {
+        this.selectedNewPerson = !this.selectedNewPerson;
+        if (this.selectedNewPerson) {
+          this.selectedHumanIds.clear();
+          this.composerCircleId = null;
+        }
+      },
     );
     for (const human of snapshot.humans) {
       addOption(
+        'human',
         human.id,
         displayName(human.name),
         `${human.online ? 'here now' : 'away'} · ${human.verifiedAt ? 'verified' : 'not verified'}`,
         human.online,
+        this.selectedHumanIds.has(human.id),
+        () => {
+          if (this.selectedHumanIds.has(human.id)) this.selectedHumanIds.delete(human.id);
+          else this.selectedHumanIds.add(human.id);
+          if (this.selectedHumanIds.size > 0) {
+            this.selectedNewPerson = false;
+            this.composerCircleId = null;
+          }
+        },
+      );
+    }
+    for (const entry of this.circleEntries) {
+      addOption(
+        'circle',
+        entry.circleId,
+        entry.stats.name || entry.circleId,
+        `circle · ${entry.stats.memberCount} member${entry.stats.memberCount === 1 ? '' : 's'}`,
+        null,
+        this.composerCircleId === entry.circleId,
+        () => {
+          if (this.composerCircleId === entry.circleId) {
+            this.composerCircleId = null;
+          } else {
+            this.composerCircleId = entry.circleId;
+            this.selectedHumanIds.clear();
+            this.selectedNewPerson = false;
+          }
+        },
       );
     }
 
-    if (
-      this.selectedHumanId !== NEW_PERSON_ID &&
-      this.selectedHumanId &&
-      !snapshot.humans.some((human) => human.id === this.selectedHumanId)
-    ) {
-      this.selectedHumanId = null;
+    for (const id of [...this.selectedHumanIds]) {
+      if (!snapshot.humans.some((human) => human.id === id)) {
+        this.selectedHumanIds.delete(id);
+      }
     }
-    if (!this.selectedHumanId && snapshot.humans.length === 0) {
-      this.selectedHumanId = NEW_PERSON_ID;
+    if (
+      this.composerCircleId &&
+      !this.circleEntries.some((entry) => entry.circleId === this.composerCircleId)
+    ) {
+      this.composerCircleId = null;
+    }
+    if (
+      !this.selectedNewPerson &&
+      this.selectedHumanIds.size === 0 &&
+      !this.composerCircleId &&
+      snapshot.humans.length === 0 &&
+      this.circleEntries.length === 0
+    ) {
+      this.selectedNewPerson = true;
     }
     this.updateStepOneState();
   }
 
   private updateStepOneState(): void {
     const next = this.$<HTMLButtonElement>('#rv-next');
-    const ready = Boolean(this.photo && this.selectedHumanId);
+    const ready = Boolean(
+      this.photo &&
+        (this.selectedNewPerson ||
+          this.selectedHumanIds.size > 0 ||
+          this.composerCircleId),
+    );
     next.disabled = !ready;
     this.$('#rv-error').hidden = true;
   }
@@ -3133,13 +3280,21 @@ export class RendezvousApp extends HTMLElement {
   }
 
   private goToStepTwo(): void {
-    if (!this.photo || !this.selectedHumanId) return;
-    if (this.selectedHumanId === NEW_PERSON_ID) {
+    if (!this.photo) return;
+    if (this.selectedNewPerson) {
       this.$('#pick-name').textContent = 'someone new';
+    } else if (this.composerCircleId) {
+      const circle = this.circleEntries.find(
+        (entry) => entry.circleId === this.composerCircleId,
+      );
+      if (!circle) return;
+      this.$('#pick-name').textContent = `${circle.stats.name || circle.circleId} · circle`;
     } else {
-      const human = this.state?.humans.find((entry) => entry.id === this.selectedHumanId);
-      if (!human) return;
-      this.$('#pick-name').textContent = displayName(human.name);
+      const names = this.state?.humans
+        .filter((human) => this.selectedHumanIds.has(human.id))
+        .map((human) => displayName(human.name));
+      if (!names || names.length === 0) return;
+      this.$('#pick-name').textContent = names.join(', ');
     }
     const thumb = this.$<HTMLImageElement>('#pick-thumb');
     if (this.photoUrl) thumb.src = this.photoUrl;
@@ -3213,8 +3368,35 @@ export class RendezvousApp extends HTMLElement {
     schedule.disabled = false;
   }
 
+  private async circleRecipients(circleId: string): Promise<{
+    ids: string[];
+    excluded: number;
+  }> {
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    if (!identity || !store) {
+      throw new Error('The circle store is not ready.');
+    }
+    const records = await store.load(circleId);
+    const view = deriveMemberView(records, identity.selfKey, this.circleFriends, {}, {
+      circleId,
+    });
+    if (!view.members.includes(identity.selfKey)) {
+      throw new Error('You are not a current member of that circle.');
+    }
+    const humans = new Set((this.state?.humans ?? []).map((human) => human.id));
+    const eligible = view.members.filter(
+      (member) =>
+        member !== identity.selfKey && !view.banned.includes(member),
+    );
+    return {
+      ids: eligible.filter((member) => humans.has(member)),
+      excluded: eligible.filter((member) => !humans.has(member)).length,
+    };
+  }
+
   private async scheduleRendezvous(): Promise<void> {
-    if (!this.client || !this.photo || !this.selectedHumanId) return;
+    if (!this.client || !this.photo) return;
     const resolved = this.resolveSchedule();
     const error = this.$('#rv-error');
     if ('error' in resolved) {
@@ -3229,24 +3411,48 @@ export class RendezvousApp extends HTMLElement {
     const liveAudioDisabled = this.$<HTMLInputElement>('#rv-audio-disabled').checked;
 
     try {
-      const record =
-        this.selectedHumanId === NEW_PERSON_ID
-          ? await this.client.scheduleRendezvousForNewPerson({
-              photo: this.photo,
-              fileName: this.photo.name,
-              note: this.composerNote,
-              scheduledFor: resolved.timestamp,
-              liveAudioDisabled,
-            })
-          : await this.client.scheduleRendezvous({
-              humanId: this.selectedHumanId,
-              photo: this.photo,
-              fileName: this.photo.name,
-              photoId: this.resharePrint?.photoId,
-              note: this.composerNote,
-              scheduledFor: resolved.timestamp,
-              liveAudioDisabled,
-            });
+      let record: StoredRendezvous;
+      if (this.selectedNewPerson) {
+        record = await this.client.scheduleRendezvousForNewPerson({
+          photo: this.photo,
+          fileName: this.photo.name,
+          note: this.composerNote,
+          scheduledFor: resolved.timestamp,
+          liveAudioDisabled,
+        });
+      } else if (this.composerCircleId) {
+        const recipients = await this.circleRecipients(this.composerCircleId);
+        const humanIds = recipients.ids;
+        record = await this.client.scheduleRendezvous({
+          humanIds,
+          circleId: this.composerCircleId,
+          photo: this.photo,
+          fileName: this.photo.name,
+          photoId: this.resharePrint?.photoId,
+          note: this.composerNote,
+          scheduledFor: resolved.timestamp,
+          liveAudioDisabled,
+        });
+        if (recipients.excluded > 0) {
+          this.showToast({
+            tone: 'warning',
+            title: 'Some circle members are not direct humans yet.',
+            message: `${recipients.excluded} member${recipients.excluded === 1 ? '' : 's'} will not receive this notice until you link them directly.`,
+          });
+        }
+      } else {
+        const humanIds = [...this.selectedHumanIds];
+        if (humanIds.length === 0) return;
+        record = await this.client.scheduleRendezvous({
+          humanIds,
+          photo: this.photo,
+          fileName: this.photo.name,
+          photoId: this.resharePrint?.photoId,
+          note: this.composerNote,
+          scheduledFor: resolved.timestamp,
+          liveAudioDisabled,
+        });
+      }
       this.showDone(record);
     } catch (scheduleError) {
       error.textContent =
@@ -3260,17 +3466,33 @@ export class RendezvousApp extends HTMLElement {
   }
 
   private showDone(record: StoredRendezvous): void {
-    const human = this.state?.humans.find((entry) => entry.id === record.peerId);
+    const identity = this.state?.identity;
     const isNewPerson = Boolean(record.inviteToken);
-    const who = isNewPerson ? 'someone new' : displayName(record.peerName || human?.name || '');
+    const circle = record.circleId
+      ? this.circleEntries.find((entry) => entry.circleId === record.circleId)
+      : null;
+    const others = identity
+      ? otherParticipants(record, identity.id, identity.name)
+      : [];
+    const names = others.map((entry) => displayName(entry.name || entry.id)).filter(Boolean);
+    const who = isNewPerson
+      ? 'someone new'
+      : circle
+        ? `the circle ${circle.stats.name || circle.circleId}`
+        : names.length > 2
+          ? `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`
+          : names.join(' and ') || displayName(record.peerName);
     this.$('#done-summary').textContent = isNewPerson
       ? `For someone new. ${formatMoment(record.scheduledFor)}. Share their link below.`
-      : `For ${who}. ${formatMoment(record.scheduledFor)}.`;
+      : circle
+        ? `Posted to ${who}. ${formatMoment(record.scheduledFor)}. Everyone current can confirm.`
+        : `For ${who}. ${formatMoment(record.scheduledFor)}.`;
     this.$('#done-audio-off').hidden = !record.liveAudioDisabled;
     this.$('#done-human').textContent = who;
     this.$('#done-moment').textContent = formatMoment(record.scheduledFor);
-    this.$('#done-photo').textContent = record.photo
-      ? `${record.photo.name} · ${formatBytes(record.photo.size)}`
+    const photo = identity ? ownPhoto(record, identity.id) : record.photo;
+    this.$('#done-photo').textContent = photo
+      ? `${photo.name} · ${formatBytes(photo.size)}`
       : 'the photograph';
     const linkBlock = this.$<HTMLElement>('#done-link-block');
     const linkInput = this.$<HTMLInputElement>('#done-link');
@@ -3281,11 +3503,18 @@ export class RendezvousApp extends HTMLElement {
       copy.textContent = 'copy';
       this.$('#done-note').textContent =
         'Send this link to one person. The rendezvous is already saved here; opening the link puts it in their upcoming list and creates your human link.';
+    } else if (circle) {
+      linkBlock.hidden = false;
+      linkInput.value = '';
+      copy.textContent = 'preparing…';
+      this.$('#done-note').textContent =
+        'Everyone current in the circle can see the appointment. A link for someone new is being prepared.';
+      void this.attachCircleLinkToDone(record);
     } else {
       linkBlock.hidden = true;
       linkInput.value = '';
       this.$('#done-note').textContent =
-        'The photo is still here. It will only travel when you are both present at the same time. We’ll tell them when they next arrive.';
+        'The photo is still here. It will only travel when at least two of you are present at the same time. We’ll tell them when they next arrive.';
     }
     this.setStep(3);
     window.setTimeout(
@@ -3293,6 +3522,33 @@ export class RendezvousApp extends HTMLElement {
         this.$<HTMLButtonElement>(isNewPerson ? '#done-link-copy' : '#rv-finish').focus(),
       40,
     );
+  }
+
+  private async attachCircleLinkToDone(record: StoredRendezvous): Promise<void> {
+    if (!this.client || !record.circleId) return;
+    try {
+      const circle = await this.buildCircleLinkPayload(record.circleId, null);
+      const link = await this.client.createCircleLink(circle, {
+        id: record.id,
+        scheduledFor: record.scheduledFor,
+        createdAt: record.createdAt,
+        ...(record.liveAudioDisabled ? { liveAudioDisabled: true } : {}),
+      });
+      if (this.rvStep !== 3) return;
+      const input = this.$<HTMLInputElement>('#done-link');
+      const copy = this.$<HTMLButtonElement>('#done-link-copy');
+      input.value = link;
+      copy.textContent = 'copy';
+      this.$('#done-note').textContent =
+        'Send this link to someone new. Opening it adds them to the circle and puts this rendezvous in their upcoming list. It works while you are offline.';
+    } catch (error) {
+      const copy = this.$<HTMLButtonElement>('#done-link-copy');
+      copy.textContent = 'copy';
+      this.$('#done-note').textContent =
+        error instanceof Error
+          ? error.message
+          : 'The circle link could not be prepared.';
+    }
   }
 
   private async copyText(
@@ -3394,77 +3650,106 @@ export class RendezvousApp extends HTMLElement {
       this.closeRendezvousDetail();
       return;
     }
-    const human = active.peerId
-      ? this.state?.humans.find((entry) => entry.id === active.peerId)
+    const identity = this.state?.identity;
+    const selfId = identity?.id ?? '';
+    const selfName = identity?.name ?? '';
+    const others = otherParticipants(active, selfId, selfName);
+    const circle = active.circleId
+      ? this.circleEntries.find((entry) => entry.circleId === active.circleId)
+      : null;
+    const firstOther = others[0];
+    const human = firstOther
+      ? this.state?.humans.find((entry) => entry.id === firstOther.id)
       : undefined;
-    const awaitingJoin = active.status === 'awaiting-join' || !active.peerId;
+    const awaitingJoin = active.status === 'awaiting-join' || others.length === 0;
     const person = awaitingJoin
       ? 'someone new'
-      : displayName(active.peerName || human?.name || '');
+      : circle
+        ? `the circle ${circle.stats.name || circle.circleId}`
+        : others.length > 1
+          ? `${others.length} people`
+          : displayName(firstOther?.name || active.peerName || '');
+    const present = others.filter((entry) =>
+      this.state?.humans.find((candidate) => candidate.id === entry.id)?.online,
+    );
     const phase = handoffPhase(active.scheduledFor);
     const directionWord = active.direction === 'incoming' ? 'from' : 'to';
 
     const humanButton = this.$<HTMLButtonElement>('#rv-detail-human');
-    this.$('#rv-detail-avatar').textContent = initialFor(person);
+    this.$('#rv-detail-avatar').textContent = circle ? '◎' : initialFor(person);
     this.$('#rv-detail-kicker').textContent = awaitingJoin
       ? 'a rendezvous waiting for its person'
-      : 'a rendezvous with';
+      : circle
+        ? 'a circle rendezvous in'
+        : 'a rendezvous with';
     this.$('#rv-detail-title').textContent = person;
     this.$('#rv-detail-sub').textContent = awaitingJoin
       ? 'their link is ready'
-      : human?.online
-        ? 'here now'
-        : 'away';
+      : circle
+        ? `${others.length} invited · ${present.length} here`
+        : human?.online
+          ? 'here now'
+          : 'away';
     humanButton.disabled = !human;
     humanButton.setAttribute(
       'aria-label',
-      human ? `Open ${person}’s human details` : `${person} is not linked yet`,
+      human ? `Open ${displayName(human.name)}’s human details` : `${person} is not linked yet`,
     );
 
     this.$('#rv-detail-moment').textContent = formatMoment(active.scheduledFor);
     this.$('#rv-detail-window').textContent =
       phase === 'scheduled'
-        ? `opens ${formatClock(active.scheduledFor - 5 * 60_000)} · both browsers need to be here`
+        ? `opens ${formatClock(active.scheduledFor - 5 * 60_000)} · at least two people need to be here`
         : phase === 'still-open'
           ? 'still open · lateness never cancels it'
-          : 'open now · both browsers connect automatically';
-    const mineConfirmed = active.confirmedBy.includes(this.state?.identity.id ?? '');
+          : 'open now · pairs connect automatically';
+    const mineConfirmed = active.confirmedBy.includes(selfId);
+    const totalParticipants = participantsFor(active, selfId, selfName).length;
     this.$('#rv-detail-confirmation').textContent = awaitingJoin
       ? 'pending · the other human has not joined yet'
       : active.confirmation === 'confirmed'
-        ? 'confirmed by both'
+        ? 'confirmed by all'
         : mineConfirmed
-          ? `pending · waiting for ${person} to confirm`
-          : 'pending · both of you need to confirm';
+          ? `pending · ${active.confirmedBy.length} of ${totalParticipants} confirmed`
+          : 'pending · confirm or propose another time';
 
-    const needsPerson = !human?.online;
+    const needsPerson = present.length < 1;
+    const kept = Boolean(active.keptAt) || active.status === 'kept';
     this.$('#rv-detail-state').textContent = awaitingJoin
       ? 'waiting for them to join'
-      : active.status === 'failed'
-        ? 'couldn’t connect · retrying when both are here'
-        : active.status === 'transferring'
-          ? 'moving directly'
-          : active.status === 'connecting'
-            ? 'connecting directly…'
-            : phase === 'scheduled'
-              ? `set · ${formatShortDay(active.scheduledFor)}`
-              : phase === 'open-early'
-                ? needsPerson
-                  ? `open early · waiting for ${person}`
-                  : 'both here · connecting early'
-                : phase === 'due'
-                  ? needsPerson
-                    ? `waiting for ${person}`
-                    : 'both here · connecting'
-                  : needsPerson
-                    ? `still open · waiting for ${person}`
-                    : 'still open · connecting';
+      : active.status === 'missed'
+        ? 'missed · the window closed before two people met'
+        : active.status === 'cancelled'
+          ? 'cancelled'
+          : active.status === 'failed'
+            ? 'couldn’t connect · retrying when at least two are here'
+            : active.status === 'transferring'
+              ? 'moving directly'
+              : active.status === 'connecting'
+                ? 'connecting directly…'
+                : kept
+                  ? `kept · ${present.length + 1} here`
+                  : phase === 'scheduled'
+                    ? `set · ${formatShortDay(active.scheduledFor)}`
+                    : phase === 'open-early'
+                      ? needsPerson
+                        ? 'open early · waiting for someone else'
+                        : 'two here · connecting early'
+                      : phase === 'due'
+                        ? needsPerson
+                          ? 'waiting for someone else'
+                          : 'two here · connecting'
+                        : needsPerson
+                          ? 'still open · waiting for someone else'
+                          : 'still open · connecting';
     this.$('#rv-detail-direction').textContent = awaitingJoin
       ? `to ${person}`
-      : `${directionWord} ${person}`;
+      : circle
+        ? `in ${person}`
+        : `${directionWord} ${person}`;
 
-    const attachment = active.direction === 'outgoing' ? active.photo : active.contribution;
-    const missing = active.direction === 'outgoing' && !active.photo;
+    const attachment = ownPhoto(active, selfId);
+    const missing = !attachment && active.direction === 'outgoing';
     this.$('#rv-detail-photo-state').textContent = attachment
       ? 'your photo · added'
       : missing
@@ -3474,29 +3759,29 @@ export class RendezvousApp extends HTMLElement {
       ? `${attachment.name || 'photograph'} · ${formatBytes(attachment.size)}`
       : missing
         ? 'This browser no longer has the file. Choose a new photograph to keep the rendezvous ready.'
-        : 'Optional. It stays in this browser until you are both here.';
+        : 'Optional. It stays in this browser until at least two of you are here.';
     this.syncDetailPhoto(attachment);
     this.syncDetailNote(attachment?.note ?? null);
 
+    const received = others.filter((entry) => photoFrom(active, entry.id)).length;
     this.$('#rv-detail-peer-state').textContent =
-      active.direction === 'outgoing'
-        ? active.reciprocal
-          ? `${person}’s photo · received`
-          : active.sessionStartedAt
-            ? `${person}’s photo · not added`
-            : `${person}’s photo · waiting`
-        : active.photo
-          ? `${person}’s photo · delivered`
-          : active.status === 'transferring'
-            ? `${person}’s photo · moving now`
-            : active.status === 'failed'
-              ? `${person}’s photo · retrying`
-              : `${person}’s photo · waiting`;
+      others.length <= 1
+        ? `${person}’s photo · ${
+            received > 0
+              ? 'received'
+              : active.status === 'transferring'
+                ? 'moving now'
+                : active.status === 'failed'
+                  ? 'retrying'
+                  : 'waiting'
+          }`
+        : `${others.length} people · ${received} of ${others.length} photos received`;
 
     const contributionEditable =
       active.direction === 'incoming' &&
       !active.sessionStartedAt &&
-      active.status !== 'transferring';
+      active.status !== 'transferring' &&
+      active.status !== 'delivered';
     this.$('#rv-detail-share').hidden = !(awaitingJoin && active.inviteToken);
     this.$('#rv-detail-confirm').hidden = !(
       !awaitingJoin &&
@@ -3509,25 +3794,25 @@ export class RendezvousApp extends HTMLElement {
       active.status !== 'delivered' &&
       !active.sessionStartedAt
     );
-    this.$('#rv-detail-add').hidden = !(contributionEditable && !active.contribution);
-    this.$('#rv-detail-replace').hidden = !(contributionEditable && Boolean(active.contribution));
-    this.$('#rv-detail-remove').hidden = !(contributionEditable && Boolean(active.contribution));
+    this.$('#rv-detail-add').hidden = !(contributionEditable && !attachment);
+    this.$('#rv-detail-replace').hidden = !(contributionEditable && Boolean(attachment));
+    this.$('#rv-detail-remove').hidden = !(contributionEditable && Boolean(attachment));
     this.$('#rv-detail-live').hidden = !(
       !awaitingJoin &&
       phase !== 'scheduled' &&
-      Boolean(human?.online)
+      present.length > 0
     );
     this.$('#rv-detail-audio-off').hidden = !active.liveAudioDisabled;
 
     this.$('#rv-detail-footnote').textContent = awaitingJoin
       ? 'The photo stays here. Opening their link puts this rendezvous in their upcoming list.'
-      : active.direction === 'incoming' && !active.contribution
-        ? 'Your photo is optional. The rendezvous is complete for you either way.'
-        : 'The photo stays on this device until you are both here at the same time.';
+      : circle
+        ? 'The photo is still local. Each present pair connects directly; nobody else receives the bytes.'
+        : 'The photo stays on this device until at least two of you are here at the same time.';
 
     const verifySection = this.$('#rv-detail-verify-section');
-    verifySection.hidden = !human;
-    if (human) {
+    verifySection.hidden = !human || others.length !== 1;
+    if (human && others.length === 1) {
       this.$('#rv-detail-verify-badge').textContent = human.verifiedAt
         ? 'verified'
         : 'not verified';
@@ -4115,9 +4400,22 @@ export class RendezvousApp extends HTMLElement {
     }
     const candidate = snapshot.rendezvous
       .filter((record) => {
-        if (record.status === 'delivered') return false;
-        const human = snapshot.humans.find((entry) => entry.id === record.peerId);
-        return Boolean(human?.online) && handoffPhase(record.scheduledFor) !== 'scheduled';
+        if (
+          record.status === 'delivered' ||
+          record.status === 'cancelled' ||
+          record.status === 'missed'
+        ) {
+          return false;
+        }
+        const others = otherParticipants(
+          record,
+          snapshot.identity.id,
+          snapshot.identity.name,
+        );
+        const present = others.some((entry) =>
+          snapshot.humans.find((human) => human.id === entry.id)?.online,
+        );
+        return present && handoffPhase(record.scheduledFor) !== 'scheduled';
       })
       .sort((a, b) => a.scheduledFor - b.scheduledFor)[0];
     if (!candidate) return;
@@ -4165,49 +4463,63 @@ export class RendezvousApp extends HTMLElement {
       this.$('#live-close').click?.();
       return;
     }
-    const human = this.state?.humans.find((entry) => entry.id === record.peerId);
+    const identity = this.state?.identity;
+    const humans = this.state?.humans ?? [];
+    const others = identity
+      ? otherParticipants(record, identity.id, identity.name)
+      : [];
+    const circle = record.circleId
+      ? this.circleEntries.find((entry) => entry.circleId === record.circleId)
+      : null;
+    const person = circle
+      ? `the circle ${circle.stats.name || circle.circleId}`
+      : others.length > 1
+        ? `${others.length} people`
+        : displayName(others[0]?.name || record.peerName || '');
+    const present = others.filter((entry) => humans.find((human) => human.id === entry.id)?.online);
     const audio = this.state?.audio;
-    const person = displayName(record.peerName || human?.name || '');
     this.$('#live-self').textContent = displayName(this.state?.identity.name ?? '');
     this.$('#live-peer').textContent = person;
     this.$('#live-moment').textContent = formatMoment(record.scheduledFor);
     const phase = handoffPhase(record.scheduledFor);
+    const kept = Boolean(record.keptAt) || record.status === 'kept';
     const state =
       record.status === 'delivered'
         ? 'delivered and stored locally'
-        : record.status === 'transferring'
-          ? 'moving directly'
-          : record.status === 'connecting'
-            ? 'connecting directly'
-            : record.status === 'failed'
-              ? 'the last attempt failed · retrying while you are both here'
-              : !human?.online
-                ? `waiting for ${person}`
-                : phase === 'open-early'
-                  ? 'both here · the handoff is open early'
-                  : phase === 'due'
-                    ? 'both here · the handoff is due'
-                    : 'still open · both here';
+        : record.status === 'missed'
+          ? 'missed · the window closed before two people met'
+          : record.status === 'cancelled'
+            ? 'cancelled'
+            : record.status === 'transferring'
+              ? 'moving directly'
+              : record.status === 'connecting'
+                ? 'connecting directly'
+                : record.status === 'failed'
+                  ? 'the last attempt failed · retrying while at least two are here'
+                  : kept
+                    ? `kept · ${present.length + 1} here`
+                    : present.length < 1
+                      ? 'waiting for someone else'
+                      : phase === 'open-early'
+                        ? 'two here · the handoff is open early'
+                        : phase === 'due'
+                          ? 'two here · the handoff is due'
+                          : 'still open · two here';
     this.$('#live-state').textContent = state;
 
     const contributions = this.$('#live-contributions');
     contributions.replaceChildren();
     const own = document.createElement('p');
     own.className = 'live-contribution';
-    own.textContent = `your photo · ${record.photo ? 'added' : record.contribution ? 'added' : 'waiting'}`;
-    const theirs = document.createElement('p');
-    theirs.className = 'live-contribution';
-    theirs.textContent =
-      `${person}’s photo · ${
-        record.direction === 'incoming'
-          ? record.photo
-            ? 'received'
-            : 'waiting'
-          : record.reciprocal
-            ? 'received'
-            : 'not added'
-      }`;
-    contributions.append(own, theirs);
+    own.textContent = `your photo · ${identity && ownPhoto(record, identity.id) ? 'added' : 'waiting'}`;
+    contributions.append(own);
+    for (const entry of others) {
+      const received = photoFrom(record, entry.id);
+      const line = document.createElement('p');
+      line.className = 'live-contribution';
+      line.textContent = `${displayName(entry.name || entry.id)}’s photo · ${received ? 'received' : 'waiting'}`;
+      contributions.append(line);
+    }
 
     const start = this.$<HTMLButtonElement>('#live-start-audio');
     const controls = this.$<HTMLElement>('#live-audio-controls');
@@ -4222,11 +4534,17 @@ export class RendezvousApp extends HTMLElement {
       (audio?.phase === 'requesting' || audio?.phase === 'connecting');
     const used = Boolean(record.audioWindowUsedAt);
     const audioOff = record.liveAudioDisabled;
+    const audioPeer = present[0] ?? others[0] ?? null;
+    const audioPeerHuman = audioPeer
+      ? humans.find((human) => human.id === audioPeer.id)
+      : null;
+    const singlePeer = others.length === 1;
     disabled.hidden = !audioOff;
     start.hidden = audioOff || live || incoming || busy;
     controls.hidden = !live;
     consent.hidden = audioOff || !incoming;
-    start.disabled = audioOff || used || !human?.online || phase === 'scheduled';
+    start.disabled =
+      audioOff || used || !singlePeer || !audioPeerHuman?.online || phase === 'scheduled';
     start.setAttribute(
       'aria-label',
       used ? 'the minute is over' : 'start audio 1min',
@@ -4239,7 +4557,9 @@ export class RendezvousApp extends HTMLElement {
     }
     this.$('#live-countdown').textContent = formatDuration(audio?.remainingMs ?? 60_000);
     this.$('#live-mute').textContent = audio?.muted ? 'unmute' : 'mute';
-    this.$('#live-consent-name').textContent = person;
+    this.$('#live-consent-name').textContent = displayName(
+      audioPeer?.name || audioPeer?.id || '',
+    );
     const audioMessage = isAudioForThis ? audio?.message ?? '' : '';
     message.textContent = audioMessage;
     message.hidden = !audioMessage;
@@ -4324,8 +4644,20 @@ export class RendezvousApp extends HTMLElement {
 
   private handleAppointment(event: AppointmentEvent): void {
     const record = event.rendezvous;
-    const human = this.state?.humans.find((entry) => entry.id === record.peerId);
-    const person = displayName(record.peerName || human?.name || '');
+    const identity = this.state?.identity;
+    const humans = this.state?.humans ?? [];
+    const others = identity
+      ? otherParticipants(record, identity.id, identity.name)
+      : [];
+    const circle = record.circleId
+      ? this.circleEntries.find((entry) => entry.circleId === record.circleId)
+      : null;
+    const person = circle
+      ? `the circle ${circle.stats.name || circle.circleId}`
+      : others.length > 1
+        ? `${others.length} people`
+        : displayName(others[0]?.name || record.peerName || '');
+    const present = others.filter((entry) => humans.find((human) => human.id === entry.id)?.online);
     if (event.phase === 'announced') {
       if (record.scheduledFor - Date.now() < 60_000) return;
       this.showToast({
@@ -4337,13 +4669,11 @@ export class RendezvousApp extends HTMLElement {
     }
     if (event.phase === 'open' || event.phase === 'due') {
       const directionNote =
-        record.direction === 'incoming'
-          ? human?.online
-            ? `${person} is here. The photograph moves when the direct link is ready.`
-            : `Waiting for ${person} to come online. The photograph is still with them.`
-          : human?.online
-            ? `${person} is here. Connecting directly now.`
-            : `Waiting for ${person} to come online. The photograph is still with you.`;
+        others.length === 0
+          ? 'Waiting for someone else to join.'
+          : present.length === 0
+            ? `Waiting for ${person} to come online. The photograph is still with its sender.`
+            : `${present.length + 1} here. The pair connections open directly.`;
       this.showToast({
         tone: event.phase === 'due' ? 'warning' : 'info',
         title:
@@ -4356,16 +4686,19 @@ export class RendezvousApp extends HTMLElement {
       return;
     }
     if (event.phase === 'received') {
-      const photoUrl = record.photo ? URL.createObjectURL(record.photo.blob) : undefined;
+      const print = this.state?.prints.find(
+        (entry) => entry.appointmentId === record.id,
+      );
+      const photo = print?.photo ?? record.photo;
+      const photoUrl = photo ? URL.createObjectURL(photo.blob) : undefined;
+      const sender =
+        print?.peerName || others[0]?.name || record.peerName || 'someone';
       this.showToast({
         tone: 'success',
-        title: `A photograph from ${person}.`,
-        message: `${record.photo ? formatBytes(record.photo.size) + ' · ' : ''}${formatMoment(record.deliveredAt ?? Date.now())}${record.photo?.note ? ` · voice note ${formatDuration(record.photo.note.durationMs)}` : ''}`,
+        title: `A photograph from ${displayName(sender)}.`,
+        message: `${photo ? formatBytes(photo.size) + ' · ' : ''}${formatMoment(record.deliveredAt ?? Date.now())}${photo?.note ? ` · voice note ${formatDuration(photo.note.durationMs)}` : ''}`,
         actionLabel: 'Open',
         action: () => {
-          const print = this.state?.prints.find(
-            (entry) => entry.appointmentId === record.id,
-          );
           if (print) this.openPhotoViewer(print);
         },
         photoUrl,
@@ -4380,56 +4713,49 @@ export class RendezvousApp extends HTMLElement {
     const record = this.state?.rendezvous.find((entry) => entry.id === rendezvousId);
     const identity = this.circleIdentity;
     const store = this.circleStore;
-    if (!record || !identity || !store) return;
-    for (const circleId of await store.listCircles()) {
-      try {
-        const records = await store.load(circleId);
-        const view = deriveMemberView(records, identity.selfKey, this.circleFriends, {}, {
-          circleId,
-        });
-        if (!view.members.includes(identity.selfKey) || !view.members.includes(record.peerId)) {
-          continue;
-        }
-        const plans = canonicalPlans(records, circleId, view.timezone, view.members)
-          .flatMap((entry) => entry.plans)
-          .filter((entry) => {
-            const planRecord = entry.record;
-            return (
-              planRecord.type === 'Plan' &&
-              Math.abs(planRecord.scheduledAt - record.scheduledFor) <= 5 * 60_000
-            );
-          })
-          .sort((left, right) => {
-            const a = left.record as PlanRecord;
-            const b = right.record as PlanRecord;
-            return a.scheduledAt - b.scheduledAt;
-          });
-        const plan = plans[0];
-        if (!plan || plan.record.type !== 'Plan') continue;
-        const planRecord = plan.record;
-        const already = records.some(
+    if (!record?.circleId || !identity || !store) return;
+    const circleId = record.circleId;
+    try {
+      const records = await store.load(circleId);
+      const view = deriveMemberView(records, identity.selfKey, this.circleFriends, {}, {
+        circleId,
+      });
+      if (!view.members.includes(identity.selfKey)) return;
+      const others = otherParticipants(
+        record,
+        this.state?.identity.id ?? '',
+        this.state?.identity.name ?? '',
+      ).filter((entry) => view.members.includes(entry.id));
+      const swappedWith = others
+        .filter(
           (entry) =>
-            entry.record.type === 'Attendance' &&
-            entry.record.attendee === identity.selfKey &&
-            entry.record.rendezvousId === planRecord.rendezvousId,
-        );
-        if (already) continue;
-        const promptId = activePrompts(Date.now(), view.timezone).day.id;
-        const attendance = await createAttendanceRecord({
-          identity,
-          rendezvousId: planRecord.rendezvousId,
-          scheduledAt: planRecord.scheduledAt,
-          joinedAt: Date.now(),
-          swappedWith: [record.peerId],
-          promptId,
-        });
-        await store.append(circleId, [attendance]);
-        void this.circleSync?.refresh();
-        await this.reloadCircles();
-        if (this.activeCircleId === circleId) await this.selectCircle(circleId);
-      } catch (error) {
-        console.warn('[circles] attendance was not recorded', error);
-      }
+            (record.deliveredTo ?? []).includes(entry.id) ||
+            Boolean(photoFrom(record, entry.id)),
+        )
+        .map((entry) => entry.id);
+      if (swappedWith.length === 0) return;
+      const already = records.some(
+        (entry) =>
+          entry.record.type === 'Attendance' &&
+          entry.record.attendee === identity.selfKey &&
+          entry.record.rendezvousId === record.id,
+      );
+      if (already) return;
+      const promptId = activePrompts(Date.now(), view.timezone).day.id;
+      const attendance = await createAttendanceRecord({
+        identity,
+        rendezvousId: record.id,
+        scheduledAt: record.scheduledFor,
+        joinedAt: Date.now(),
+        swappedWith,
+        promptId,
+      });
+      await store.append(circleId, [attendance]);
+      void this.circleSync?.refresh();
+      await this.reloadCircles();
+      if (this.activeCircleId === circleId) await this.selectCircle(circleId);
+    } catch (error) {
+      console.warn('[circles] attendance was not recorded', error);
     }
   }
 

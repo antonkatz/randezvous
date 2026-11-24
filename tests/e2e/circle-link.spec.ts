@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { setName } from './helpers';
+import { setName, TINY_PNG } from './helpers';
 
 function localInput(date: Date): string {
   const pad = (value: number): string => String(value).padStart(2, '0');
@@ -75,15 +75,23 @@ test('a circle rendezvous link grants membership while the inviter is offline', 
   await form.getByRole('button', { name: 'create circle' }).click();
   await expect(ana.locator('circle-stats-page')).toContainText('Rendezvous Circle');
 
-  const moment = new Date(Date.now() + 24 * 60 * 60_000);
-  moment.setSeconds(0, 0);
-  await ana.locator('#circle-plan-at').fill(localInput(moment));
-  await ana.getByRole('button', { name: 'offer a circle rendezvous' }).click();
-  await expect(ana.locator('.circle-offer .canonical-plan')).toContainText('by');
-
-  await ana.getByRole('button', { name: 'invite by link' }).click();
-  await expect(ana.locator('#new-circle-link')).toHaveValue(/^http/u);
-  const link = await ana.locator('#new-circle-link').inputValue();
+  await ana.getByRole('button', { name: 'set a circle rendezvous' }).click();
+  await expect(ana.locator('#rendezvous-dialog')).toHaveAttribute('open', '');
+  await expect(ana.locator('.human-option.is-circle input')).toBeChecked();
+  await ana.locator('#photo-input').setInputFiles({
+    name: 'circle-rendezvous.png',
+    mimeType: 'image/png',
+    buffer: TINY_PNG,
+  });
+  await expect(ana.locator('#rv-next')).toBeEnabled();
+  await ana.locator('#rv-next').click();
+  await expect(ana.locator('#rv-schedule')).toBeEnabled();
+  await ana.locator('#rv-schedule').click();
+  await expect(ana.locator('#rv-step-3')).toBeVisible();
+  await expect(ana.locator('#done-human')).toContainText('Rendezvous Circle');
+  await expect(ana.locator('#done-link')).toHaveValue(/^http/u, { timeout: 15_000 });
+  const link = await ana.locator('#done-link').inputValue();
+  await ana.locator('#rv-finish').click();
 
   // The inviter is not needed to redeem the link.
   await anaContext.close();
@@ -97,11 +105,10 @@ test('a circle rendezvous link grants membership while the inviter is offline', 
     name: 'Rendezvous Circle',
   });
   await expect(circle).toBeVisible({ timeout: 25_000 });
+  await expect(baz.locator('#upcoming-list')).toContainText('Rendezvous Circle');
   await circle.click();
-
   await expect(baz.locator('circle-stats-page')).toContainText('Rendezvous Circle');
   await expect(baz.locator('.circle-offer .canonical-plan')).toContainText('by');
-  await expect(baz.locator('.circle-offer .offer-state')).toContainText('confirmed');
   await expect(baz.locator('circle-stats-page')).toContainText('/ 2');
 
   expect(errors).toEqual([]);

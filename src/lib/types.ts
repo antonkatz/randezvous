@@ -45,8 +45,21 @@ export type RendezvousStatus =
   | 'waiting'
   | 'connecting'
   | 'transferring'
+  | 'kept'
   | 'delivered'
-  | 'failed';
+  | 'failed'
+  | 'cancelled'
+  | 'missed';
+
+export interface RendezvousParticipant {
+  id: string;
+  name: string;
+}
+
+export interface RendezvousPeerState {
+  phase: 'idle' | 'connecting' | 'transferring' | 'delivered' | 'failed';
+  error: string | null;
+}
 
 export interface VoiceNoteAttachment {
   blob: Blob;
@@ -109,6 +122,22 @@ export interface StoredRendezvous {
   direction: RendezvousDirection;
   peerId: string;
   peerName: string;
+  /** Every participant, including this browser. */
+  participants?: RendezvousParticipant[];
+  /** The participant who created this rendezvous. */
+  creatorId?: string;
+  /** Set when this rendezvous was posted to a circle channel. */
+  circleId?: string | null;
+  /** One photo per participant, keyed by participant id. */
+  photos?: Record<string, PhotoAttachment>;
+  /** Peers whose copy of this browser's photo has been acknowledged. */
+  deliveredTo?: string[];
+  /** Per-peer transfer state for the live screen and upcoming row. */
+  peerStates?: Record<string, RendezvousPeerState>;
+  /** Per-peer retry timestamps so one pair does not delay the others. */
+  peerAttemptAt?: Record<string, number>;
+  /** Set when at least two participants were present in the window. */
+  keptAt?: number | null;
   createdAt: number;
   scheduledFor: number;
   status: RendezvousStatus;
@@ -333,7 +362,12 @@ export interface RendezvousClientOptions {
 }
 
 export interface ScheduleInput {
-  humanId: string;
+  /** Legacy single-recipient field. `humanIds` takes precedence when present. */
+  humanId?: string;
+  /** One or more direct humans invited to the same rendezvous. */
+  humanIds?: string[];
+  /** Post the same rendezvous to every current non-banned member of this circle. */
+  circleId?: string;
   photo: File | Blob;
   fileName?: string;
   /** Stable id when the photo is reused from the wall. */
@@ -351,6 +385,8 @@ export interface NewPersonScheduleInput {
   scheduledFor: number;
   /** Set when the creator cannot speak during this rendezvous. */
   liveAudioDisabled?: boolean;
+  /** Optional circle channel carried by the invitation link. */
+  circleId?: string;
 }
 
 export interface ContributionInput {

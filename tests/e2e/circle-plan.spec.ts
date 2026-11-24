@@ -1,14 +1,39 @@
 import { expect, test, type Page } from '@playwright/test';
-import { linkPages } from './helpers';
+import { linkPages, TINY_PNG } from './helpers';
 
-function localInput(date: Date): string {
-  const pad = (value: number): string => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+async function createCircle(page: Page, name: string): Promise<void> {
+  const bar = page.locator('circle-bar');
+  await bar.getByRole('button', { name: 'Create a circle' }).click();
+  const form = page.locator('circle-create-form');
+  await form.locator('input[name="name"]').fill(name);
+  await form.locator('input[name="timezone"]').fill('Europe/Berlin');
+  await form.getByRole('button', { name: 'create circle' }).click();
+  await expect(page.locator('circle-stats-page')).toContainText(name);
 }
 
-test('a circle offers independent moments, joins one, and sets an optional window', async ({
-  browser,
-}) => {
+async function setCircleRendezvous(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'set a circle rendezvous' }).click();
+  await expect(page.locator('#rendezvous-dialog')).toHaveAttribute('open', '');
+  await expect(page.locator('.human-option.is-circle input')).toBeChecked();
+  await page.locator('#photo-input').setInputFiles({
+    name: 'circle-meeting.png',
+    mimeType: 'image/png',
+    buffer: TINY_PNG,
+  });
+  await expect(page.locator('#rv-next')).toBeEnabled();
+  await page.locator('#rv-next').click();
+  await expect(page.locator('#rv-schedule')).toBeEnabled();
+  await page.locator('#rv-schedule').click();
+  await expect(page.locator('#rv-step-3')).toBeVisible();
+  await page.locator('#rv-finish').click();
+}
+
+async function fastForwardMeeting(pages: Page[]): Promise<void> {
+  for (const page of pages) await page.clock.install();
+  for (const page of pages) await page.clock.fastForward(2 * 60 * 60_000);
+}
+
+test('a circle rendezvous uses the normal rendezvous mechanism', async ({ browser }) => {
   const anaContext = await browser.newContext({ viewport: { width: 1400, height: 1000 } });
   const bazContext = await browser.newContext({ viewport: { width: 1100, height: 900 } });
   const ana = await anaContext.newPage();
@@ -18,104 +43,53 @@ test('a circle offers independent moments, joins one, and sets an optional windo
   baz.on('pageerror', (error) => errors.push(`Baz: ${error.message}`));
 
   await linkPages(ana, baz);
-
-  const bar = ana.locator('circle-bar');
-  await bar.getByRole('button', { name: 'Create a circle' }).click();
-  const form = ana.locator('circle-create-form');
-  await form.locator('input[name="name"]').fill('Moon Garden');
-  await form.locator('input[name="timezone"]').fill('Europe/Berlin');
-  await form.getByRole('button', { name: 'create circle' }).click();
-  await expect(ana.locator('circle-stats-page')).toContainText('Moon Garden');
-
-  const planMoment = new Date(Date.now() + 24 * 60 * 60_000);
-  planMoment.setSeconds(0, 0);
-  await ana.locator('#circle-plan-at').fill(localInput(planMoment));
-  await ana.getByRole('button', { name: 'offer a circle rendezvous' }).click();
-  await expect(ana.locator('.circle-offer .canonical-plan')).toContainText('by');
-  await expect(ana.locator('.circle-offer .offer-state')).toContainText('pending');
-
-  const windowStart = new Date(planMoment.getTime() + 60 * 60_000);
-  const windowEnd = new Date(planMoment.getTime() + 4 * 60 * 60_000);
-  await ana.locator('#circle-window-start').fill(localInput(windowStart));
-  await ana.locator('#circle-window-end').fill(localInput(windowEnd));
-  await ana.getByRole('button', { name: 'set window' }).click();
-  await expect(ana.locator('.circle-window .canonical-plan')).toContainText('active ·');
-
-  // A plan outside the active window is refused before signing.
-  const outside = new Date(planMoment.getTime() + 8 * 60 * 60_000);
-  await ana.locator('#circle-plan-at').fill(localInput(outside));
-  await ana.getByRole('button', { name: 'offer a circle rendezvous' }).click();
-  await expect(ana.locator('#toast-region')).toContainText(/outside the circle/iu);
-  await expect(ana.locator('.circle-offer')).toHaveCount(1);
-
-  // Inviting Baz auto-accepts on his side without a join click.
+  await createCircle(ana, 'Moon Garden');
   await ana.locator('button[data-invite-key]').first().click();
   await expect(
     baz.locator('circle-bar').getByRole('button', { name: 'Moon Garden' }),
   ).toBeVisible({ timeout: 20_000 });
   await expect(ana.locator('circle-stats-page')).toContainText('/ 2', { timeout: 20_000 });
 
-  // Both members see the same independent offer, and Baz joins it.
-  await baz.locator('circle-bar').getByRole('button', { name: 'Moon Garden' }).click();
-  await expect(baz.locator('.circle-offer .canonical-plan')).toContainText('by');
-  await expect(baz.locator('.circle-window .canonical-plan')).toContainText('active ·');
-  await baz.getByRole('button', { name: 'join this moment' }).click();
-  await expect(baz.locator('.circle-offer .offer-state')).toContainText('confirmed');
-  await expect(ana.locator('.circle-offer .offer-state')).toContainText('confirmed', { timeout: 20_000 });
-
-  expect(errors).toEqual([]);
-  await anaContext.close();
-  await bazContext.close();
-});
-
-test('an offline member receives the expiring circle rendezvous invite on reconnect', async ({
-  browser,
-}) => {
-  const anaContext = await browser.newContext({ viewport: { width: 1300, height: 950 } });
-  const bazContext = await browser.newContext({ viewport: { width: 1100, height: 900 } });
-  const ana = await anaContext.newPage();
-  let baz = await bazContext.newPage();
-  const errors: string[] = [];
-  ana.on('pageerror', (error) => errors.push(`Ana: ${error.message}`));
-  baz.on('pageerror', (error) => errors.push(`Baz: ${error.message}`));
-
-  await linkPages(ana, baz);
-  const bar = ana.locator('circle-bar');
-  await bar.getByRole('button', { name: 'Create a circle' }).click();
-  const form = ana.locator('circle-create-form');
-  await form.locator('input[name="name"]').fill('Night Orchard');
-  await form.locator('input[name="timezone"]').fill('Europe/Berlin');
-  await form.getByRole('button', { name: 'create circle' }).click();
-  await expect(ana.locator('circle-stats-page')).toContainText('Night Orchard');
-  await ana.locator('button[data-invite-key]').first().click();
-  await expect(
-    baz.locator('circle-bar').getByRole('button', { name: 'Night Orchard' }),
-  ).toBeVisible({ timeout: 20_000 });
-
-  // Baz goes offline before the plan is signed, so only the server can carry it.
-  await baz.close();
+  await setCircleRendezvous(ana);
   await expect
-    .poll(async () => ana.locator('#humans-list').innerText(), { timeout: 15_000 })
-    .toContain('away');
+    .poll(
+      async () =>
+        baz.evaluate(() => {
+          const app = document.querySelector('rendezvous-app') as unknown as {
+            clientInstance: { getSnapshot: () => { rendezvous: Array<{ circleId: string | null }> } };
+          };
+          return app.clientInstance.getSnapshot().rendezvous.find((entry) => entry.circleId);
+        }),
+      { timeout: 15_000 },
+    )
+    .toBeTruthy();
 
-  const planMoment = new Date(Date.now() + 2 * 24 * 60 * 60_000);
-  planMoment.setSeconds(0, 0);
-  await ana.locator('#circle-plan-at').fill(localInput(planMoment));
-  await ana.getByRole('button', { name: 'offer a circle rendezvous' }).click();
-  await expect(ana.locator('.circle-offer .canonical-plan')).toContainText('by');
-  await ana.close();
+  await fastForwardMeeting([ana, baz]);
+  await expect
+    .poll(
+      async () =>
+        ana.evaluate(() => {
+          const app = document.querySelector('rendezvous-app') as unknown as {
+            clientInstance: {
+              getSnapshot: () => {
+                rendezvous: Array<{ status: string; circleId: string | null; deliveredTo: string[] }>;
+              };
+            };
+          };
+          const record = app.clientInstance
+            .getSnapshot()
+            .rendezvous.find((entry) => entry.circleId);
+          return record?.status;
+        }),
+      { timeout: 30_000 },
+    )
+    .toMatch(/kept|delivered/u);
+  await expect(baz.locator('.wall-photo')).toHaveCount(1, { timeout: 30_000 });
 
-  baz = await bazContext.newPage();
-  baz.on('pageerror', (error) => errors.push(`Baz: ${error.message}`));
-  await baz.goto('/');
-  await expect(baz.locator('#humans-list')).toContainText('Ana');
-  await baz
-    .locator('circle-bar')
-    .getByRole('button', { name: 'Night Orchard' })
-    .click({ timeout: 20_000 });
-  await expect(baz.locator('.circle-offer .canonical-plan')).toContainText('by', {
-    timeout: 20_000,
-  });
+  await ana.locator('circle-bar').getByRole('button', { name: 'Moon Garden' }).click();
+  await expect(ana.locator('circle-stats-page')).toContainText(/kept|delivered/u);
+  await expect(ana.locator('circle-stats-page')).toContainText('/ 2');
+
   expect(errors).toEqual([]);
   await anaContext.close();
   await bazContext.close();

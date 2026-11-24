@@ -220,13 +220,21 @@ export class SignalStore {
   }
 
   addRendezvous(rendezvous: RendezvousWire): void {
-    if (!this.data.rendezvous.some((entry) => entry.id === rendezvous.id)) {
+    const recipient = rendezvous.noticeTo ?? rendezvous.toId;
+    if (
+      !this.data.rendezvous.some(
+        (entry) => entry.id === rendezvous.id && (entry.noticeTo ?? entry.toId) === recipient,
+      )
+    ) {
       this.data.rendezvous.push(rendezvous);
     }
   }
 
   upsertRendezvous(rendezvous: RendezvousWire): void {
-    const index = this.data.rendezvous.findIndex((entry) => entry.id === rendezvous.id);
+    const recipient = rendezvous.noticeTo ?? rendezvous.toId;
+    const index = this.data.rendezvous.findIndex(
+      (entry) => entry.id === rendezvous.id && (entry.noticeTo ?? entry.toId) === recipient,
+    );
     if (index >= 0) {
       this.data.rendezvous[index] = rendezvous;
     } else {
@@ -234,8 +242,12 @@ export class SignalStore {
     }
   }
 
-  removeRendezvous(id: string): void {
-    this.data.rendezvous = this.data.rendezvous.filter((entry) => entry.id !== id);
+  removeRendezvous(id: string, recipient?: string): void {
+    this.data.rendezvous = this.data.rendezvous.filter((entry) => {
+      if (entry.id !== id) return true;
+      if (recipient === undefined) return false;
+      return (entry.noticeTo ?? entry.toId) !== recipient;
+    });
   }
 
   addRemoval(removal: StoredRemoval): void {
@@ -329,7 +341,20 @@ function isRendezvousWire(value: unknown): value is RendezvousWire {
         value.confirmedBy.every((id) => typeof id === 'string'))) &&
     (value.revision === undefined ||
       (typeof value.revision === 'number' && Number.isSafeInteger(value.revision))) &&
-    (value.noticeTo === undefined || typeof value.noticeTo === 'string')
+    (value.noticeTo === undefined || typeof value.noticeTo === 'string') &&
+    (value.creatorId === undefined || typeof value.creatorId === 'string') &&
+    (value.circleId === undefined || typeof value.circleId === 'string') &&
+    (value.recipientIds === undefined ||
+      (Array.isArray(value.recipientIds) &&
+        value.recipientIds.every((id) => typeof id === 'string'))) &&
+    (value.participants === undefined ||
+      (Array.isArray(value.participants) &&
+        value.participants.every(
+          (entry) =>
+            isObject(entry) &&
+            typeof entry.id === 'string' &&
+            typeof entry.name === 'string',
+        )))
   );
 }
 

@@ -25,6 +25,24 @@ import {
 } from './invite';
 import { isValidVoiceNote, makePhotoAttachment } from './media';
 import {
+  appointmentFromTransferId,
+  creatorIdFor,
+  deliveredTo,
+  hasDeliveredTo,
+  isCreator,
+  isMultiPerson,
+  markDeliveredTo,
+  normalizeRendezvousRecord,
+  otherParticipants,
+  ownPhoto,
+  pairTransferId,
+  participantsFor,
+  photoFrom,
+  setOwnPhoto,
+  setPhotoFrom,
+  type RecordParticipant,
+} from './rendezvous-record';
+import {
   createPossessionMessage,
   isPossessionMessage,
   newerPossession,
@@ -99,6 +117,7 @@ export class RendezvousClientError extends Error {
 }
 
 interface ActiveTransfer {
+  appointmentId: string;
   direction: 'outgoing' | 'incoming';
   peerId: string;
   transfer: SenderTransfer | ReceiverTransfer;
@@ -112,7 +131,15 @@ interface PendingAudioRequest {
 }
 
 function cloneRecord(record: StoredRendezvous): StoredRendezvous {
-  return { ...record, confirmedBy: [...record.confirmedBy] };
+  return {
+    ...record,
+    confirmedBy: [...record.confirmedBy],
+    participants: record.participants ? [...record.participants] : undefined,
+    deliveredTo: record.deliveredTo ? [...record.deliveredTo] : undefined,
+    peerStates: record.peerStates ? { ...record.peerStates } : undefined,
+    peerAttemptAt: record.peerAttemptAt ? { ...record.peerAttemptAt } : undefined,
+    photos: record.photos ? { ...record.photos } : undefined,
+  };
 }
 
 function isDelivered(record: StoredRendezvous): boolean {
@@ -318,10 +345,19 @@ export class RendezvousClient {
    * opener join the circle without contacting the inviter; the inviter is only
    * needed later for ordinary circle sync.
    */
-  async createCircleLink(circle: InviteCircle): Promise<string> {
+  async createCircleLink(
+    circle: InviteCircle,
+    rendezvous?: {
+      id: string;
+      scheduledFor: number;
+      createdAt: number;
+      liveAudioDisabled?: boolean;
+    },
+  ): Promise<string> {
     const token = await createInviteToken(this.requireIdentity(), {
       circleId: circle.id,
       circle,
+      ...(rendezvous ? { rendezvous } : {}),
     });
     return buildInviteUrl(token);
   }
@@ -530,6 +566,11 @@ export class RendezvousClient {
       record.proposedBy ??=
         record.direction === 'outgoing' ? (this.identity?.id ?? '') : record.peerId;
       record.revision ??= 0;
+      normalizeRendezvousRecord(
+        record,
+        this.identity?.id ?? '',
+        this.identity?.name ?? '',
+      );
       record.confirmation = this.confirmationFor(record);
       if (record.photo && !record.photo.photoId) {
         record.photo = await makePhotoAttachment({
@@ -559,10 +600,13 @@ export class RendezvousClient {
     }
   }
 
-  /** Both direct participants must confirm the current proposed time. */
+  /** Every invited participant must confirm the current proposed time. */
   private confirmationFor(record: StoredRendezvous): 'pending' | 'confirmed' {
+    const selfId = this.identity?.id ?? '';
     const participants = new Set(
-      [this.identity?.id ?? '', record.peerId].filter(Boolean),
+      participantsFor(record, selfId, this.identity?.name ?? '')
+        .map((entry) => entry.id)
+        .filter(Boolean),
     );
     if (participants.size < 2) return 'pending';
     return [...participants].every((id) => record.confirmedBy.includes(id))
@@ -678,17 +722,39 @@ export class RendezvousClient {
   ): Promise<void> {
     const pending = invite.rendezvous;
     if (!pending) return;
+    const selfId = this.identity?.id ?? '';
+    const selfName = this.identity?.name ?? '';
+    const circleId =
+      pending.circleId ?? invite.circleId ?? invite.circle?.id ?? null;
+    const declared = pending.participants?.length
+      ? pending.participants
+      : [
+          { id: invite.id, name: human.name },
+          { id: selfId, name: selfName },
+        ];
+    const participants = declared.filter(
+      (entry, index, all) =>
+        entry.id && all.findIndex((candidate) => candidate.id === entry.id) === index,
+    );
+    if (!participants.some((entry) => entry.id === selfId)) {
+      participants.push({ id: selfId, name: selfName });
+    }
     const existing = this.rendezvous.get(pending.id);
     if (existing) {
       if (existing.direction !== 'incoming') return;
       existing.peerName = human.name || existing.peerName;
+      existing.participants = participants;
+      existing.creatorId = pending.creatorId ?? invite.id;
+      existing.circleId = circleId;
       existing.scheduledFor = pending.scheduledFor;
       existing.createdAt = pending.createdAt;
       existing.liveAudioDisabled = pending.liveAudioDisabled === true;
       existing.status = isHandoffEligible(existing.scheduledFor)
         ? existing.status === 'connecting' || existing.status === 'transferring'
           ? existing.status
-          : 'waiting'
+          : existing.status === 'kept'
+            ? 'kept'
+            : 'waiting'
         : existing.status === 'delivered'
           ? 'delivered'
           : 'scheduled';
@@ -702,8 +768,15 @@ export class RendezvousClient {
     const record: StoredRendezvous = {
       id: pending.id,
       direction: 'incoming',
-      peerId: invite.id,
+      peerId: pending.creatorId ?? invite.id,
       peerName: human.name,
+      participants,
+      creatorId: pending.creatorId ?? invite.id,
+      circleId,
+      photos: {},
+      deliveredTo: [],
+      peerStates: {},
+      keptAt: null,
       createdAt: pending.createdAt,
       scheduledFor: pending.scheduledFor,
       status: isHandoffEligible(pending.scheduledFor) ? 'waiting' : 'scheduled',
@@ -827,30 +900,48 @@ export class RendezvousClient {
     const transport = this.transport;
     if (!transport?.isOnline) return;
     const identity = this.requireIdentity();
-    const outgoing = record.direction === 'outgoing';
-    const wire: RendezvousWire = {
-      id: record.id,
-      fromId: outgoing ? identity.id : record.peerId,
-      fromName: outgoing ? identity.name : record.peerName,
-      toId: outgoing ? record.peerId : identity.id,
-      scheduledFor: record.scheduledFor,
-      createdAt: record.createdAt,
-      liveAudioDisabled: record.liveAudioDisabled,
-      proposedBy: record.proposedBy,
-      confirmedBy: [...record.confirmedBy],
-      revision: record.revision,
-    };
-    const isUpdate = record.revision > 0 || record.confirmedBy.length > 0;
-    const sent = transport.send(
-      isUpdate
-        ? {
-            type: 'rendezvous:update',
-            action: record.confirmedBy.length > 0 ? 'confirm' : 'counter',
-            rendezvous: wire,
-          }
-        : { type: 'rendezvous:create', rendezvous: wire },
-    );
-    if (sent) {
+    const selfId = identity.id;
+    const invitees = otherParticipants(record, selfId, identity.name);
+    if (invitees.length === 0) return;
+    const creatorId = creatorIdFor(record, selfId);
+    const participants = participantsFor(record, selfId, identity.name);
+    const isUpdate =
+      record.revision > 0 ||
+      record.confirmedBy.length > 0 ||
+      !isCreator(record, selfId);
+    let sentAny = false;
+    for (const peer of invitees) {
+      const wire: RendezvousWire = {
+        id: record.id,
+        fromId: identity.id,
+        fromName: identity.name,
+        toId: peer.id,
+        creatorId,
+        participants,
+        recipientIds: participants
+          .map((entry) => entry.id)
+          .filter(Boolean),
+        ...(record.circleId ? { circleId: record.circleId } : {}),
+        scheduledFor: record.scheduledFor,
+        createdAt: record.createdAt,
+        liveAudioDisabled: record.liveAudioDisabled,
+        proposedBy: record.proposedBy,
+        confirmedBy: [...record.confirmedBy],
+        revision: record.revision,
+        noticeTo: peer.id,
+      };
+      const sent = transport.send(
+        isUpdate
+          ? {
+              type: 'rendezvous:update',
+              action: 'confirm',
+              rendezvous: wire,
+            }
+          : { type: 'rendezvous:create', rendezvous: wire },
+      );
+      sentAny = sentAny || sent;
+    }
+    if (sentAny) {
       this.announceInFlight.add(record.id);
       window.setTimeout(() => {
         this.announceInFlight.delete(record.id);
@@ -1000,6 +1091,26 @@ export class RendezvousClient {
     if (record.peerId && record.peerId !== sender.id) return;
     record.peerId = sender.id;
     record.peerName = sender.name;
+    const selfId = this.identity?.id ?? '';
+    const selfName = this.identity?.name ?? '';
+    const existing = participantsFor(record, selfId, selfName);
+    const next = existing.length
+      ? existing.map((entry) =>
+          entry.id ? entry : { id: sender.id, name: sender.name },
+        )
+      : [
+          { id: selfId, name: selfName },
+          { id: sender.id, name: sender.name },
+        ];
+    if (!next.some((entry) => entry.id === sender.id)) {
+      next.push({ id: sender.id, name: sender.name });
+    }
+    record.participants = next.filter(
+      (entry, index, all) =>
+        entry.id &&
+        all.findIndex((candidate) => candidate.id === entry.id) === index,
+    );
+    record.creatorId ??= selfId;
     record.status = isHandoffEligible(record.scheduledFor) ? 'waiting' : 'scheduled';
     record.confirmedBy = record.confirmedBy ?? [];
     record.proposedBy = record.proposedBy ?? this.identity?.id ?? '';
@@ -1155,18 +1266,38 @@ export class RendezvousClient {
 
   private async handleRendezvousNotice(notice: RendezvousNotice): Promise<void> {
     const identity = this.requireIdentity();
+    const creatorId = notice.creatorId ?? notice.fromId;
     const existingNoticeRecord = this.rendezvous.get(notice.id);
-    if (notice.fromId === identity.id && !existingNoticeRecord) {
+    if (creatorId === identity.id && !existingNoticeRecord) {
       this.transport?.send({ type: 'rendezvous:ack', id: notice.id });
       return;
     }
-    const peerId = existingNoticeRecord
-      ? existingNoticeRecord.peerId
-      : notice.fromId;
-    const human = this.humans.get(peerId);
-    if (!human) {
+    if (notice.recipientIds && !notice.recipientIds.includes(identity.id)) {
       this.transport?.send({ type: 'rendezvous:ack', id: notice.id });
       return;
+    }
+    const creator =
+      creatorId === identity.id
+        ? { id: identity.id, name: identity.name }
+        : this.humans.get(creatorId);
+    if (!creator) {
+      this.transport?.send({ type: 'rendezvous:ack', id: notice.id });
+      return;
+    }
+
+    const declaredParticipants = notice.participants?.length
+      ? notice.participants
+      : [
+          { id: creatorId, name: creator.name || notice.fromName },
+          { id: identity.id, name: identity.name },
+        ];
+    const participants = declaredParticipants.filter(
+      (entry, index, all) =>
+        entry.id &&
+        all.findIndex((candidate) => candidate.id === entry.id) === index,
+    );
+    if (!participants.some((entry) => entry.id === identity.id)) {
+      participants.push({ id: identity.id, name: identity.name });
     }
 
     let record = this.rendezvous.get(notice.id);
@@ -1179,8 +1310,15 @@ export class RendezvousClient {
       record = {
         id: notice.id,
         direction: 'incoming',
-        peerId,
-        peerName: human.name || notice.fromName,
+        peerId: creatorId,
+        peerName: creator.name || notice.fromName,
+        participants,
+        creatorId,
+        circleId: notice.circleId ?? null,
+        photos: {},
+        deliveredTo: [],
+        peerStates: {},
+        keptAt: null,
         createdAt: notice.createdAt,
         scheduledFor: notice.scheduledFor,
         status: isHandoffEligible(notice.scheduledFor) ? 'waiting' : 'scheduled',
@@ -1207,6 +1345,9 @@ export class RendezvousClient {
         this.transport?.send({ type: 'rendezvous:ack', id: notice.id });
         return;
       }
+      record.participants = participants;
+      record.creatorId = creatorId;
+      if (notice.circleId) record.circleId = notice.circleId;
       timeChanged =
         notice.scheduledFor !== record.scheduledFor ||
         Boolean(notice.proposedBy && notice.proposedBy !== record.proposedBy);
@@ -1216,6 +1357,7 @@ export class RendezvousClient {
         record.confirmedBy = [...(notice.confirmedBy ?? [])];
         if (
           record.status !== 'delivered' &&
+          record.status !== 'kept' &&
           record.status !== 'connecting' &&
           record.status !== 'transferring'
         ) {
@@ -1229,7 +1371,10 @@ export class RendezvousClient {
       }
       record.revision = Math.max(record.revision, noticeRevision);
       record.announcedAt = Date.now();
-      record.peerName = human.name || notice.fromName;
+      if (record.direction === 'incoming') {
+        record.peerId = creatorId;
+        record.peerName = creator.name || notice.fromName;
+      }
       if (typeof notice.liveAudioDisabled === 'boolean') {
         record.liveAudioDisabled = notice.liveAudioDisabled;
       }
@@ -1252,7 +1397,7 @@ export class RendezvousClient {
       this.notice({
         tone: 'success',
         code: 'rendezvous-confirmed',
-        message: `You and ${displayName(record.peerName)} confirmed the rendezvous.`,
+        message: `Everyone confirmed the rendezvous.`,
         humanId: record.peerId,
         rendezvousId: record.id,
       });
@@ -1278,6 +1423,7 @@ export class RendezvousClient {
     const human = this.humans.get(fromId);
     if (!human) return;
     const identity = this.requireIdentity();
+    const { appointmentId } = appointmentFromTransferId(transferId);
 
     if (transferId.startsWith('au_')) {
       if (this.audioSessionId !== transferId || this.audioSessionPeer !== fromId) return;
@@ -1326,9 +1472,9 @@ export class RendezvousClient {
         existingActive.transfer.close();
         this.activeTransfers.delete(transferId);
       }
-      let record = this.rendezvous.get(transferId);
+      let record = this.rendezvous.get(appointmentId);
       if (!record) {
-        record = this.blankIncomingRecord(transferId, fromId, human);
+        record = this.blankIncomingRecord(appointmentId, fromId, human);
         this.rendezvous.set(record.id, record);
         await this.store.putRendezvous(record);
         this.emitState();
@@ -1338,27 +1484,30 @@ export class RendezvousClient {
       record.status = 'connecting';
       record.error = null;
       record.sessionStartedAt ??= Date.now();
+      record.peerStates ??= {};
+      record.peerStates[fromId] = { phase: 'connecting', error: null };
       await this.store.putRendezvous(record);
       this.emitState();
 
-      const contribution = record.contribution
+      const localPhoto = ownPhoto(record, identity.id);
+      const contribution = localPhoto
         ? {
-            photo: record.contribution.blob,
+            photo: localPhoto.blob,
             meta: {
-              name: record.contribution.name,
-              type: record.contribution.type,
-              size: record.contribution.size,
-              photoId: record.contribution.photoId,
-              note: record.contribution.note
+              name: localPhoto.name,
+              type: localPhoto.type,
+              size: localPhoto.size,
+              photoId: localPhoto.photoId,
+              note: localPhoto.note
                 ? {
-                    name: record.contribution.note.name,
-                    type: record.contribution.note.type,
-                    size: record.contribution.note.size,
-                    durationMs: record.contribution.note.durationMs,
+                    name: localPhoto.note.name,
+                    type: localPhoto.note.type,
+                    size: localPhoto.note.size,
+                    durationMs: localPhoto.note.durationMs,
                   }
                 : null,
             },
-            note: record.contribution.note,
+            note: localPhoto.note,
           }
         : null;
       const transfer = new ReceiverTransfer({
@@ -1370,10 +1519,15 @@ export class RendezvousClient {
         iceServers: this.iceServers,
         offerSdp: payload.sdp,
         contribution,
-        callbacks: this.transferCallbacks(record),
+        callbacks: this.transferCallbacks(record, fromId),
         sendSignal: (next) => this.sendRtc(fromId, transferId, next),
       });
-      this.activeTransfers.set(transferId, { direction: 'incoming', peerId: fromId, transfer });
+      this.activeTransfers.set(transferId, {
+        appointmentId,
+        direction: 'incoming',
+        peerId: fromId,
+        transfer,
+      });
       await transfer.start();
       return;
     }
@@ -1388,16 +1542,27 @@ export class RendezvousClient {
     peerId: string,
     human: Human,
   ): StoredRendezvous {
+    const selfId = this.identity?.id ?? '';
     return {
       id,
       direction: 'incoming',
       peerId,
       peerName: human.name,
+      participants: [
+        { id: peerId, name: human.name },
+        { id: selfId, name: this.identity?.name ?? '' },
+      ],
+      creatorId: peerId,
+      circleId: null,
+      photos: {},
+      deliveredTo: [],
+      peerStates: {},
+      keptAt: null,
       createdAt: Date.now(),
       scheduledFor: Date.now(),
       status: 'waiting',
       confirmation: 'confirmed',
-      confirmedBy: [this.identity?.id ?? '', peerId].filter(Boolean),
+      confirmedBy: [selfId, peerId].filter(Boolean),
       proposedBy: peerId,
       revision: 0,
       photo: null,
@@ -1418,7 +1583,7 @@ export class RendezvousClient {
     this.transport?.send({ type: 'rtc', to, transferId, payload });
   }
 
-  private transferCallbacks(record: StoredRendezvous) {
+  private transferCallbacks(record: StoredRendezvous, peerId: string) {
     const attachmentFrom = async (payload: MediaPayload) =>
       makePhotoAttachment({
         photo: payload.photo,
@@ -1426,6 +1591,17 @@ export class RendezvousClient {
         photoId: payload.photoId,
         note: payload.note,
       });
+    const peerName =
+      record.participants?.find((entry) => entry.id === peerId)?.name || peerId;
+    const multi = isMultiPerson(record);
+
+    const setPeerPhase = (
+      phase: NonNullable<StoredRendezvous['peerStates']>[string]['phase'],
+      error: string | null = null,
+    ): void => {
+      record.peerStates ??= {};
+      record.peerStates[peerId] = { phase, error };
+    };
 
     return {
       onPhase: (
@@ -1433,14 +1609,19 @@ export class RendezvousClient {
         transferred: number,
         total: number,
       ) => {
-        if (phase === 'progress' && record.status !== 'transferring' && record.status !== 'delivered') {
-          record.status = 'transferring';
+        if (phase === 'connecting') {
+          setPeerPhase('connecting');
+        } else if (phase === 'progress') {
+          setPeerPhase('transferring');
+          if (record.status !== 'kept' && record.status !== 'delivered') {
+            record.status = 'transferring';
+          }
           void this.store.putRendezvous(record);
-          this.emitState();
         }
+        this.emitState();
         this.emit('transfer', {
           rendezvousId: record.id,
-          peerId: record.peerId,
+          peerId,
           direction: record.direction,
           phase,
           transferred,
@@ -1448,19 +1629,9 @@ export class RendezvousClient {
         } satisfies TransferEvent);
       },
       onError: (message: string, direction: 'primary' | 'reciprocal') => {
-        if (direction === 'reciprocal' && record.status === 'delivered') {
-          this.notice({
-            tone: 'warning',
-            code: 'transfer-failed',
-            message: `Your reciprocal photograph was not delivered. ${message}`,
-            humanId: record.peerId,
-            rendezvousId: record.id,
-          });
-          return;
-        }
-        if (isDelivered(record)) return;
-        record.status = 'failed';
+        setPeerPhase('failed', message);
         record.error = message;
+        if (!multi && record.status !== 'delivered') record.status = 'failed';
         record.lastAttemptAt = Date.now();
         void this.store.putRendezvous(record);
         this.emitState();
@@ -1469,46 +1640,63 @@ export class RendezvousClient {
           code: /identity|authenticate|decrypt/u.test(message)
             ? 'handshake-failed'
             : 'transfer-failed',
-          message,
-          humanId: record.peerId,
+          message:
+            direction === 'reciprocal'
+              ? `Your reciprocal photograph was not delivered. ${message}`
+              : message,
+          humanId: peerId,
           rendezvousId: record.id,
         });
         this.emit('transfer', {
           rendezvousId: record.id,
-          peerId: record.peerId,
+          peerId,
           direction: record.direction,
           phase: 'error',
           transferred: 0,
-          total: record.photo?.size ?? 0,
+          total: ownPhoto(record, this.identity?.id ?? '')?.size ?? 0,
           message,
         } satisfies TransferEvent);
         void this.processDue();
       },
       onSenderComplete: async () => {
-        record.status = 'delivered';
-        record.deliveredAt = Date.now();
+        markDeliveredTo(record, peerId);
+        if (record.peerAttemptAt) delete record.peerAttemptAt[peerId];
         record.error = null;
+        record.lastAttemptAt = null;
+        if (!multi) {
+          record.status = 'delivered';
+          record.deliveredAt = Date.now();
+        } else if (record.keptAt) {
+          record.status = 'kept';
+        }
         await this.store.putRendezvous(record);
-        if (record.photo) {
-          await this.createPrint(record, 'outgoing', record.photo, 'primary');
+        const photo = ownPhoto(record, this.identity?.id ?? '');
+        if (photo) {
+          await this.createPrint(record, 'outgoing', photo, 'primary', peerId, peerName);
         }
         this.emitState();
         this.notice({
           tone: 'success',
           code: 'transfer-delivered',
-          message: `${displayName(record.peerName)} received your photograph.`,
-          humanId: record.peerId,
+          message: `${displayName(peerName)} received your photograph.`,
+          humanId: peerId,
           rendezvousId: record.id,
         });
       },
       onReceiverComplete: async (payload: MediaPayload) => {
         const attachment = await attachmentFrom(payload);
-        record.photo = attachment;
-        record.status = 'delivered';
-        record.deliveredAt = Date.now();
+        setPhotoFrom(record, peerId, attachment);
+        if (record.peerAttemptAt) delete record.peerAttemptAt[peerId];
         record.error = null;
+        record.lastAttemptAt = null;
+        if (!multi) {
+          record.status = 'delivered';
+          record.deliveredAt = Date.now();
+        } else if (record.keptAt) {
+          record.status = 'kept';
+        }
         await this.store.putRendezvous(record);
-        await this.createPrint(record, 'incoming', attachment, 'primary');
+        await this.createPrint(record, 'incoming', attachment, 'primary', peerId, peerName);
         this.emitState();
         this.emit('appointment', {
           rendezvous: cloneRecord(record),
@@ -1520,9 +1708,9 @@ export class RendezvousClient {
       },
       onReciprocalComplete: async (payload: MediaPayload) => {
         const attachment = await attachmentFrom(payload);
-        record.reciprocal = attachment;
+        setPhotoFrom(record, peerId, attachment);
         await this.store.putRendezvous(record);
-        await this.createPrint(record, 'incoming', attachment, 'contribution');
+        await this.createPrint(record, 'incoming', attachment, 'contribution', peerId, peerName);
         this.emitState();
         this.emit('appointment', {
           rendezvous: cloneRecord(record),
@@ -1533,8 +1721,17 @@ export class RendezvousClient {
         void this.claimPhoto(record, payload.photoId);
       },
       onContributionAcked: async () => {
-        if (!record.contribution) return;
-        await this.createPrint(record, 'outgoing', record.contribution, 'contribution');
+        markDeliveredTo(record, peerId);
+        if (record.peerAttemptAt) delete record.peerAttemptAt[peerId];
+        const photo = ownPhoto(record, this.identity?.id ?? '');
+        if (photo) {
+          await this.createPrint(record, 'outgoing', photo, 'contribution', peerId, peerName);
+        }
+        if (!multi && record.status !== 'delivered') {
+          record.status = 'delivered';
+          record.deliveredAt = Date.now();
+        }
+        await this.store.putRendezvous(record);
         this.emitState();
       },
       onDiagnostics: (diagnostics: TransferDiagnostics) => {
@@ -1542,8 +1739,11 @@ export class RendezvousClient {
         this.emitState();
       },
       onClosed: () => {
-        const active = this.activeTransfers.get(record.id);
-        if (active) this.activeTransfers.delete(record.id);
+        for (const [key, active] of [...this.activeTransfers.entries()]) {
+          if (active.appointmentId === record.id && active.peerId === peerId) {
+            this.activeTransfers.delete(key);
+          }
+        }
         void this.processDue();
       },
     };
@@ -1554,15 +1754,19 @@ export class RendezvousClient {
     direction: StoredPrint['direction'],
     photo: NonNullable<StoredRendezvous['photo']>,
     kind: 'primary' | 'contribution',
+    peerId: string,
+    peerName: string,
   ): Promise<StoredPrint> {
-    const id = `pr_${record.id}_${direction}_${kind}`;
+    const id = `pr_${record.id}_${peerId}_${direction}_${kind}`;
+    const existing = this.prints.get(id);
+    if (existing) return existing;
     const print: StoredPrint = {
       id,
       appointmentId: record.id,
       photoId: photo.photoId,
       direction,
-      peerId: record.peerId,
-      peerName: record.peerName,
+      peerId,
+      peerName,
       photo,
       deliveredAt: record.deliveredAt ?? Date.now(),
       createdAt: Date.now(),
@@ -1572,22 +1776,43 @@ export class RendezvousClient {
     return print;
   }
 
+  private hasActiveTransfer(appointmentId: string): boolean {
+    for (const active of this.activeTransfers.values()) {
+      if (active.appointmentId === appointmentId) return true;
+    }
+    return false;
+  }
+
   private async processDue(): Promise<void> {
     if (!this.ready || this.processingDue || this.stopped) return;
     this.processingDue = true;
     this.updateAudioTick();
     const now = Date.now();
+    const identity = this.identity;
+    const selfId = identity?.id ?? '';
+    const selfName = identity?.name ?? '';
     let changed = false;
     try {
       for (const record of sortRendezvous(this.rendezvous.values())) {
-        if (isDelivered(record) || record.status === 'awaiting-join') continue;
+        if (record.status === 'awaiting-join') continue;
+        if (
+          record.status === 'delivered' ||
+          record.status === 'cancelled' ||
+          record.status === 'missed'
+        ) {
+          continue;
+        }
+        const multi = isMultiPerson(record);
         const phase = handoffPhase(record.scheduledFor, now);
         const eligible = phase !== 'scheduled';
-        const human = this.humans.get(record.peerId);
-        const bothOnline =
-          this.signalStatus === 'online' &&
-          Boolean(human?.online) &&
-          !this.activeTransfers.has(record.id);
+        const invitees = otherParticipants(record, selfId, selfName);
+        const presentPeers =
+          this.signalStatus === 'online'
+            ? invitees.filter((peer) => this.humans.get(peer.id)?.online)
+            : [];
+        const presentCount =
+          (this.signalStatus === 'online' ? 1 : 0) + presentPeers.length;
+        const kept = eligible && presentCount >= 2;
 
         if (eligible) {
           if (this.notifyOpen(record)) changed = true;
@@ -1598,10 +1823,27 @@ export class RendezvousClient {
           changed = true;
         }
 
+        if (kept && !record.keptAt) {
+          record.keptAt = now;
+          if (multi) record.status = 'kept';
+          await this.store.putRendezvous(record);
+          changed = true;
+        }
+        if (phase === 'still-open' && !record.keptAt) {
+          record.status = 'missed';
+          record.error = 'The five-minute handoff window closed before two people met.';
+          await this.store.putRendezvous(record);
+          changed = true;
+          continue;
+        }
+
         if (record.direction === 'incoming') {
-          const nextStatus: RendezvousStatus = eligible ? 'waiting' : 'scheduled';
-          if (record.status === 'scheduled' || record.status === 'waiting') {
-            if (record.status !== nextStatus && !this.activeTransfers.has(record.id)) {
+          if (
+            !record.keptAt &&
+            (record.status === 'scheduled' || record.status === 'waiting')
+          ) {
+            const nextStatus: RendezvousStatus = eligible ? 'waiting' : 'scheduled';
+            if (record.status !== nextStatus) {
               record.status = nextStatus;
               await this.store.putRendezvous(record);
               changed = true;
@@ -1623,8 +1865,8 @@ export class RendezvousClient {
           this.announce(record);
         }
 
-        if (!bothOnline) {
-          if (record.status !== 'waiting' && record.status !== 'connecting') {
+        if (!kept) {
+          if (record.status !== 'waiting') {
             record.status = 'waiting';
             record.lastAttemptAt = record.lastAttemptAt ?? null;
             await this.store.putRendezvous(record);
@@ -1634,11 +1876,19 @@ export class RendezvousClient {
         }
 
         if (!record.announcedAt) continue;
-        if (this.activeTransfers.has(record.id)) continue;
-        if (record.lastAttemptAt && now - record.lastAttemptAt < RETRY_DELAY_MS) continue;
-        if (record.status === 'connecting' || record.status === 'transferring') continue;
 
-        await this.startSender(record);
+        const photo = ownPhoto(record, selfId);
+        if (!photo) continue;
+        for (const peer of presentPeers) {
+          if (hasDeliveredTo(record, peer.id)) continue;
+          const transferId = pairTransferId(record.id, peer.id);
+          if (this.activeTransfers.has(transferId)) continue;
+          const lastAttempt =
+            record.peerAttemptAt?.[peer.id] ??
+            (invitees.length === 1 ? record.lastAttemptAt ?? 0 : 0);
+          if (lastAttempt && now - lastAttempt < RETRY_DELAY_MS) continue;
+          await this.startSender(record, peer, photo);
+        }
       }
     } finally {
       this.processingDue = false;
@@ -1646,56 +1896,66 @@ export class RendezvousClient {
     }
   }
 
-  private async startSender(record: StoredRendezvous): Promise<void> {
-    const human = this.humans.get(record.peerId);
+  private async startSender(
+    record: StoredRendezvous,
+    peer: RecordParticipant,
+    photo: NonNullable<ReturnType<typeof ownPhoto>>,
+  ): Promise<void> {
+    const human = this.humans.get(peer.id);
     const identity = this.identity;
-    if (!human || !identity || !record.photo) return;
+    if (!human || !identity) return;
 
+    const transferId = pairTransferId(record.id, peer.id);
     record.lastAttemptAt = Date.now();
-    record.status = 'connecting';
+    record.peerAttemptAt ??= {};
+    record.peerAttemptAt[peer.id] = Date.now();
     record.error = null;
     record.sessionStartedAt ??= Date.now();
+    record.peerStates ??= {};
+    record.peerStates[peer.id] = { phase: 'connecting', error: null };
+    if (!isMultiPerson(record)) record.status = 'connecting';
     await this.store.putRendezvous(record);
     this.emitState();
 
     const transfer = new SenderTransfer({
-      transferId: record.id,
+      transferId,
       localPeerId: identity.id,
-      remotePeerId: record.peerId,
+      remotePeerId: peer.id,
       localPrivateKey: identity.privateKey,
       remotePublicKey: human.publicKey,
       iceServers: this.iceServers,
-      photo: record.photo.blob,
-      note: record.photo.note,
+      photo: photo.blob,
+      note: photo.note,
       meta: {
-        name: record.photo.name,
-        type: record.photo.type,
-        size: record.photo.size,
-        photoId: record.photo.photoId,
-        note: record.photo.note
+        name: photo.name,
+        type: photo.type,
+        size: photo.size,
+        photoId: photo.photoId,
+        note: photo.note
           ? {
-              name: record.photo.note.name,
-              type: record.photo.note.type,
-              size: record.photo.note.size,
-              durationMs: record.photo.note.durationMs,
+              name: photo.note.name,
+              type: photo.note.type,
+              size: photo.note.size,
+              durationMs: photo.note.durationMs,
             }
           : null,
       },
-      callbacks: this.transferCallbacks(record),
-      sendSignal: (payload) => this.sendRtc(record.peerId, record.id, payload),
+      callbacks: this.transferCallbacks(record, peer.id),
+      sendSignal: (payload) => this.sendRtc(peer.id, transferId, payload),
     });
-    this.activeTransfers.set(record.id, {
+    this.activeTransfers.set(transferId, {
+      appointmentId: record.id,
       direction: 'outgoing',
-      peerId: record.peerId,
+      peerId: peer.id,
       transfer,
     });
     this.emit('transfer', {
       rendezvousId: record.id,
-      peerId: record.peerId,
+      peerId: peer.id,
       direction: 'outgoing',
       phase: 'connecting',
       transferred: 0,
-      total: record.photo.size,
+      total: photo.size,
     } satisfies TransferEvent);
     await transfer.start();
   }
@@ -1818,12 +2078,32 @@ export class RendezvousClient {
       }
     }
 
-    const pendingIds = await this.store.deletePendingRendezvousForHuman(humanId);
-    for (const id of pendingIds) this.rendezvous.delete(id);
+    const selfId = this.identity?.id ?? '';
+    const selfName = this.identity?.name ?? '';
     for (const record of [...this.rendezvous.values()]) {
-      if (record.peerId === humanId && record.status !== 'delivered') {
+      const all = participantsFor(record, selfId, selfName);
+      const includesHuman = all.some((participant) => participant.id === humanId);
+      if (!includesHuman && record.peerId !== humanId) continue;
+      if (record.status === 'delivered') continue;
+      const remaining = all.filter((participant) => participant.id !== humanId);
+      if (remaining.length < 2) {
         this.rendezvous.delete(record.id);
+        await this.store.deleteRendezvous(record.id);
+        continue;
       }
+      record.participants = remaining;
+      if (record.photos) delete record.photos[humanId];
+      record.deliveredTo = (record.deliveredTo ?? []).filter((id) => id !== humanId);
+      if (record.peerStates) delete record.peerStates[humanId];
+      if (record.peerAttemptAt) delete record.peerAttemptAt[humanId];
+      if (!remaining.some((participant) => participant.id === record.peerId)) {
+        const next =
+          remaining.find((participant) => participant.id !== selfId) ?? remaining[0];
+        record.peerId = next?.id ?? '';
+        record.peerName = next?.name ?? '';
+      }
+      record.confirmation = this.confirmationFor(record);
+      await this.store.putRendezvous(record);
     }
     const joins = await this.store.getPendingJoins();
     for (const join of joins) {
@@ -1876,8 +2156,28 @@ export class RendezvousClient {
     if (input.note && !isValidVoiceNote(input.note)) {
       throw new RendezvousClientError('invalid-photo', 'That voice note cannot be attached.');
     }
-    const human = this.humans.get(input.humanId);
-    if (!human) throw new RendezvousClientError('no-human', 'Choose a human first.');
+    const identity = this.requireIdentity();
+    const requestedIds = [
+      ...new Set(
+        input.humanIds && input.humanIds.length > 0
+          ? input.humanIds
+          : input.humanId
+            ? [input.humanId]
+            : [],
+      ),
+    ];
+    if (requestedIds.length === 0 && !input.circleId) {
+      throw new RendezvousClientError('no-human', 'Choose at least one human.');
+    }
+    const invitees = requestedIds.map((id) => {
+      const human = this.humans.get(id);
+      if (!human) throw new RendezvousClientError('no-human', 'Choose a human first.');
+      return { id: human.id, name: human.name };
+    });
+    const participants = [
+      { id: identity.id, name: identity.name },
+      ...invitees,
+    ];
 
     const attachment = await makePhotoAttachment({
       photo,
@@ -1888,14 +2188,21 @@ export class RendezvousClient {
     const record: StoredRendezvous = {
       id: `rv_${randomToken(12)}`,
       direction: 'outgoing',
-      peerId: human.id,
-      peerName: human.name,
+      peerId: invitees[0]?.id ?? '',
+      peerName: invitees[0]?.name ?? '',
+      participants,
+      creatorId: identity.id,
+      circleId: input.circleId ?? null,
+      photos: { [identity.id]: attachment },
+      deliveredTo: [],
+      peerStates: {},
+      keptAt: null,
       createdAt: Date.now(),
       scheduledFor: input.scheduledFor,
       status: 'scheduled',
       confirmation: 'pending',
       confirmedBy: [],
-      proposedBy: this.requireIdentity().id,
+      proposedBy: identity.id,
       revision: 0,
       photo: attachment,
       contribution: null,
@@ -1954,12 +2261,25 @@ export class RendezvousClient {
       createdAt,
       ...(input.liveAudioDisabled ? { liveAudioDisabled: true } : {}),
     };
-    const inviteToken = await createInviteToken(identity, { rendezvous: inviteRendezvous });
+    const inviteToken = await createInviteToken(identity, {
+      rendezvous: inviteRendezvous,
+      ...(input.circleId ? { circleId: input.circleId } : {}),
+    });
     const record: StoredRendezvous = {
       id,
       direction: 'outgoing',
       peerId: '',
       peerName: '',
+      participants: [
+        { id: identity.id, name: identity.name },
+        { id: '', name: '' },
+      ],
+      creatorId: identity.id,
+      circleId: input.circleId ?? null,
+      photos: { [identity.id]: attachment },
+      deliveredTo: [],
+      peerStates: {},
+      keptAt: null,
       createdAt,
       scheduledFor: input.scheduledFor,
       status: 'awaiting-join',
@@ -1986,18 +2306,22 @@ export class RendezvousClient {
   }
 
   /**
-   * Confirm the current proposed time. The rendezvous becomes confirmed only
-   * when both direct participants have confirmed it. This is a label only:
-   * the normal handoff window still applies.
+   * Confirm the current proposed time. Confirmation is a label only; the
+   * normal handoff window still applies.
    */
   async confirmRendezvous(rendezvousId: string): Promise<StoredRendezvous> {
     const identity = this.requireIdentity();
     const record = this.rendezvous.get(rendezvousId);
     if (!record) throw new RendezvousClientError('no-human', 'That rendezvous is not here.');
-    if (record.status === 'delivered' || record.deliveredAt) {
+    if (
+      record.status === 'delivered' ||
+      record.status === 'cancelled' ||
+      record.status === 'missed' ||
+      record.deliveredAt
+    ) {
       throw new RendezvousClientError('invalid-time', 'This rendezvous is already complete.');
     }
-    if (!record.peerId || record.status === 'awaiting-join') {
+    if (record.status === 'awaiting-join') {
       throw new RendezvousClientError('no-human', 'The other human has not joined yet.');
     }
     if (record.confirmedBy.includes(identity.id)) return cloneRecord(record);
@@ -2014,23 +2338,28 @@ export class RendezvousClient {
   }
 
   /**
-   * Cancel the current proposed time on the same rendezvous and propose a new
-   * one. Confirmations reset; both humans must confirm the new time.
+   * Propose another time. The original rendezvous remains active; a new
+   * independent rendezvous is created with its own id, time and confirmations.
    */
   async counterProposeRendezvous(input: {
     rendezvousId: string;
     scheduledFor: number;
   }): Promise<StoredRendezvous> {
     const identity = this.requireIdentity();
-    const record = this.rendezvous.get(input.rendezvousId);
-    if (!record) throw new RendezvousClientError('no-human', 'That rendezvous is not here.');
-    if (record.status === 'delivered' || record.deliveredAt) {
+    const original = this.rendezvous.get(input.rendezvousId);
+    if (!original) throw new RendezvousClientError('no-human', 'That rendezvous is not here.');
+    if (
+      original.status === 'delivered' ||
+      original.status === 'cancelled' ||
+      original.status === 'missed' ||
+      original.deliveredAt
+    ) {
       throw new RendezvousClientError('invalid-time', 'This rendezvous is already complete.');
     }
-    if (!record.peerId || record.status === 'awaiting-join') {
+    if (original.status === 'awaiting-join') {
       throw new RendezvousClientError('no-human', 'The other human has not joined yet.');
     }
-    if (record.sessionStartedAt || this.activeTransfers.has(record.id)) {
+    if (original.sessionStartedAt || this.hasActiveTransfer(original.id)) {
       throw new RendezvousClientError('invalid-time', 'The handoff has begun; the time is locked.');
     }
     if (
@@ -2039,27 +2368,46 @@ export class RendezvousClient {
     ) {
       throw new RendezvousClientError('invalid-time', 'Choose a moment in the near future.');
     }
-    record.scheduledFor = input.scheduledFor;
-    record.proposedBy = identity.id;
-    record.confirmedBy = [];
-    record.confirmation = 'pending';
-    record.revision += 1;
-    record.announcedAt = null;
-    record.lastAttemptAt = null;
-    record.error = null;
-    record.audioWindowUsedAt = null;
-    if (
-      record.status !== 'connecting' &&
-      record.status !== 'transferring'
-    ) {
-      record.status = isHandoffEligible(record.scheduledFor) ? 'waiting' : 'scheduled';
-    }
-    this.openNotified.delete(record.id);
-    this.dueNotified.delete(record.id);
-    this.lateNotified.delete(record.id);
-    this.announceInFlight.delete(record.id);
-    this.announceRetryAt.delete(record.id);
+    const others = otherParticipants(original, identity.id, identity.name);
+    const participants = [
+      { id: identity.id, name: identity.name },
+      ...others.filter((entry) => entry.id !== identity.id),
+    ];
+    const photo = ownPhoto(original, identity.id);
+    const scheduledFor = input.scheduledFor;
+    const record: StoredRendezvous = {
+      id: `rv_${randomToken(12)}`,
+      direction: 'outgoing',
+      peerId: participants[1]?.id ?? '',
+      peerName: participants[1]?.name ?? '',
+      participants,
+      creatorId: identity.id,
+      circleId: original.circleId ?? null,
+      photos: photo ? { [identity.id]: photo } : {},
+      deliveredTo: [],
+      peerStates: {},
+      keptAt: null,
+      createdAt: Date.now(),
+      scheduledFor,
+      status: isHandoffEligible(scheduledFor) ? 'waiting' : 'scheduled',
+      confirmation: 'pending',
+      confirmedBy: [],
+      proposedBy: identity.id,
+      revision: 0,
+      photo,
+      contribution: null,
+      reciprocal: null,
+      sessionStartedAt: null,
+      audioWindowUsedAt: null,
+      liveAudioDisabled: original.liveAudioDisabled,
+      inviteToken: null,
+      announcedAt: null,
+      lastAttemptAt: null,
+      deliveredAt: null,
+      error: null,
+    };
     await this.store.putRendezvous(record);
+    this.rendezvous.set(record.id, record);
     this.emitState();
     this.announce(record);
     return cloneRecord(record);
@@ -2078,7 +2426,7 @@ export class RendezvousClient {
     if (record.status === 'delivered' || record.deliveredAt) {
       throw new RendezvousClientError('invalid-photo', 'This rendezvous is already complete.');
     }
-    if (record.sessionStartedAt || this.activeTransfers.has(record.id)) {
+    if (record.sessionStartedAt || this.hasActiveTransfer(record.id)) {
       throw new RendezvousClientError('invalid-photo', 'The handoff has begun; contributions are locked.');
     }
     const photo = input.photo;
@@ -2094,12 +2442,13 @@ export class RendezvousClient {
     if (input.note && !isValidVoiceNote(input.note)) {
       throw new RendezvousClientError('invalid-photo', 'That voice note cannot be attached.');
     }
-    record.contribution = await makePhotoAttachment({
+    const attachment = await makePhotoAttachment({
       photo,
       fileName: input.fileName,
       photoId: input.photoId,
       note: input.note,
     });
+    setOwnPhoto(record, this.requireIdentity().id, attachment);
     await this.store.putRendezvous(record);
     this.emitState();
     return cloneRecord(record);
@@ -2108,10 +2457,10 @@ export class RendezvousClient {
   async removeContribution(rendezvousId: string): Promise<void> {
     const record = this.rendezvous.get(rendezvousId);
     if (!record || record.direction !== 'incoming') return;
-    if (record.sessionStartedAt || this.activeTransfers.has(record.id)) {
+    if (record.sessionStartedAt || this.hasActiveTransfer(record.id)) {
       throw new RendezvousClientError('invalid-photo', 'The handoff has begun; contributions are locked.');
     }
-    record.contribution = null;
+    setOwnPhoto(record, this.requireIdentity().id, null);
     await this.store.putRendezvous(record);
     this.emitState();
   }
@@ -2142,10 +2491,10 @@ export class RendezvousClient {
   }
 
   async deleteRendezvous(id: string): Promise<void> {
-    const active = this.activeTransfers.get(id);
-    if (active) {
+    for (const [key, active] of [...this.activeTransfers.entries()]) {
+      if (active.appointmentId !== id) continue;
       active.transfer.close();
-      this.activeTransfers.delete(id);
+      this.activeTransfers.delete(key);
     }
     if (this.audio.rendezvousId === id) {
       this.closeAudio('The rendezvous was deleted. The audio window ended.');

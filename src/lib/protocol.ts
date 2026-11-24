@@ -11,6 +11,12 @@ export interface InviteRendezvous {
   scheduledFor: number;
   createdAt: number;
   liveAudioDisabled?: boolean;
+  /** The creator's public identity, so a link can carry a multi-person list. */
+  creatorId?: string;
+  creatorName?: string;
+  /** Every invited participant, including the creator. */
+  participants?: Array<{ id: string; name: string }>;
+  circleId?: string;
 }
 
 /**
@@ -123,6 +129,14 @@ export interface RendezvousWire {
   scheduledFor: number;
   createdAt: number;
   liveAudioDisabled?: boolean;
+  /** The creator of the rendezvous; updates may come from any participant. */
+  creatorId?: string;
+  /** Every invited participant, including the creator. */
+  participants?: Array<{ id: string; name: string }>;
+  /** Every invitee named by the creator, including this recipient. */
+  recipientIds?: string[];
+  /** Set when this rendezvous was posted to a circle channel. */
+  circleId?: string;
   /** Who proposed the current time. */
   proposedBy?: string;
   /** Humans that confirmed the current time. */
@@ -259,6 +273,10 @@ export interface RendezvousNotice {
   scheduledFor: number;
   createdAt: number;
   liveAudioDisabled?: boolean;
+  creatorId?: string;
+  participants?: Array<{ id: string; name: string }>;
+  recipientIds?: string[];
+  circleId?: string;
   proposedBy?: string;
   confirmedBy?: string[];
   revision?: number;

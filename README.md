@@ -59,9 +59,10 @@ The app has a small, round **`+ circle`** button at the lower left of the window
 - create a named circle with a browser-detected IANA timezone;
 - see “Your circles” ranked by the six local ratios;
 - open a circle page showing monthly kept, weekly participation, season pairs, daily run, the weekly prompt and all-time progress;
+- set a circle rendezvous through the normal three-stage composer, so every current non-banned direct-human member receives the same appointment;
 - see members who are not yet direct humans.
 
-Circle creation, independent offers with per-offer joins, an optional signed gathering window, local statistics, auto-accepted invitations, and circle sync are wired through the existing authenticated signalling server as opaque metadata relay. The server does not store or verify circle records. Membership and sync delivery is online-only; a valid circle offer invite is the one circle notice that waits for an offline member, and only until its offered time. The signed circle API and UI are in `src/circles/`; see [`src/circles/README.md`](src/circles/README.md).
+Circle creation, circle-channel rendezvous, local statistics, auto-accepted invitations, and circle sync are wired through the existing authenticated signalling server as opaque metadata relay. A circle rendezvous is a normal multi-person rendezvous: the circle resolves the invitees, and every current non-banned member with a direct human link receives the same appointment. The server stores only the ordinary per-recipient appointment notices, never circle membership or record history. Members without a direct human link are shown as not yet direct and receive the rendezvous after linking. The earlier independent-offer/PlanJoin surface is superseded; the optional gathering window is deferred. The signed circle API and UI are in `src/circles/`; see [`src/circles/README.md`](src/circles/README.md).
 
 ## Try it on your phone
 
