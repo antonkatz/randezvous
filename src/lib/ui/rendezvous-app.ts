@@ -1942,7 +1942,9 @@ export class RendezvousApp extends HTMLElement {
     lede.textContent = awaitingJoin
       ? 'Share their link. Opening it gives them this rendezvous immediately and connects your browsers.'
       : phase === 'scheduled'
-        ? 'The handoff opens five minutes early. Both browsers need to be here.'
+        ? next.confirmation === 'confirmed'
+          ? 'Confirmed. The handoff opens five minutes early. Both browsers need to be here.'
+          : 'Pending. Confirm or propose another time. The handoff still opens five minutes early.'
         : phase === 'open-early' || phase === 'due'
           ? 'The handoff is open. Both browsers connect automatically when they are here.'
           : 'The handoff stays open. The photograph moves at your next overlap.';

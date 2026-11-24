@@ -458,13 +458,13 @@ A circle is a named, private group of linked humans. Membership and each offered
 
 **Implementation status:** `src/circles` implements the signed record set, membership chain, addressed invitations, independent offers and per-offer joins, optional signed time windows, stats, auto-accept, the expiring store-and-forward circle offer invite, and an online relay-backed invitation/sync path between connected mutual humans. The reference app uses the existing authenticated signalling server as an opaque relay while both humans are online; the server stores no circle record history and never verifies, alters, or chooses records. Offline membership and attendance sync waits for the next online overlap; only the circle offer invite is stored for an offline member, until its scheduled time.
 
-#### CIR-1 — Circle rendezvous are independent offers
+#### CIR-1 — Circle offers are independent
 
 As a circle member, I want to offer a moment without forcing the whole group into one canonical meeting, so that the people who can come at that time can meet.
 
 **Acceptance criteria**
 - Any current member may create a signed circle offer for a scheduled moment; there is no owner or admin privilege.
-- Every valid signed offer is retained and visible as its own offer. There is no canonical winner per local day and no rule that a later offer replaces an earlier one.
+- Every valid signed offer is retained in the record set; upcoming offers are visible as independent offers. There is no canonical winner per local day and no rule that a later offer replaces an earlier one.
 - Several offers may exist for the same circle and local day, at different times. They may run independently and are not alternatives that must collapse into one choice.
 - The offer record carries only circle ID, rendezvous ID, organizer, invitees, scheduled timestamp, signed creation timestamp, and signature. It never carries photo or voice bytes.
 - An offer is metadata. Actual meetings remain direct pairwise handoffs under the normal online and five-minute-window rules. Each member decides whether to join or attend an offer.
@@ -722,6 +722,16 @@ Acceptance:
 - Hover/focus causes a restrained fill or orbit movement; nothing bounces or loops distractingly.
 - The action remains obviously tappable on mobile.
 - The surrounding hero copy explains the meeting condition in one sentence.
+
+### VDS-5b — Pending confirmation and another time
+As a direct participant, I can see whether the time is agreed and can confirm it or propose another.
+
+Acceptance:
+- The upcoming row shows **pending** or **confirmed by both** in a quiet mono label. Pending is an accent, not an alarm.
+- The rendezvous detail offers **confirm time** while my confirmation is missing and **propose another time** until the handoff begins.
+- **propose another time** opens a small modal with the current moment and person named, a single local date-time field, and a clear note that the previous time is cancelled and both confirmations reset.
+- Proposing a time updates the same rendezvous, keeps the attached photo and voice note, and returns the label to pending on both sides.
+- The pending label never hides the countdown, the live action, or the handoff state. It is not a blocking consent gate.
 
 ### VDS-6 — Photo and human step
 As a sender, choosing the content feels personal.
@@ -1015,7 +1025,7 @@ If one of the first four lines is missing, the relationship is not ready for del
    If the person is "someone new", the same metadata is bound into the signed invitation link instead.
 6. Linked human: server stores the notice until the recipient acknowledges, or delivers it immediately if they are online.
    Someone new: opening the signed link stores the same appointment immediately in the invitee's browser.
-7. The rendezvous starts with confirmation **pending** for both humans. Each side can **confirm** or **propose another time** in the upcoming row or the rendezvous detail.
+7. The rendezvous starts with confirmation **pending** for both humans. Each side can **confirm** or **propose another time** from the rendezvous detail; the upcoming row shows the pending/confirmed label.
 8. A counter-proposal cancels the previous time on the same rendezvous, keeps the photo and contribution, and is sent through the server as appointment metadata. The other human is notified and can confirm or counter again.
 9. The label becomes **confirmed** only after both humans confirm the current time. Pending is a label only; the normal handoff window and photo transfer are unchanged.
 10. Confirmation: DONE. Both cases repeat: "Both browsers need to be open at the same time. The handoff opens five minutes early, and lateness does not cancel it."
@@ -1536,10 +1546,10 @@ This feature is a deliberate exception to the otherwise photo-only surface. It m
 - If both browsers are online anywhere inside the window, they connect automatically and exchange the photo(s). Both peers being online beforehand is enough: the connection starts when the window opens at `T − 5`, not at `T`.
 - Both early and late presence count. Both online at `T − 4`, at `T`, or at `T + 4` all exchange automatically; five minutes late is still on time. The UI may use “early”, “due”, and “still open” labels but does not block transfer at either boundary.
 - The scheduled time is the centre of the meeting window, not a start gate. A pair that is already online may complete the handoff before `T`.
-- After `T + 5`, an uncompleted appointment remains pending indefinitely. If both humans become online later, the handoff runs at the next presence/timer evaluation. Lateness never discards, expires, or auto-cancels the photograph.
+- After `T + 5`, an uncompleted appointment remains open indefinitely. If both humans become online later, the handoff runs at the next presence/timer evaluation. Lateness never discards, expires, or auto-cancels the photograph.
 - An online recipient sees a local “handoff is open” alert at `T − 5`. The remote server notice may have arrived earlier.
 - Timing is computed locally from the stored timestamp. No extra server timer is required; clock-skew affects labels, not the existence or eventual delivery of the appointment.
-- If both peers are already online before `T − 5`, the creator's timer initiates automatically when the window opens. No second confirmation is required.
+- If both peers are already online before `T − 5`, the creator's timer initiates automatically when the window opens. The pending/confirmed label does not gate this timer.
 - This timing rule applies only to private photo handoffs; the optional one-minute live voice window has its own duration rules.
 
 ### Photo voice notes

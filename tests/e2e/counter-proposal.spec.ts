@@ -73,6 +73,10 @@ test('both humans confirm, then either can counter-propose without losing the ph
     .toBe('pending');
   await expect(baz.locator('.next-card-confirmation')).toContainText('pending');
   expect((await recordFor(baz, created.id))?.photo).toBeNull();
+  await baz.locator('.next-card').first().click();
+  await expect(baz.locator('#rv-detail-confirmation')).toContainText('pending');
+  await expect(baz.locator('#rv-detail-confirm')).toBeVisible();
+  await baz.locator('#rv-detail-close').click();
 
   await baz.evaluate(async (id) => {
     const app = document.querySelector('rendezvous-app') as unknown as {

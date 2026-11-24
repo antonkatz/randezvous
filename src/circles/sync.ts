@@ -96,7 +96,7 @@ export function canSendRecord(input: RecordPolicyInput): boolean {
 
   // A circle plan belongs to the circle itself, not only to the people named
   // as invitees when it was signed. Members who joined later still need the
-  // canonical history, so plans flow between direct members of that circle.
+  // offer history, so plans flow between direct members of that circle.
   if (record.type === 'Plan') {
     return direct && record.circleId === circleId;
   }

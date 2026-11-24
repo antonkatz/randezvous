@@ -1162,7 +1162,9 @@ export class RendezvousClient {
         this.transport?.send({ type: 'rendezvous:ack', id: notice.id });
         return;
       }
-      timeChanged = notice.scheduledFor !== record.scheduledFor;
+      timeChanged =
+        notice.scheduledFor !== record.scheduledFor ||
+        Boolean(notice.proposedBy && notice.proposedBy !== record.proposedBy);
       if (timeChanged) {
         record.scheduledFor = notice.scheduledFor;
         record.proposedBy = notice.proposedBy ?? notice.fromId;
