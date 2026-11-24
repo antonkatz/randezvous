@@ -75,6 +75,16 @@ export interface PlanRecord {
   sig: string;
 }
 
+/** One member choosing to join a circle rendezvous offer. */
+export interface PlanJoinRecord {
+  type: 'PlanJoin';
+  circleId: CircleId;
+  planId: string;
+  member: PublicKeyId;
+  at: number;
+  sig: string;
+}
+
 /** An optional inclusive scheduling window for a circle. */
 export interface WindowRecord {
   type: 'Window';
@@ -115,6 +125,7 @@ export type CircleRecord =
   | LeaveRecord
   | BanVoteRecord
   | PlanRecord
+  | PlanJoinRecord
   | WindowRecord
   | WindowClearRecord
   | AttendanceRecord;
@@ -141,6 +152,7 @@ export function isCircleScopedRecord(
   | LeaveRecord
   | BanVoteRecord
   | PlanRecord
+  | PlanJoinRecord
   | WindowRecord
   | WindowClearRecord {
   return (
@@ -150,6 +162,7 @@ export function isCircleScopedRecord(
     record.type === 'Leave' ||
     record.type === 'BanVote' ||
     record.type === 'Plan' ||
+    record.type === 'PlanJoin' ||
     record.type === 'Window' ||
     record.type === 'WindowClear'
   );
@@ -174,6 +187,8 @@ export function recordAuthor(record: CircleRecord): PublicKeyId {
       return record.voter;
     case 'Plan':
       return record.organizer;
+    case 'PlanJoin':
+      return record.member;
     case 'Window':
     case 'WindowClear':
       return record.author;
@@ -194,6 +209,8 @@ export function recordTimestamp(record: CircleRecord): number {
       return record.at;
     case 'Plan':
       return record.createdAt;
+    case 'PlanJoin':
+      return record.at;
     case 'Window':
     case 'WindowClear':
       return record.createdAt;

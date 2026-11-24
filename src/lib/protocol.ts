@@ -96,6 +96,14 @@ export interface RendezvousWire {
   scheduledFor: number;
   createdAt: number;
   liveAudioDisabled?: boolean;
+  /** Who proposed the current time. */
+  proposedBy?: string;
+  /** Humans that confirmed the current time. */
+  confirmedBy?: string[];
+  /** Monotonic revision; each counter-proposal increments it. */
+  revision?: number;
+  /** Server-only routing hint: which participant still needs this notice. */
+  noticeTo?: string;
 }
 
 export interface SignalRendezvousCreate {
@@ -103,8 +111,19 @@ export interface SignalRendezvousCreate {
   rendezvous: RendezvousWire;
 }
 
+export interface SignalRendezvousUpdate {
+  type: 'rendezvous:update';
+  action: 'counter' | 'confirm';
+  rendezvous: RendezvousWire;
+}
+
 export interface SignalRendezvousAck {
   type: 'rendezvous:ack';
+  id: string;
+}
+
+export interface SignalRendezvousUpdated {
+  type: 'rendezvous:updated';
   id: string;
 }
 
@@ -192,6 +211,7 @@ export type ClientSignalMessage =
   | SignalContactRemoveAck
   | SignalInviteReject
   | SignalRendezvousCreate
+  | SignalRendezvousUpdate
   | SignalRendezvousAck
   | SignalRtc
   | SignalCircleRelay
@@ -212,6 +232,9 @@ export interface RendezvousNotice {
   scheduledFor: number;
   createdAt: number;
   liveAudioDisabled?: boolean;
+  proposedBy?: string;
+  confirmedBy?: string[];
+  revision?: number;
 }
 
 export interface SignalChallenge {
@@ -302,6 +325,7 @@ export type ServerSignalMessage =
   | SignalContactRemoveQueued
   | SignalContactRemoved
   | SignalRendezvousCreated
+  | SignalRendezvousUpdated
   | SignalRendezvousNotice
   | SignalRtcRelay
   | SignalCircleRelayed

@@ -8,6 +8,7 @@ import type {
   InviteRecord,
   JoinRecord,
   LeaveRecord,
+  PlanJoinRecord,
   PlanRecord,
   StoredCircleRecord,
   UnsignedCircleRecord,
@@ -29,6 +30,7 @@ const ALLOWED_KEYS: Record<CircleRecordType, readonly string[]> = {
   Leave: ['type', 'circleId', 'member', 'at', 'sig'],
   BanVote: ['type', 'circleId', 'voter', 'target', 'vote', 'at', 'sig'],
   Plan: ['type', 'circleId', 'rendezvousId', 'scheduledAt', 'organizer', 'invitees', 'createdAt', 'sig'],
+  PlanJoin: ['type', 'circleId', 'planId', 'member', 'at', 'sig'],
   Window: ['type', 'circleId', 'start', 'end', 'author', 'createdAt', 'sig'],
   WindowClear: ['type', 'circleId', 'author', 'createdAt', 'sig'],
   Attendance: [
@@ -50,6 +52,7 @@ const RECORD_TYPES = new Set<CircleRecordType>([
   'Leave',
   'BanVote',
   'Plan',
+  'PlanJoin',
   'Window',
   'WindowClear',
   'Attendance',
@@ -255,6 +258,14 @@ export function recordProblem(record: unknown, requireSignature = true): string 
       if (!isNonEmptyId(value.organizer)) return 'organizer must be a public-key id';
       if (!isTimestamp(value.createdAt)) return 'createdAt must be a UTC timestamp';
       return stringListProblem(value.invitees, 'invitees');
+    }
+    case 'PlanJoin': {
+      const value = record as unknown as Partial<PlanJoinRecord>;
+      if (!isNonEmptyId(value.circleId)) return 'circleId must be a non-empty id';
+      if (!isNonEmptyId(value.planId)) return 'planId must be a non-empty id';
+      if (!isNonEmptyId(value.member)) return 'member must be a public-key id';
+      if (!isTimestamp(value.at)) return 'at must be a UTC timestamp';
+      return null;
     }
     case 'Window': {
       const value = record as unknown as Partial<WindowRecord>;

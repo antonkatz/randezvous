@@ -225,6 +225,15 @@ export class SignalStore {
     }
   }
 
+  upsertRendezvous(rendezvous: RendezvousWire): void {
+    const index = this.data.rendezvous.findIndex((entry) => entry.id === rendezvous.id);
+    if (index >= 0) {
+      this.data.rendezvous[index] = rendezvous;
+    } else {
+      this.data.rendezvous.push(rendezvous);
+    }
+  }
+
   removeRendezvous(id: string): void {
     this.data.rendezvous = this.data.rendezvous.filter((entry) => entry.id !== id);
   }
@@ -313,7 +322,14 @@ function isRendezvousWire(value: unknown): value is RendezvousWire {
     typeof value.scheduledFor === 'number' &&
     typeof value.createdAt === 'number' &&
     (value.liveAudioDisabled === undefined ||
-      typeof value.liveAudioDisabled === 'boolean')
+      typeof value.liveAudioDisabled === 'boolean') &&
+    (value.proposedBy === undefined || typeof value.proposedBy === 'string') &&
+    (value.confirmedBy === undefined ||
+      (Array.isArray(value.confirmedBy) &&
+        value.confirmedBy.every((id) => typeof id === 'string'))) &&
+    (value.revision === undefined ||
+      (typeof value.revision === 'number' && Number.isSafeInteger(value.revision))) &&
+    (value.noticeTo === undefined || typeof value.noticeTo === 'string')
   );
 }
 

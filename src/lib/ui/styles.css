@@ -1166,6 +1166,20 @@ button:disabled {
   white-space: nowrap;
 }
 
+.next-card-confirmation {
+  overflow: hidden;
+  color: #9d3c23;
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.next-card-confirmation[data-confirmed='true'] {
+  color: #47613f;
+}
+
 .next-card-arrow {
   color: var(--muted);
   font-size: 12px;
@@ -2392,12 +2406,18 @@ dialog.modal::backdrop {
 }
 
 .rv-detail-window,
+.rv-detail-confirmation,
 .rv-detail-state {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 8px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+.rv-detail-confirmation {
+  flex-basis: 100%;
+  color: #9d3c23;
 }
 
 .rv-detail-state {
@@ -3633,7 +3653,7 @@ circle-dashboard {
   color: var(--accent, #342686);
 }
 
-/* ─── Next-row actions ──────────────────────────────────── */
+/* ─── Next row ──────────────────────────────────────────── */
 
 .next-row {
   display: flex;
@@ -3644,30 +3664,6 @@ circle-dashboard {
 
 .next-row .next-card {
   flex: 1 1 240px;
-}
-
-.next-action {
-  align-self: stretch;
-  padding: 0 14px;
-  border: 1px solid var(--line-strong, rgba(21, 19, 16, 0.32));
-  border-radius: 999px;
-  background: var(--paper-bright, #faf6ed);
-  color: inherit;
-  font: inherit;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-
-.next-action:hover {
-  background: rgba(21, 19, 16, 0.06);
-}
-
-.next-action.live-action {
-  border-color: var(--ink, #151310);
-  background: var(--ink, #151310);
-  color: var(--paper-bright, #faf6ed);
 }
 
 .next-card-contribution {

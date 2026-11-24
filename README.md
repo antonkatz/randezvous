@@ -11,7 +11,7 @@ This repository contains the reference app, the reusable package, and a small st
 - **Circles:** [`src/circles/README.md`](src/circles/README.md) — client-side group membership, signed invitations, sync, and the six circle-stats ratios.
 - **UI:** encapsulated `<rendezvous-app>` custom element with a live hero countdown, a cumulative ranked photo wall, reciprocal photo contributions, optional photo voice notes, local re-sharing, a live rendezvous screen, one-minute live voice, a per-photo possession inventory, and a short confetti celebration when a photo completes its handoff.
 - **Client:** headless `RendezvousClient` with snapshots and typed events.
-- **Server:** WebSocket bootstrap for authenticated presence, appointment notices, opaque circle metadata relay, expiring circle rendezvous invites, signed possession/consent notices, invite relay, revocation, and WebRTC signalling. It never stores photo or voice-note bytes.
+- **Server:** WebSocket bootstrap for authenticated presence, appointment notices, opaque circle metadata relay, expiring circle offer invites, signed possession/consent notices, invite relay, revocation, and WebRTC signalling. It never stores photo or voice-note bytes.
 
 ## Run locally
 
@@ -59,7 +59,7 @@ The app has a small, round **`+ circle`** button at the lower left of the window
 - open a circle page showing monthly kept, weekly participation, season pairs, daily run, the weekly prompt and all-time progress;
 - see members who are not yet direct humans.
 
-Circle creation, canonical daily plans, an optional signed gathering window, local statistics, auto-accepted invitations, and circle sync are wired through the existing authenticated signalling server as opaque metadata relay. The server does not store or verify circle records. Membership and sync delivery is online-only; a valid circle rendezvous invite is the one circle notice that waits for an offline member, and only until its scheduled time. The signed circle API and UI are in `src/circles/`; see [`src/circles/README.md`](src/circles/README.md).
+Circle creation, independent offers with per-offer joins, an optional signed gathering window, local statistics, auto-accepted invitations, and circle sync are wired through the existing authenticated signalling server as opaque metadata relay. The server does not store or verify circle records. Membership and sync delivery is online-only; a valid circle offer invite is the one circle notice that waits for an offline member, and only until its offered time. The signed circle API and UI are in `src/circles/`; see [`src/circles/README.md`](src/circles/README.md).
 
 ## Try it on your phone
 

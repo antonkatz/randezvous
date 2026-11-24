@@ -9,7 +9,7 @@ import {
 import { CircleStatsList, defineCircleStatsList } from './circle-stats-list';
 import type { CircleInviteBundle } from '../invitations';
 import type { RankedCircle } from '../leaderboard';
-import type { CircleDayPlans } from '../plans';
+import type { CircleDayPlans, CircleOffer } from '../plans';
 import type { CircleStats, MemberView } from '../types';
 
 type Panel = 'list' | 'create' | 'circle';
@@ -32,6 +32,7 @@ export class CircleDashboard extends HTMLElement {
   private stateInviteCandidates: readonly InviteCandidate[] = [];
   private statePendingInvite: CircleInviteBundle | null = null;
   private statePlans: readonly CircleDayPlans[] = [];
+  private stateOffers: readonly CircleOffer[] = [];
   private stateWindow: { start: number; end: number } | null = null;
   private stateBusy = false;
   private stateError = '';
@@ -103,6 +104,15 @@ export class CircleDashboard extends HTMLElement {
 
   get plans(): readonly CircleDayPlans[] {
     return this.statePlans;
+  }
+
+  set offers(value: readonly CircleOffer[]) {
+    this.stateOffers = value;
+    this.render();
+  }
+
+  get offers(): readonly CircleOffer[] {
+    return this.stateOffers;
   }
 
   set window(value: { start: number; end: number } | null) {
@@ -255,6 +265,7 @@ export class CircleDashboard extends HTMLElement {
       page.view = this.stateView;
       page.inviteCandidates = this.stateInviteCandidates;
       page.plans = this.statePlans;
+      page.offers = this.stateOffers;
       page.window = this.stateWindow;
       body.append(page);
       return;

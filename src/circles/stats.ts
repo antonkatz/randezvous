@@ -1,6 +1,5 @@
 import { compareStrings } from './canonical';
 import { collectKeptPairs, pairKey, type KeptRendezvous } from './rendezvous';
-import { nonCanonicalPlanIds } from './plans';
 import { activePrompts } from './prompts';
 import {
   dayKey,
@@ -116,19 +115,9 @@ export function computeCircleStats(
     return true;
   });
 
-  // Extra signed plans for a day are history, not extra rendezvous. Attendance
-  // tied to a non-canonical plan never contributes to any stat.
-  const ignoredPlanIds = nonCanonicalPlanIds(
-    usable,
-    view.circleId,
-    view.timezone,
-    memberSet,
-  );
-  const countable = usable.filter(
-    (entry) =>
-      entry.record.type !== 'Attendance' ||
-      !ignoredPlanIds.has(entry.record.rendezvousId),
-  );
+  // Every offer is independent. Attendance counts for any kept pair; it does
+  // not depend on a canonical plan for the day.
+  const countable = usable;
 
   let asOf: number | null = null;
   for (const entry of usable) {

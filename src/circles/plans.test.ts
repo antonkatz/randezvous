@@ -3,11 +3,12 @@ import { mergeRecords } from './merge';
 import { deriveMemberView } from './membership';
 import {
   activeWindowRecord,
-  canonicalPlans,
+  circleOffers,
   clearCircleWindow,
   createAttendanceRecord,
   createCirclePlan,
   createCircleWindow,
+  createPlanJoin,
   planOutsideWindow,
 } from './plans';
 import { computeCircleStats } from './stats';
@@ -60,7 +61,7 @@ function localMoment(
 }
 
 describe('circle plans and gathering windows', () => {
-  it('signs circle-scoped plans and selects one plan per local day', async () => {
+  it('keeps independent offers and lets a member join any of them', async () => {
     const { ana, baz, records } = await membership();
     const first = await createCirclePlan({
       identity: ana,
@@ -78,14 +79,31 @@ describe('circle plans and gathering windows', () => {
       createdAt: 11_000,
       records: [...records, first.plan],
     });
-    const plans = canonicalPlans(
-      [...records, later.plan, first.plan],
+    const offers = circleOffers(
+      [...records, first.plan, later.plan],
       circleId,
-      timezone,
+      localMoment(2026, 11, 24, 20),
     );
-    expect(plans).toHaveLength(1);
-    expect(plans[0]?.canonical.id).toBe(first.plan.id);
-    expect(plans[0]?.plans).toHaveLength(2);
+    expect(offers).toHaveLength(2);
+    expect(offers[0]?.plan.id).toBe(first.plan.id);
+    expect(offers[1]?.plan.id).toBe(later.plan.id);
+    expect(offers[0]?.confirmed).toBe(false);
+
+    const join = await createPlanJoin({
+      identity: baz,
+      circleId,
+      planId: first.plan.id,
+      at: 12_000,
+    });
+    const joined = circleOffers(
+      [...records, first.plan, later.plan, join],
+      circleId,
+      localMoment(2026, 11, 24, 20),
+    );
+    expect(joined[0]?.confirmed).toBe(true);
+    expect([...(joined[0]?.participants ?? [])].sort()).toEqual(
+      [ana.selfKey, baz.selfKey].sort(),
+    );
     expect(first.plan.record.type).toBe('Plan');
     if (first.plan.record.type === 'Plan') {
       expect(first.plan.record.circleId).toBe(circleId);
@@ -93,7 +111,7 @@ describe('circle plans and gathering windows', () => {
     }
   });
 
-  it('counts a canonical plan once and ignores attendance on a later plan', async () => {
+  it('counts attendance on every independent offer', async () => {
     const { ana, baz, records, view } = await membership();
     const first = await createCirclePlan({
       identity: ana,
@@ -150,8 +168,8 @@ describe('circle plans and gathering windows', () => {
       localMoment(2026, 11, 25, 9),
       { circleId },
     );
-    expect(stats.allTime.value).toBe(1);
-    expect(stats.monthlyKept.value).toBe(1);
+    expect(stats.allTime.value).toBe(2);
+    expect(stats.monthlyKept.value).toBe(2);
   });
 
   it('rejects plans outside the window active at their signed creation time', async () => {

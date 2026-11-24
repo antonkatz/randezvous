@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  bytesToBase64Url,
   derivePeerId,
   deriveVerificationWords,
   hashToken,
   normalizeName,
   base64UrlToBytes,
+  randomToken,
+  signDomain,
+  utf8,
 } from '../src/lib/crypto';
 import {
   createInviteToken,
@@ -88,6 +92,56 @@ describe('signed invitations and joins', () => {
     });
     const invite = await verifyInviteToken(token);
     expect(invite.rendezvous?.liveAudioDisabled).toBe(true);
+  });
+
+  it('uses a compact self-contained token and round-trips the appointment', async () => {
+    const ana = await makeIdentity('Ana');
+    const scheduledFor = Date.now() + 60_000;
+    const createdAt = Date.now();
+    const plain = await createInviteToken(ana);
+    const token = await createInviteToken(ana, {
+      id: 'rv_compact123456789',
+      scheduledFor,
+      createdAt,
+    });
+    const invite = await verifyInviteToken(token);
+
+    expect(token.startsWith('v2.')).toBe(true);
+    expect(plain.length).toBeLessThan(token.length);
+    expect(token.length).toBeLessThan(260);
+    expect(invite.id).toBe(ana.id);
+    expect(invite.name).toBe('Ana');
+    expect(invite.publicKey).toBe(ana.publicKey);
+    expect(invite.nonce.length).toBeGreaterThanOrEqual(8);
+    expect(invite.rendezvous).toEqual({
+      id: 'rv_compact123456789',
+      scheduledFor,
+      createdAt,
+    });
+  });
+
+  it('still verifies legacy v1 invitation links', async () => {
+    const ana = await makeIdentity('Ana');
+    const payload = {
+      v: 1,
+      id: ana.id,
+      name: ana.name,
+      publicKey: ana.publicKey,
+      issuedAt: Date.now(),
+      nonce: randomToken(12),
+      rendezvous: {
+        id: 'rv_legacy123456789',
+        scheduledFor: Date.now() + 60_000,
+        createdAt: Date.now(),
+      },
+    };
+    const bytes = utf8(JSON.stringify(payload));
+    const signature = await signDomain(ana.privateKey, 'rendezvous/invite/v1', bytes);
+    const token = `v1.${bytesToBase64Url(bytes)}.${signature}`;
+    const invite = await verifyInviteToken(token);
+    expect(invite.id).toBe(ana.id);
+    expect(invite.publicKey).toBe(ana.publicKey);
+    expect(invite.rendezvous?.id).toBe('rv_legacy123456789');
   });
 
   it('creates and verifies a join request against the pinned inviter', async () => {

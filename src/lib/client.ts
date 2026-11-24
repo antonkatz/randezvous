@@ -110,11 +110,22 @@ interface PendingAudioRequest {
 }
 
 function cloneRecord(record: StoredRendezvous): StoredRendezvous {
-  return { ...record };
+  return { ...record, confirmedBy: [...record.confirmedBy] };
 }
 
 function isDelivered(record: StoredRendezvous): boolean {
   return record.status === 'delivered';
+}
+
+function formatNoticeMoment(value: number): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(value);
+  } catch {
+    return new Date(value).toISOString();
+  }
 }
 
 function sortRendezvous(records: Iterable<StoredRendezvous>): StoredRendezvous[] {
@@ -491,6 +502,11 @@ export class RendezvousClient {
       record.audioWindowUsedAt ??= null;
       record.liveAudioDisabled ??= false;
       record.inviteToken ??= null;
+      record.confirmedBy ??= [this.identity?.id ?? '', record.peerId].filter(Boolean);
+      record.proposedBy ??=
+        record.direction === 'outgoing' ? (this.identity?.id ?? '') : record.peerId;
+      record.revision ??= 0;
+      record.confirmation = this.confirmationFor(record);
       if (record.photo && !record.photo.photoId) {
         record.photo = await makePhotoAttachment({
           photo: record.photo.blob,
@@ -517,6 +533,17 @@ export class RendezvousClient {
       this.rendezvous.set(record.id, record);
       await this.migrateDeliveredPrint(record);
     }
+  }
+
+  /** Both direct participants must confirm the current proposed time. */
+  private confirmationFor(record: StoredRendezvous): 'pending' | 'confirmed' {
+    const participants = new Set(
+      [this.identity?.id ?? '', record.peerId].filter(Boolean),
+    );
+    if (participants.size < 2) return 'pending';
+    return [...participants].every((id) => record.confirmedBy.includes(id))
+      ? 'confirmed'
+      : 'pending';
   }
 
   /** Convert pre-print databases into independent wall prints once. */
@@ -627,6 +654,10 @@ export class RendezvousClient {
         : existing.status === 'delivered'
           ? 'delivered'
           : 'scheduled';
+      existing.confirmedBy ??= [];
+      existing.proposedBy ??= invite.id;
+      existing.revision ??= 0;
+      existing.confirmation = this.confirmationFor(existing);
       await this.store.putRendezvous(existing);
       return;
     }
@@ -638,6 +669,10 @@ export class RendezvousClient {
       createdAt: pending.createdAt,
       scheduledFor: pending.scheduledFor,
       status: isHandoffEligible(pending.scheduledFor) ? 'waiting' : 'scheduled',
+      confirmation: 'pending',
+      confirmedBy: [],
+      proposedBy: invite.id,
+      revision: 0,
       photo: null,
       contribution: null,
       reciprocal: null,
@@ -737,12 +772,12 @@ export class RendezvousClient {
     }
     for (const record of this.rendezvous.values()) {
       if (
-        record.direction === 'outgoing' &&
         Boolean(record.peerId) &&
         record.status !== 'awaiting-join' &&
         !record.deliveredAt &&
         !record.announcedAt &&
         !this.announceInFlight.has(record.id) &&
+        (record.direction === 'outgoing' || record.revision > 0) &&
         (this.announceRetryAt.get(record.id) ?? 0) <= Date.now()
       ) {
         this.announce(record);
@@ -753,16 +788,30 @@ export class RendezvousClient {
   private announce(record: StoredRendezvous): void {
     const transport = this.transport;
     if (!transport?.isOnline) return;
+    const identity = this.requireIdentity();
+    const outgoing = record.direction === 'outgoing';
     const wire: RendezvousWire = {
       id: record.id,
-      fromId: this.requireIdentity().id,
-      fromName: this.requireIdentity().name,
-      toId: record.peerId,
+      fromId: outgoing ? identity.id : record.peerId,
+      fromName: outgoing ? identity.name : record.peerName,
+      toId: outgoing ? record.peerId : identity.id,
       scheduledFor: record.scheduledFor,
       createdAt: record.createdAt,
       liveAudioDisabled: record.liveAudioDisabled,
+      proposedBy: record.proposedBy,
+      confirmedBy: [...record.confirmedBy],
+      revision: record.revision,
     };
-    const sent = transport.send({ type: 'rendezvous:create', rendezvous: wire });
+    const isUpdate = record.revision > 0 || record.confirmedBy.length > 0;
+    const sent = transport.send(
+      isUpdate
+        ? {
+            type: 'rendezvous:update',
+            action: record.confirmedBy.length > 0 ? 'confirm' : 'counter',
+            rendezvous: wire,
+          }
+        : { type: 'rendezvous:create', rendezvous: wire },
+    );
     if (sent) {
       this.announceInFlight.add(record.id);
       window.setTimeout(() => {
@@ -811,6 +860,9 @@ export class RendezvousClient {
         return;
       case 'rendezvous:created':
         await this.handleRendezvousCreated(message.id);
+        return;
+      case 'rendezvous:updated':
+        await this.handleRendezvousUpdated(message.id);
         return;
       case 'rendezvous:notice':
         await this.handleRendezvousNotice(message.rendezvous);
@@ -911,11 +963,16 @@ export class RendezvousClient {
     record.peerId = sender.id;
     record.peerName = sender.name;
     record.status = isHandoffEligible(record.scheduledFor) ? 'waiting' : 'scheduled';
+    record.confirmedBy = record.confirmedBy ?? [];
+    record.proposedBy = record.proposedBy ?? this.identity?.id ?? '';
+    record.revision = record.revision ?? 0;
+    record.confirmation = this.confirmationFor(record);
     record.inviteToken = null;
-    record.announcedAt = record.announcedAt ?? Date.now();
+    record.announcedAt = null;
     record.error = null;
     await this.store.putRendezvous(record);
     this.emitState();
+    this.announce(record);
     void this.processDue();
   }
 
@@ -1041,10 +1098,27 @@ export class RendezvousClient {
     this.emitState();
   }
 
+  private async handleRendezvousUpdated(id: string): Promise<void> {
+    const record = this.rendezvous.get(id);
+    if (!record) return;
+    record.announcedAt = Date.now();
+    this.announceInFlight.delete(id);
+    this.announceRetryAt.delete(id);
+    await this.store.putRendezvous(record);
+    this.emitState();
+  }
+
   private async handleRendezvousNotice(notice: RendezvousNotice): Promise<void> {
     const identity = this.requireIdentity();
-    if (notice.fromId === identity.id) return;
-    const human = this.humans.get(notice.fromId);
+    const existingNoticeRecord = this.rendezvous.get(notice.id);
+    if (notice.fromId === identity.id && !existingNoticeRecord) {
+      this.transport?.send({ type: 'rendezvous:ack', id: notice.id });
+      return;
+    }
+    const peerId = existingNoticeRecord
+      ? existingNoticeRecord.peerId
+      : notice.fromId;
+    const human = this.humans.get(peerId);
     if (!human) {
       this.transport?.send({ type: 'rendezvous:ack', id: notice.id });
       return;
@@ -1052,16 +1126,23 @@ export class RendezvousClient {
 
     let record = this.rendezvous.get(notice.id);
     let isNew = false;
+    let timeChanged = false;
+    let wasConfirmed = record?.confirmation === 'confirmed';
+    const noticeRevision = notice.revision ?? 0;
     if (!record) {
       isNew = true;
       record = {
         id: notice.id,
         direction: 'incoming',
-        peerId: notice.fromId,
+        peerId,
         peerName: human.name || notice.fromName,
         createdAt: notice.createdAt,
         scheduledFor: notice.scheduledFor,
         status: isHandoffEligible(notice.scheduledFor) ? 'waiting' : 'scheduled',
+        confirmation: 'pending',
+        confirmedBy: [...(notice.confirmedBy ?? [])],
+        proposedBy: notice.proposedBy ?? notice.fromId,
+        revision: noticeRevision,
         photo: null,
         contribution: null,
         reciprocal: null,
@@ -1069,23 +1150,66 @@ export class RendezvousClient {
         audioWindowUsedAt: null,
         liveAudioDisabled: notice.liveAudioDisabled === true,
         inviteToken: null,
-        announcedAt: null,
+        announcedAt: Date.now(),
         lastAttemptAt: null,
         deliveredAt: null,
         error: null,
       };
+      record.confirmation = this.confirmationFor(record);
       this.rendezvous.set(record.id, record);
     } else {
-      record.scheduledFor = notice.scheduledFor;
+      if (noticeRevision < record.revision) {
+        this.transport?.send({ type: 'rendezvous:ack', id: notice.id });
+        return;
+      }
+      timeChanged = notice.scheduledFor !== record.scheduledFor;
+      if (timeChanged) {
+        record.scheduledFor = notice.scheduledFor;
+        record.proposedBy = notice.proposedBy ?? notice.fromId;
+        record.confirmedBy = [...(notice.confirmedBy ?? [])];
+        if (
+          record.status !== 'delivered' &&
+          record.status !== 'connecting' &&
+          record.status !== 'transferring'
+        ) {
+          record.status = isHandoffEligible(record.scheduledFor) ? 'waiting' : 'scheduled';
+        }
+      } else {
+        record.confirmedBy = [
+          ...new Set([...record.confirmedBy, ...(notice.confirmedBy ?? [])]),
+        ];
+        if (notice.proposedBy) record.proposedBy = notice.proposedBy;
+      }
+      record.revision = Math.max(record.revision, noticeRevision);
+      record.announcedAt = Date.now();
       record.peerName = human.name || notice.fromName;
       if (typeof notice.liveAudioDisabled === 'boolean') {
         record.liveAudioDisabled = notice.liveAudioDisabled;
       }
+      record.confirmation = this.confirmationFor(record);
     }
 
     await this.store.putRendezvous(record);
     this.transport?.send({ type: 'rendezvous:ack', id: record.id });
     this.emitState();
+
+    if (timeChanged) {
+      this.notice({
+        tone: 'info',
+        code: 'rendezvous-countered',
+        message: `${displayName(record.peerName)} proposed ${formatNoticeMoment(record.scheduledFor)}.`,
+        humanId: record.peerId,
+        rendezvousId: record.id,
+      });
+    } else if (!wasConfirmed && record.confirmation === 'confirmed') {
+      this.notice({
+        tone: 'success',
+        code: 'rendezvous-confirmed',
+        message: `You and ${displayName(record.peerName)} confirmed the rendezvous.`,
+        humanId: record.peerId,
+        rendezvousId: record.id,
+      });
+    }
 
     if (!record.deliveredAt) {
       if (isHandoffEligible(record.scheduledFor)) {
@@ -1225,6 +1349,10 @@ export class RendezvousClient {
       createdAt: Date.now(),
       scheduledFor: Date.now(),
       status: 'waiting',
+      confirmation: 'confirmed',
+      confirmedBy: [this.identity?.id ?? '', peerId].filter(Boolean),
+      proposedBy: peerId,
+      revision: 0,
       photo: null,
       contribution: null,
       reciprocal: null,
@@ -1718,6 +1846,10 @@ export class RendezvousClient {
       createdAt: Date.now(),
       scheduledFor: input.scheduledFor,
       status: 'scheduled',
+      confirmation: 'pending',
+      confirmedBy: [],
+      proposedBy: this.requireIdentity().id,
+      revision: 0,
       photo: attachment,
       contribution: null,
       reciprocal: null,
@@ -1784,6 +1916,10 @@ export class RendezvousClient {
       createdAt,
       scheduledFor: input.scheduledFor,
       status: 'awaiting-join',
+      confirmation: 'pending',
+      confirmedBy: [],
+      proposedBy: identity.id,
+      revision: 0,
       photo: attachment,
       contribution: null,
       reciprocal: null,
@@ -1799,6 +1935,86 @@ export class RendezvousClient {
     await this.store.putRendezvous(record);
     this.rendezvous.set(record.id, record);
     this.emitState();
+    return cloneRecord(record);
+  }
+
+  /**
+   * Confirm the current proposed time. The rendezvous becomes confirmed only
+   * when both direct participants have confirmed it. This is a label only:
+   * the normal handoff window still applies.
+   */
+  async confirmRendezvous(rendezvousId: string): Promise<StoredRendezvous> {
+    const identity = this.requireIdentity();
+    const record = this.rendezvous.get(rendezvousId);
+    if (!record) throw new RendezvousClientError('no-human', 'That rendezvous is not here.');
+    if (record.status === 'delivered' || record.deliveredAt) {
+      throw new RendezvousClientError('invalid-time', 'This rendezvous is already complete.');
+    }
+    if (!record.peerId || record.status === 'awaiting-join') {
+      throw new RendezvousClientError('no-human', 'The other human has not joined yet.');
+    }
+    if (record.confirmedBy.includes(identity.id)) return cloneRecord(record);
+    record.confirmedBy = [...record.confirmedBy, identity.id];
+    record.confirmation = this.confirmationFor(record);
+    record.revision += 1;
+    record.announcedAt = null;
+    this.announceInFlight.delete(record.id);
+    this.announceRetryAt.delete(record.id);
+    await this.store.putRendezvous(record);
+    this.emitState();
+    this.announce(record);
+    return cloneRecord(record);
+  }
+
+  /**
+   * Cancel the current proposed time on the same rendezvous and propose a new
+   * one. Confirmations reset; both humans must confirm the new time.
+   */
+  async counterProposeRendezvous(input: {
+    rendezvousId: string;
+    scheduledFor: number;
+  }): Promise<StoredRendezvous> {
+    const identity = this.requireIdentity();
+    const record = this.rendezvous.get(input.rendezvousId);
+    if (!record) throw new RendezvousClientError('no-human', 'That rendezvous is not here.');
+    if (record.status === 'delivered' || record.deliveredAt) {
+      throw new RendezvousClientError('invalid-time', 'This rendezvous is already complete.');
+    }
+    if (!record.peerId || record.status === 'awaiting-join') {
+      throw new RendezvousClientError('no-human', 'The other human has not joined yet.');
+    }
+    if (record.sessionStartedAt || this.activeTransfers.has(record.id)) {
+      throw new RendezvousClientError('invalid-time', 'The handoff has begun; the time is locked.');
+    }
+    if (
+      !Number.isFinite(input.scheduledFor) ||
+      input.scheduledFor <= Date.now() + 500
+    ) {
+      throw new RendezvousClientError('invalid-time', 'Choose a moment in the near future.');
+    }
+    record.scheduledFor = input.scheduledFor;
+    record.proposedBy = identity.id;
+    record.confirmedBy = [];
+    record.confirmation = 'pending';
+    record.revision += 1;
+    record.announcedAt = null;
+    record.lastAttemptAt = null;
+    record.error = null;
+    record.audioWindowUsedAt = null;
+    if (
+      record.status !== 'connecting' &&
+      record.status !== 'transferring'
+    ) {
+      record.status = isHandoffEligible(record.scheduledFor) ? 'waiting' : 'scheduled';
+    }
+    this.openNotified.delete(record.id);
+    this.dueNotified.delete(record.id);
+    this.lateNotified.delete(record.id);
+    this.announceInFlight.delete(record.id);
+    this.announceRetryAt.delete(record.id);
+    await this.store.putRendezvous(record);
+    this.emitState();
+    this.announce(record);
     return cloneRecord(record);
   }
 

@@ -5,8 +5,8 @@ import {
   shortenKey,
   statLines,
 } from './presentation';
-import type { CircleDayPlans } from '../plans';
-import type { CircleStats, MemberView, PublicKeyId } from '../types';
+import type { CircleOffer, CircleDayPlans } from '../plans';
+import type { CircleStats, MemberView, PlanJoinRecord, PlanRecord, PublicKeyId } from '../types';
 
 const EMPTY_STATS = `
   <p class="empty">No circle stats yet. Merge a circle to begin.</p>
@@ -39,6 +39,7 @@ export class CircleStatsPage extends HTMLElement {
   private stateView: MemberView | null = null;
   private stateInviteCandidates: readonly InviteCandidate[] = [];
   private statePlans: readonly CircleDayPlans[] = [];
+  private stateOffers: readonly CircleOffer[] = [];
   private stateWindow: { start: number; end: number } | null = null;
 
   constructor() {
@@ -66,6 +67,18 @@ export class CircleStatsPage extends HTMLElement {
         this.dispatchEvent(
           new CustomEvent('circle-plan-request', {
             detail: { circleId: this.stateStats.circleId, scheduledAt: at },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        return;
+      }
+      if (target.getAttribute('data-action') === 'join-plan') {
+        const planId = target.getAttribute('data-plan-id');
+        if (!planId) return;
+        this.dispatchEvent(
+          new CustomEvent('circle-plan-join', {
+            detail: { circleId: this.stateStats.circleId, planId },
             bubbles: true,
             composed: true,
           }),
@@ -113,6 +126,15 @@ export class CircleStatsPage extends HTMLElement {
 
   get plans(): readonly CircleDayPlans[] {
     return this.statePlans;
+  }
+
+  set offers(value: readonly CircleOffer[]) {
+    this.stateOffers = value;
+    this.render();
+  }
+
+  get offers(): readonly CircleOffer[] {
+    return this.stateOffers;
   }
 
   set window(value: { start: number; end: number } | null) {
@@ -224,23 +246,41 @@ export class CircleStatsPage extends HTMLElement {
         </section>`
         : '';
 
-    const nextPlan =
-      this.statePlans.find((entry) => entry.canonical.record && (entry.canonical.record as { scheduledAt: number }).scheduledAt >= Date.now() - 5 * 60_000) ??
-      this.statePlans[this.statePlans.length - 1] ??
-      null;
+    const selfKey = this.stateView?.selfKey ?? '';
+    const offers = this.stateOffers.filter(
+      (offer) =>
+        (offer.plan.record as PlanRecord).scheduledAt >= Date.now() - 5 * 60_000,
+    );
+    const offerRows =
+      offers.length > 0
+        ? offers
+            .map((offer) => {
+              const plan = offer.plan.record as PlanRecord;
+              const joined = offer.joins.some(
+                (entry) => (entry.record as PlanJoinRecord).member === selfKey,
+              );
+              const organizer = plan.organizer === selfKey;
+              const people = offer.participants.map((key) => shortenKey(key)).join(' · ');
+              return `
+                <div class="circle-offer" data-plan-id="${escapeHtml(offer.plan.id)}">
+                  <p class="canonical-plan">${escapeHtml(formatWindowMoment(plan.scheduledAt))} <span>by ${escapeHtml(shortenKey(plan.organizer))}</span></p>
+                  <p class="offer-state ${offer.confirmed ? 'is-confirmed' : 'is-pending'}">${offer.confirmed ? `confirmed · ${offer.participants.length} going` : 'pending · waiting for someone to join'}${people ? ` · ${escapeHtml(people)}` : ''}</p>
+                  <div class="plan-row">
+                    <button type="button" class="invite-button" data-action="join-plan" data-plan-id="${escapeHtml(offer.plan.id)}" ${organizer || joined ? 'disabled' : ''}>${organizer ? 'your offer' : joined ? 'joined' : 'join this moment'}</button>
+                  </div>
+                </div>`;
+            })
+            .join('')
+        : '<p class="canonical-plan is-empty">no circle rendezvous offered yet</p>';
     const planBlock = `
       <section class="circle-plan" part="plan">
-        <h2>the circle rendezvous</h2>
-        <p>One shared moment per local day. The first signed plan wins; later plans stay as history. Photographs still travel pairwise.</p>
-        ${
-          nextPlan
-            ? `<p class="canonical-plan">next · ${escapeHtml(formatWindowMoment((nextPlan.canonical.record as { scheduledAt: number }).scheduledAt))} <span>by ${escapeHtml(shortenKey((nextPlan.canonical.record as { organizer: string }).organizer))}</span></p>`
-            : '<p class="canonical-plan is-empty">no circle rendezvous set yet</p>'
-        }
-        <label class="plan-label" for="circle-plan-at">set a moment</label>
+        <h2>circle rendezvous offers</h2>
+        <p>Anyone can offer a moment and anyone can join any offer. Several offers may run independently at different times; nobody has to wait for the whole circle.</p>
+        ${offerRows}
+        <label class="plan-label" for="circle-plan-at">propose a moment</label>
         <div class="plan-row">
           <input id="circle-plan-at" type="datetime-local" min="${localInputValue(Date.now())}">
-          <button type="button" class="invite-button" data-action="set-plan">set circle rendezvous</button>
+          <button type="button" class="invite-button" data-action="set-plan">offer a circle rendezvous</button>
         </div>
       </section>`;
 

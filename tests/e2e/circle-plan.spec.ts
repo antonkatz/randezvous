@@ -6,7 +6,7 @@ function localInput(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-test('a circle sets a canonical plan and an optional window, and invitations auto-accept', async ({
+test('a circle offers independent moments, joins one, and sets an optional window', async ({
   browser,
 }) => {
   const anaContext = await browser.newContext({ viewport: { width: 1400, height: 1000 } });
@@ -30,9 +30,9 @@ test('a circle sets a canonical plan and an optional window, and invitations aut
   const planMoment = new Date(Date.now() + 24 * 60 * 60_000);
   planMoment.setSeconds(0, 0);
   await ana.locator('#circle-plan-at').fill(localInput(planMoment));
-  await ana.getByRole('button', { name: 'set circle rendezvous' }).click();
-  await expect(ana.locator('.circle-plan .canonical-plan')).toContainText('next ·');
-  await expect(ana.locator('.circle-plan .canonical-plan')).toContainText('by');
+  await ana.getByRole('button', { name: 'offer a circle rendezvous' }).click();
+  await expect(ana.locator('.circle-offer .canonical-plan')).toContainText('by');
+  await expect(ana.locator('.circle-offer .offer-state')).toContainText('pending');
 
   const windowStart = new Date(planMoment.getTime() + 60 * 60_000);
   const windowEnd = new Date(planMoment.getTime() + 4 * 60 * 60_000);
@@ -44,9 +44,9 @@ test('a circle sets a canonical plan and an optional window, and invitations aut
   // A plan outside the active window is refused before signing.
   const outside = new Date(planMoment.getTime() + 8 * 60 * 60_000);
   await ana.locator('#circle-plan-at').fill(localInput(outside));
-  await ana.getByRole('button', { name: 'set circle rendezvous' }).click();
+  await ana.getByRole('button', { name: 'offer a circle rendezvous' }).click();
   await expect(ana.locator('#toast-region')).toContainText(/outside the circle/iu);
-  await expect(ana.locator('.circle-plan .canonical-plan')).toContainText('next ·');
+  await expect(ana.locator('.circle-offer')).toHaveCount(1);
 
   // Inviting Baz auto-accepts on his side without a join click.
   await ana.getByRole('button', { name: 'invite' }).click();
@@ -55,11 +55,13 @@ test('a circle sets a canonical plan and an optional window, and invitations aut
   ).toBeVisible({ timeout: 20_000 });
   await expect(ana.locator('circle-stats-page')).toContainText('/ 2', { timeout: 20_000 });
 
-  // Both members converge on the same canonical plan.
+  // Both members see the same independent offer, and Baz joins it.
   await baz.locator('circle-bar').getByRole('button', { name: 'Moon Garden' }).click();
-  await expect(baz.locator('.circle-plan .canonical-plan')).toContainText('next ·');
-  await expect(baz.locator('.circle-plan .canonical-plan')).toContainText('by');
+  await expect(baz.locator('.circle-offer .canonical-plan')).toContainText('by');
   await expect(baz.locator('.circle-window .canonical-plan')).toContainText('active ·');
+  await baz.getByRole('button', { name: 'join this moment' }).click();
+  await expect(baz.locator('.circle-offer .offer-state')).toContainText('confirmed');
+  await expect(ana.locator('.circle-offer .offer-state')).toContainText('confirmed', { timeout: 20_000 });
 
   expect(errors).toEqual([]);
   await anaContext.close();
@@ -99,8 +101,8 @@ test('an offline member receives the expiring circle rendezvous invite on reconn
   const planMoment = new Date(Date.now() + 2 * 24 * 60 * 60_000);
   planMoment.setSeconds(0, 0);
   await ana.locator('#circle-plan-at').fill(localInput(planMoment));
-  await ana.getByRole('button', { name: 'set circle rendezvous' }).click();
-  await expect(ana.locator('.circle-plan .canonical-plan')).toContainText('next ·');
+  await ana.getByRole('button', { name: 'offer a circle rendezvous' }).click();
+  await expect(ana.locator('.circle-offer .canonical-plan')).toContainText('by');
   await ana.close();
 
   baz = await bazContext.newPage();
@@ -111,7 +113,7 @@ test('an offline member receives the expiring circle rendezvous invite on reconn
     .locator('circle-bar')
     .getByRole('button', { name: 'Night Orchard' })
     .click({ timeout: 20_000 });
-  await expect(baz.locator('.circle-plan .canonical-plan')).toContainText('next ·', {
+  await expect(baz.locator('.circle-offer .canonical-plan')).toContainText('by', {
     timeout: 20_000,
   });
   expect(errors).toEqual([]);

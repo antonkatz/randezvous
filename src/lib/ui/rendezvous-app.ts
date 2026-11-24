@@ -9,6 +9,7 @@ import {
   activeWindowRecord,
   availableInvitees,
   canonicalPlans,
+  circleOffers,
   clearCircleWindow,
   computeCircleStats,
   createAttendanceRecord,
@@ -17,6 +18,7 @@ import {
   createCircleInvite,
   createCirclePlan,
   createCircleWindow,
+  createPlanJoin,
   createRelayPeerChannel,
   deriveMemberView,
   isCircleInviteMessage,
@@ -31,6 +33,8 @@ import {
   type Identity as CircleIdentity,
   type MemberView,
   type PeerChannel,
+  type PlanJoinRecord,
+  type PlanRecord,
   type RankedCircle,
   type StoredCircleRecord,
 } from '../../circles';
@@ -346,6 +350,7 @@ const TEMPLATE = `
     <div class="rv-detail-moment">
       <span class="rv-detail-when" id="rv-detail-moment"></span>
       <span class="rv-detail-window" id="rv-detail-window"></span>
+      <span class="rv-detail-confirmation" id="rv-detail-confirmation"></span>
       <span class="rv-detail-state" id="rv-detail-state" aria-live="polite"></span>
     </div>
 
@@ -371,6 +376,8 @@ const TEMPLATE = `
       <p class="rv-detail-peer-state" id="rv-detail-peer-state"></p>
       <p class="rv-detail-audio-off" id="rv-detail-audio-off" hidden>Live audio off for this rendezvous.</p>
       <div class="rv-detail-actions">
+        <button class="secondary" id="rv-detail-confirm" type="button" hidden>confirm time</button>
+        <button class="secondary" id="rv-detail-counter" type="button" hidden>propose another time</button>
         <button class="secondary" id="rv-detail-share" type="button" hidden>share link</button>
         <button class="secondary" id="rv-detail-add" type="button" hidden>add a photo</button>
         <button class="secondary" id="rv-detail-live" type="button" hidden>live</button>
@@ -400,6 +407,26 @@ const TEMPLATE = `
     </section>
 
     <p class="rv-detail-footnote" id="rv-detail-footnote">The photo stays on this device until you are both here at the same time.</p>
+  </div>
+</dialog>
+
+<dialog class="modal rv-modal" id="rendezvous-counter-dialog" aria-labelledby="rv-counter-title">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <p class="modal-kicker">another moment</p>
+        <h2 id="rv-counter-title">Propose another time</h2>
+      </div>
+      <button class="modal-close" id="rv-counter-close" type="button" aria-label="Close">×</button>
+    </div>
+    <p class="critical-note" id="rv-counter-context">The original time is cancelled when you propose a new one. Both of you will need to confirm it.</p>
+    <label class="date-label" for="rv-counter-when">new moment</label>
+    <input class="date-input" id="rv-counter-when" type="datetime-local">
+    <p class="field-error" id="rv-counter-error" hidden></p>
+    <div class="rv-actions">
+      <button class="back-button" id="rv-counter-cancel" type="button">Cancel</button>
+      <button class="primary" id="rv-counter-submit" type="button">Propose this time</button>
+    </div>
   </div>
 </dialog>
 
@@ -675,6 +702,7 @@ export class RendezvousApp extends HTMLElement {
   private activeHumanId: string | null = null;
   private verificationRequest = 0;
   private detailRecordId: string | null = null;
+  private counterRecordId: string | null = null;
   private detailVerificationRequest = 0;
   private detailPhotoUrl: string | null = null;
   private detailNoteUrl: string | null = null;
@@ -975,6 +1003,9 @@ export class RendezvousApp extends HTMLElement {
       dashboard.addEventListener('circle-plan-request', (event) =>
         void this.setCirclePlan(event),
       );
+      dashboard.addEventListener('circle-plan-join', (event) =>
+        void this.joinCirclePlan(event),
+      );
       dashboard.addEventListener('circle-window-request', (event) =>
         void this.setCircleWindow(event),
       );
@@ -1054,6 +1085,7 @@ export class RendezvousApp extends HTMLElement {
     );
     dashboard.stats = computeCircleStats(records, view, Date.now(), { circleId });
     dashboard.plans = canonicalPlans(records, circleId, view.timezone, view.members);
+    dashboard.offers = circleOffers(records, circleId, Date.now(), view.members);
     const windowEntry = activeWindowRecord(records, circleId, Date.now());
     dashboard.window =
       windowEntry?.record.type === 'Window'
@@ -1409,17 +1441,71 @@ export class RendezvousApp extends HTMLElement {
       await this.selectCircle(detail.circleId);
       void this.circleSync?.refresh();
       this.showToast({
-        tone: created.canonical ? 'success' : 'info',
-        title: created.canonical ? 'Circle rendezvous set.' : 'An earlier plan is canonical.',
-        message: created.canonical
-          ? 'The first signed plan for that local day is the shared moment.'
-          : 'Your plan is kept as history. The earliest signed plan still wins.',
+        tone: 'success',
+        title: 'Circle offer proposed.',
+        message:
+          'It is independent of every other offer. Members can join whichever moment works for them.',
       });
     } catch (error) {
       this.showToast({
         tone: 'warning',
         title: 'The circle rendezvous was not set.',
         message: error instanceof Error ? error.message : 'The plan could not be signed.',
+      });
+    }
+  }
+
+  private async joinCirclePlan(event: Event): Promise<void> {
+    const detail = (event as CustomEvent<{ circleId?: string; planId?: string }>).detail;
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    if (!identity || !store || !detail?.circleId || !detail.planId) return;
+    try {
+      const records = await store.load(detail.circleId);
+      const view = deriveMemberView(records, identity.selfKey, this.circleFriends, {}, {
+        circleId: detail.circleId,
+      });
+      if (!view.members.includes(identity.selfKey)) {
+        throw new Error('You are not a current member of this circle.');
+      }
+      const plan = records.find(
+        (entry) => entry.id === detail.planId && entry.record.type === 'Plan',
+      );
+      if (!plan || plan.record.type !== 'Plan') {
+        throw new Error('That circle offer is not in the merged record set.');
+      }
+      if (plan.record.organizer === identity.selfKey) {
+        throw new Error('You already made this offer.');
+      }
+      const already = records.some(
+        (entry) =>
+          entry.record.type === 'PlanJoin' &&
+          entry.record.planId === detail.planId &&
+          entry.record.member === identity.selfKey,
+      );
+      if (!already) {
+        const join = await createPlanJoin({
+          identity,
+          circleId: detail.circleId,
+          planId: detail.planId,
+          at: Date.now(),
+        });
+        await store.append(detail.circleId, [join]);
+      }
+      await this.reloadCircles();
+      await this.selectCircle(detail.circleId);
+      void this.circleSync?.refresh();
+      this.showToast({
+        tone: 'success',
+        title: 'You joined that moment.',
+        message:
+          'The offer is confirmed for you and its other participants. You do not need the whole circle.',
+      });
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'The offer was not joined.',
+        message: error instanceof Error ? error.message : 'The PlanJoin could not be signed.',
       });
     }
   }
@@ -1596,6 +1682,11 @@ export class RendezvousApp extends HTMLElement {
     this.$('#rv-detail-replace').addEventListener('click', () => this.openContributionFromDetail());
     this.$('#rv-detail-remove').addEventListener('click', () => void this.removeContributionFromDetail());
     this.$('#rv-detail-live').addEventListener('click', () => this.openLiveFromDetail());
+    this.$('#rv-detail-confirm').addEventListener('click', () => void this.confirmActiveRendezvous());
+    this.$('#rv-detail-counter').addEventListener('click', () => this.openCounterDialog());
+    this.$('#rv-counter-close').addEventListener('click', () => this.closeCounterDialog());
+    this.$('#rv-counter-cancel').addEventListener('click', () => this.closeCounterDialog());
+    this.$('#rv-counter-submit').addEventListener('click', () => void this.submitCounterProposal());
     this.$('#remove-human').addEventListener('click', () => this.beginHumanRemoval());
     this.$('#cancel-remove').addEventListener('click', () => this.resetHumanRemoval());
     this.$('#confirm-remove').addEventListener('click', () => void this.confirmHumanRemoval());
@@ -1676,6 +1767,14 @@ export class RendezvousApp extends HTMLElement {
     });
     this.$('#rendezvous-detail-dialog').addEventListener('click', (event) => {
       if (event.target === this.$('#rendezvous-detail-dialog')) this.closeRendezvousDetail();
+    });
+    this.$('#rendezvous-counter-dialog').addEventListener('click', (event) => {
+      if (event.target === this.$('#rendezvous-counter-dialog')) this.closeCounterDialog();
+    });
+    this.$('#rendezvous-counter-dialog').addEventListener('close', () => {
+      this.counterRecordId = null;
+      this.$('#rv-counter-error').hidden = true;
+      this.$<HTMLButtonElement>('#rv-counter-submit').disabled = false;
     });
     this.$('#photo-dialog').addEventListener('click', (event) => {
       if (event.target === this.$('#photo-dialog')) this.closePhotoViewer();
@@ -2078,6 +2177,18 @@ export class RendezvousApp extends HTMLElement {
                   : needsPerson
                     ? `still open · waiting for ${person}`
                     : 'still open · connecting';
+      const confirmation = document.createElement('span');
+      confirmation.className = 'next-card-confirmation';
+      if (!awaitingJoin) {
+        const mine = record.confirmedBy.includes(snapshot.identity.id);
+        confirmation.textContent =
+          record.confirmation === 'confirmed'
+            ? 'confirmed by both'
+            : mine
+              ? `pending · waiting for ${person} to confirm`
+              : 'pending · confirm or propose another time';
+        if (record.confirmation === 'confirmed') confirmation.dataset.confirmed = 'true';
+      }
       const contribution = document.createElement('span');
       contribution.className = 'next-card-contribution';
       if (awaitingJoin) {
@@ -2090,6 +2201,7 @@ export class RendezvousApp extends HTMLElement {
         contribution.textContent = `${person}’s photo · not added`;
       }
       copy.append(title, state);
+      if (confirmation.textContent) copy.append(confirmation);
       if (contribution.textContent) copy.append(contribution);
       const arrow = document.createElement('span');
       arrow.className = 'next-card-arrow';
@@ -2098,37 +2210,6 @@ export class RendezvousApp extends HTMLElement {
       card.setAttribute('aria-label', `Open rendezvous with ${person} · ${formatMoment(record.scheduledFor)} · ${state.textContent}`);
       card.addEventListener('click', () => this.openRendezvousDetail(record.id));
       wrapRow.append(card);
-
-      if (awaitingJoin) {
-        const share = document.createElement('button');
-        share.type = 'button';
-        share.className = 'next-action';
-        share.textContent = 'share link';
-        share.addEventListener('click', () => void this.shareRendezvousLink(record));
-        wrapRow.append(share);
-      }
-
-      if (
-        record.direction === 'incoming' &&
-        !record.contribution &&
-        !record.sessionStartedAt &&
-        record.status !== 'transferring'
-      ) {
-        const add = document.createElement('button');
-        add.type = 'button';
-        add.className = 'next-action';
-        add.textContent = 'add a photo';
-        add.addEventListener('click', () => this.openContribution(record.id));
-        wrapRow.append(add);
-      }
-      if (!awaitingJoin && phase !== 'scheduled' && human?.online) {
-        const live = document.createElement('button');
-        live.type = 'button';
-        live.className = 'next-action live-action';
-        live.textContent = 'live';
-        live.addEventListener('click', () => this.openLive(record.id, true));
-        wrapRow.append(live);
-      }
       next.append(wrapRow);
     }
 
@@ -3018,6 +3099,14 @@ export class RendezvousApp extends HTMLElement {
         : phase === 'still-open'
           ? 'still open · lateness never cancels it'
           : 'open now · both browsers connect automatically';
+    const mineConfirmed = active.confirmedBy.includes(this.state?.identity.id ?? '');
+    this.$('#rv-detail-confirmation').textContent = awaitingJoin
+      ? 'pending · the other human has not joined yet'
+      : active.confirmation === 'confirmed'
+        ? 'confirmed by both'
+        : mineConfirmed
+          ? `pending · waiting for ${person} to confirm`
+          : 'pending · both of you need to confirm';
 
     const needsPerson = !human?.online;
     this.$('#rv-detail-state').textContent = awaitingJoin
@@ -3080,6 +3169,17 @@ export class RendezvousApp extends HTMLElement {
       !active.sessionStartedAt &&
       active.status !== 'transferring';
     this.$('#rv-detail-share').hidden = !(awaitingJoin && active.inviteToken);
+    this.$('#rv-detail-confirm').hidden = !(
+      !awaitingJoin &&
+      active.status !== 'delivered' &&
+      active.confirmation !== 'confirmed' &&
+      !mineConfirmed
+    );
+    this.$('#rv-detail-counter').hidden = !(
+      !awaitingJoin &&
+      active.status !== 'delivered' &&
+      !active.sessionStartedAt
+    );
     this.$('#rv-detail-add').hidden = !(contributionEditable && !active.contribution);
     this.$('#rv-detail-replace').hidden = !(contributionEditable && Boolean(active.contribution));
     this.$('#rv-detail-remove').hidden = !(contributionEditable && Boolean(active.contribution));
@@ -3251,6 +3351,100 @@ export class RendezvousApp extends HTMLElement {
     const record = this.getActiveDetailRecord();
     if (!record) return;
     void this.shareRendezvousLink(record);
+  }
+
+  private async confirmRendezvous(rendezvousId: string): Promise<void> {
+    if (!this.client) return;
+    const button = this.$<HTMLButtonElement>('#rv-detail-confirm');
+    button.disabled = true;
+    try {
+      const record = await this.client.confirmRendezvous(rendezvousId);
+      this.showToast({
+        tone: 'success',
+        title: 'Time confirmed.',
+        message:
+          record.confirmation === 'confirmed'
+            ? 'You both confirmed this rendezvous.'
+            : 'Waiting for the other human to confirm.',
+      });
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'Could not confirm the time.',
+        message: error instanceof Error ? error.message : 'Try again.',
+      });
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  private confirmActiveRendezvous(): void {
+    if (this.detailRecordId) void this.confirmRendezvous(this.detailRecordId);
+  }
+
+  private dateTimeLocalValue(value: number): string {
+    const date = new Date(value);
+    const pad = (part: number): string => String(part).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  private openCounterDialog(recordId?: string): void {
+    const id = recordId ?? this.detailRecordId;
+    if (!id || !this.state) return;
+    const record = this.state.rendezvous.find((entry) => entry.id === id);
+    if (!record || record.status === 'delivered') return;
+    this.counterRecordId = id;
+    const human = this.state.humans.find((entry) => entry.id === record.peerId);
+    const person = displayName(record.peerName || human?.name || '');
+    this.$('#rv-counter-context').textContent =
+      `Cancels ${formatMoment(record.scheduledFor)} with ${person}. The new time is pending until both of you confirm it.`;
+    const input = this.$<HTMLInputElement>('#rv-counter-when');
+    input.value = this.dateTimeLocalValue(
+      Math.max(record.scheduledFor + 60 * 60_000, Date.now() + 5 * 60_000),
+    );
+    this.$('#rv-counter-error').hidden = true;
+    this.$<HTMLButtonElement>('#rv-counter-submit').disabled = false;
+    const dialog = this.$<HTMLDialogElement>('#rendezvous-counter-dialog');
+    if (!dialog.open) dialog.showModal();
+    input.focus();
+  }
+
+  private closeCounterDialog(): void {
+    const dialog = this.$<HTMLDialogElement>('#rendezvous-counter-dialog');
+    if (dialog.open) dialog.close();
+    this.counterRecordId = null;
+  }
+
+  private async submitCounterProposal(): Promise<void> {
+    const recordId = this.counterRecordId;
+    if (!recordId || !this.client) return;
+    const input = this.$<HTMLInputElement>('#rv-counter-when');
+    const error = this.$('#rv-counter-error');
+    const scheduledFor = new Date(input.value).getTime();
+    if (!Number.isFinite(scheduledFor) || scheduledFor <= Date.now() + 500) {
+      error.textContent = 'Choose a moment in the near future.';
+      error.hidden = false;
+      return;
+    }
+    const button = this.$<HTMLButtonElement>('#rv-counter-submit');
+    button.disabled = true;
+    try {
+      const record = await this.client.counterProposeRendezvous({
+        rendezvousId: recordId,
+        scheduledFor,
+      });
+      this.closeCounterDialog();
+      this.showToast({
+        tone: 'info',
+        title: 'Another time proposed.',
+        message: `${formatMoment(record.scheduledFor)} is pending until both of you confirm it.`,
+      });
+    } catch (counterError) {
+      error.textContent =
+        counterError instanceof Error ? counterError.message : 'The time could not be proposed.';
+      error.hidden = false;
+      button.disabled = false;
+    }
   }
 
   private openContributionFromDetail(): void {
@@ -3765,6 +3959,8 @@ export class RendezvousApp extends HTMLElement {
       'transfer-failed': 'The handoff stopped.',
       'handshake-failed': 'The handshake did not verify.',
       'transfer-delivered': 'Delivered.',
+      'rendezvous-confirmed': 'Confirmed together.',
+      'rendezvous-countered': 'Another time proposed.',
       'audio-ended': 'The minute is over.',
       'audio-declined': 'A minute, asked.',
       'audio-error': 'The live minute did not start.',
@@ -3865,15 +4061,23 @@ export class RendezvousApp extends HTMLElement {
         if (!view.members.includes(identity.selfKey) || !view.members.includes(record.peerId)) {
           continue;
         }
-        const plan = canonicalPlans(records, circleId, view.timezone, view.members).find((entry) => {
-          const planRecord = entry.canonical.record;
-          return (
-            planRecord.type === 'Plan' &&
-            Math.abs(planRecord.scheduledAt - record.scheduledFor) <= 5 * 60_000
-          );
-        });
-        if (!plan || plan.canonical.record.type !== 'Plan') continue;
-        const planRecord = plan.canonical.record;
+        const plans = canonicalPlans(records, circleId, view.timezone, view.members)
+          .flatMap((entry) => entry.plans)
+          .filter((entry) => {
+            const planRecord = entry.record;
+            return (
+              planRecord.type === 'Plan' &&
+              Math.abs(planRecord.scheduledAt - record.scheduledFor) <= 5 * 60_000
+            );
+          })
+          .sort((left, right) => {
+            const a = left.record as PlanRecord;
+            const b = right.record as PlanRecord;
+            return a.scheduledAt - b.scheduledAt;
+          });
+        const plan = plans[0];
+        if (!plan || plan.record.type !== 'Plan') continue;
+        const planRecord = plan.record;
         const already = records.some(
           (entry) =>
             entry.record.type === 'Attendance' &&

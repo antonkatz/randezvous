@@ -34,6 +34,9 @@ export interface Human extends StoredHuman {
 
 export type RendezvousDirection = 'outgoing' | 'incoming';
 
+/** Agreement label for the currently proposed time. It never gates handoff. */
+export type RendezvousConfirmation = 'pending' | 'confirmed';
+
 export type RendezvousStatus =
   | 'awaiting-join'
   | 'scheduled'
@@ -107,8 +110,14 @@ export interface StoredRendezvous {
   createdAt: number;
   scheduledFor: number;
   status: RendezvousStatus;
-  /** Present on outgoing appointments from the start; on incoming after receipt. */
-  photo: PhotoAttachment | null;
+  /** Pending until both humans confirm the current proposed time. */
+  confirmation: RendezvousConfirmation;
+  /** Human ids that confirmed the current proposed time. */
+  confirmedBy: string[];
+  /** Human id that proposed the current scheduled time. */
+  proposedBy: string;
+  /** Increments with each counter-proposal or confirmation sync. */
+  revision: number;
   /** A reciprocal photo this browser attached to someone else's appointment. */
   contribution: PhotoAttachment | null;
   /** A reciprocal photo received from the other participant (outgoing record). */
@@ -125,6 +134,8 @@ export interface StoredRendezvous {
   lastAttemptAt: number | null;
   deliveredAt: number | null;
   error: string | null;
+  /** Present on outgoing appointments from the start; on incoming after receipt. */
+  photo: PhotoAttachment | null;
 }
 
 export type AudioPhase =
@@ -229,6 +240,8 @@ export type NoticeCode =
   | 'handshake-failed'
   | 'transfer-delivered'
   | 'photo-received'
+  | 'rendezvous-confirmed'
+  | 'rendezvous-countered'
   | 'audio-error'
   | 'audio-declined'
   | 'audio-ended'

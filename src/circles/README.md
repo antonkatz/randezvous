@@ -134,12 +134,13 @@ interface StoredCircleRecord {
 | `Join { circleId, member, at }` | member | needs an Invite from a valid member |
 | `Leave { circleId, member, at }` | member | removes the member from that point |
 | `BanVote { circleId, voter, target, vote, at }` | voter | `ban` or `unban`; local opinion, not a command |
-| `Plan { circleId, rendezvousId, scheduledAt, organizer, invitees[], createdAt }` | organizer | canonical per circle/local day |
+| `Plan { circleId, rendezvousId, scheduledAt, organizer, invitees[], createdAt }` | organizer | one independent rendezvous offer; no canonical winner |
+| `PlanJoin { circleId, planId, member, at }` | member | joins one offer; several offers may run independently |
 | `Window { circleId, start, end, author, createdAt }` | author | optional inclusive scheduling window |
 | `WindowClear { circleId, author, createdAt }` | author | removes the window for later-signed plans |
 | `Attendance { rendezvousId, scheduledAt, attendee, joinedAt, swappedWith[], promptId }` | attendee | no photo bytes; `promptId` is `string \| null` |
 
-`Plan` records are circle-scoped and carry a signed `createdAt`. At most one plan is canonical per circle and local calendar day: earliest `createdAt`, then record id ascending. `Attendance` remains unscoped because a kept pair supplies its circle association through current membership. A plan's scheduled instant must fall inside the window active at its signed creation time, or merge rejects it.
+`Plan` records are circle-scoped and carry a signed `createdAt`. Every valid plan is an independent offer; there is no canonical plan per day. A member joins an offer with a signed `PlanJoin` naming the plan record id: `circleOffers(records, circleId, now, members)` returns each offer with its joins and participants. An offer is pending until it has at least one participant other than the organizer; after that it is confirmed for those participants. Confirmation is a label only and never blocks a handoff. `Attendance` remains unscoped because a kept pair supplies its circle association through current membership. A plan's scheduled instant must fall inside the window active at its signed creation time, or merge rejects it.
 
 ### Merge
 
@@ -212,7 +213,7 @@ Day arithmetic is done on calendar date components, so it crosses DST without ad
 | `promptStats` | Attendance tagged with the active daily/weekly prompt; ratio = distinct members on the active weekly prompt / members | current member count |
 | `allTime` | Kept rendezvous with no pair cap | next milestone |
 
-**Pair cap and counted rendezvous.** Process all kept rendezvous in `scheduledAt` order, id tie-break. A rendezvous counts once if it has at least one in-circle kept pair whose per-pair weekly count is below `pairCapPerWeek` (default 3). When it counts, every in-circle pair in that rendezvous is incremented. The cap is one global cap per ISO-style week in the circle timezone, so a week that spans a month boundary does **not** get a fresh cap in the new month. `monthlyKept` filters the counted set to the current month; `dailyRun` uses the counted set across all history. A pair cannot carry the circle alone. `allTime` and the pair-level stats (`weeklyParticipation`, `seasonPairs`) use every kept rendezvous with no volume cap.
+**Pair cap and counted rendezvous.** Process all kept rendezvous in `scheduledAt` order, id tie-break. Every kept pair counts toward the pair cap regardless of whether it arrived through an offer, a direct rendezvous, or a counter-offer. A rendezvous counts once if it has at least one in-circle kept pair whose per-pair weekly count is below `pairCapPerWeek` (default 3). When it counts, every in-circle pair in that rendezvous is incremented. The cap is one global cap per ISO-style week in the circle timezone, so a week that spans a month boundary does **not** get a fresh cap in the new month. `monthlyKept` filters the counted set to the current month; `dailyRun` uses the counted set across all history. A pair cannot carry the circle alone. `allTime` and the pair-level stats (`weeklyParticipation`, `seasonPairs`) use every kept rendezvous with no volume cap.
 
 **Prompt selection.** `activePrompts(now, timezone)` chooses `DAILY_PROMPTS[days-since-epoch mod length]` and `WEEKLY_PROMPTS[week-index mod length]`, Monday-aligned, in the circle timezone. Lists are plain data in `prompts.ts` (7 daily, 4 weekly placeholders). Attendance carries one `promptId` or `null`. Prompt counts are all-time occurrences of the currently active prompt ids, restricted to current members and to rendezvous that involve at least two current members. Change the lists without changing ids to preserve interpretation; replacing wording is fine.
 
@@ -237,7 +238,7 @@ Both sides send `hello`; the intersection is the shared set (both views agree). 
 Delivery restrictions:
 
 - **BanVote** is sent only by its author, only to the author's direct friends, never to the target, and never relayed. Incoming votes must have `voter === channel.peerKey` and come from a direct friend; relays are ignored even with a valid signature.
-- **Plans** are gossiped only to direct members of that circle, so members who joined after a plan was signed still receive the canonical history. **Attendance** is gossiped only to direct friends and only when at least two current attendees are members. Incoming gossip follows the same conditions.
+- **Plans** are gossiped only to direct members of that circle, so members who joined after an offer was signed still receive the offer history. **PlanJoin** follows the same rule. **Attendance** is gossiped only to direct friends and only when at least two current attendees are members. Incoming gossip follows the same conditions.
 - Membership records (`CircleCreated`, `Invite`, `Join`, `Leave`) sync normally for shared circles.
 - `have` advertises only records the sender is allowed to send, so privacy restrictions do not leak ids.
 
@@ -266,13 +267,13 @@ Weekly participation, season pairs and prompt ratios use current member-derived 
 - **Targets are fixed numbers**: 20 monthly and 14 daily, plus the all-time milestone ladder. Only participation/denominator ratios change with member count.
 - **A banned member's past records are ignored immediately** in all stats, including prompt counts and `asOf`. There is no historical “before the ban” reconstruction.
 - **Circle ids are globally unique random identifiers.** If duplicate `CircleCreated` records exist, the earliest by `(createdAt, creator, name, timezone, id)` is the canonical creation.
-- **Plans are circle-scoped.** A `Plan` carries `circleId`, a signed `createdAt`, and its organizer/invitees. At most one plan is canonical per circle and local calendar day, chosen by earliest `createdAt` then record id. `Attendance` remains unscoped; the in-circle pair test supplies its circle association.
+- **Plans are circle-scoped.** A `Plan` carries `circleId`, a signed `createdAt`, and its organizer/invitees. Every valid plan is an independent offer. Members join offers with signed `PlanJoin` records; there is no canonical plan per day or per local calendar day. `Attendance` remains unscoped; the in-circle pair test supplies its circle association.
 - **Duplicate `Attendance` records** for the same rendezvous/person contribute at most one pair. Any duplicate that satisfies the window can establish the pair.
 - **Prompt counts are all-time** occurrences of the active recurring prompt ids, not only today's/this week's photographs.
 - **Invitations are addressed** to a public-key id. The bundle is not a bearer capability to join without that identity's private key. In the reference app, delivery uses the signalling server's online `circle:relay` between mutual direct humans; the server stores neither the bundle nor membership records. Invitations do not expire or get revoked by this module; a later `Leave`/ban is the available remedy.
 - **Invitation consent auto-accepts in this implementation.** A valid, addressed invitation whose signature, circle, inviter membership, and invitee key all verify is accepted and produces a signed `Join`. Invalid or forwarded invitations are ignored. The explicit accept/decline element remains available as a fallback.
-- **The reference membership relay is online-only.** If either human is offline, no circle invitation, Join/Leave, or sync record is queued. Both must reconnect; `CircleSync.refresh()` then re-exchanges ids. The circle rendezvous invite is different: the reference app submits the signed plan to an expiring server queue, delivered until its scheduled time. Body records are never stored by the server.
-- **Daily canonical rendezvous is implemented.** `canonicalPlans()` recomputes the earliest signed plan per circle and local day. `mergeRecords()` rejects plans outside the window active at their signed creation time, and stats ignore attendance tied to non-canonical plans. A later-arriving earlier plan replaces the previous choice locally.
+- **The reference membership relay is online-only.** If either human is offline, no circle invitation, Join/Leave, PlanJoin, or sync record is queued. Both must reconnect; `CircleSync.refresh()` then re-exchanges ids. The circle offer invite is different: the reference app submits the signed plan to an expiring server queue, delivered until its scheduled time. Body records are never stored by the server.
+- **Circle offers are independent.** `circleOffers()` lists every valid plan and its PlanJoin records. There is no canonical daily plan and stats do not discard attendance because another offer exists. Counter-proposals are new offers; the prior offer remains joinable. `mergeRecords()` rejects plans outside the window active at their signed creation time.
 - **Public-key resolution for transitive members is host-provided.** See the key-availability section above.
 - **Circle names and timezones are immutable** in this grow-only model. A future record type would be required to rename a circle.
 - **Prompt/time ambiguities chosen here:** prompt counts are lifetime counts of the active ids; duplicate attendance records are deduplicated per rendezvous/person pair. `dailyRun` uses the same counted/pair-capped set as `monthlyKept`, not merely any kept rendezvous.
@@ -284,7 +285,7 @@ Import the UI separately: `import { defineCircleStatsElements } from '@instanthe
 
 - `<circle-dashboard>`: the composition shell with “Your circles”, the create screen, the circle page and a pending invitation. It owns presentation state only.
 - `<circle-create-form>`: name + IANA timezone; validates locally and emits `circle-create` with `{ name, timezone }`.
-- `<circle-stats-page>`: six progress bars, value/target, “as you see this circle”, “as of last sync”, `unconnectedToYou` list, and optional `inviteCandidates` with an invite action.
+- `<circle-stats-page>`: six progress bars, value/target, “as you see this circle”, “as of last sync”, the independent offer list with join actions, `unconnectedToYou` list, and optional `inviteCandidates` with an invite action.
 - `<circle-stats-list>`: circles ordered by local score with progress rings and light rank numbers. Rows emit `circle-select`.
 - `<circle-bar>`: persistent bottom navigation with `+ circle` pinned left and one circular button per circle. It emits `circle-add` and `circle-open` with `{ circleId }`; the host owns the active circle.
 - `<circle-invite-card>`: a consent surface for a received `CircleInviteBundle`; it never signs by itself.
@@ -343,9 +344,9 @@ dashboard.addEventListener('circle-create', async (event) => {
 });
 ```
 
-For `circle-select`, load that circle, set `dashboard.stats`, `dashboard.view` and `dashboard.inviteCandidates`. For `circle-invite-request`, call `createCircleInvite` and send the bundle through `createRelayPeerChannel`/`sendCircleInvite`. For `circle-invite-accept`, call `acceptCircleInvite`, append the returned records and send the acceptance back.
+For `circle-select`, load that circle, set `dashboard.stats`, `dashboard.view`, `dashboard.offers` and `dashboard.inviteCandidates`. For `circle-plan-request`, sign a new offer with `createCirclePlan`. For `circle-plan-join`, sign a `PlanJoin` with `createPlanJoin`. For `circle-invite-request`, call `createCircleInvite` and send the bundle through `createRelayPeerChannel`/`sendCircleInvite`. For `circle-invite-accept`, call `acceptCircleInvite`, append the returned records and send the acceptance back.
 
-The existing `<rendezvous-app>` mounts a persistent bottom `<circle-bar>` with **`+ circle` pinned left** and one circular button per circle. Choosing `+ circle` opens the create flow; choosing a circle opens that circle’s dashboard. Creation, local listing/stats, canonical daily plans, the optional gathering window, online relay invitation delivery, auto-acceptance, and circle sync are wired through the existing signalling server. The signed plan also goes to the server's expiring rendezvous-invite queue for offline members.
+The existing `<rendezvous-app>` mounts a persistent bottom `<circle-bar>` with **`+ circle` pinned left** and one circular button per circle. Choosing `+ circle` opens the create flow; choosing a circle opens that circle’s dashboard. Creation, local listing/stats, independent offers and per-offer joins, the optional gathering window, online relay invitation delivery, auto-acceptance, and circle sync are wired through the existing signalling server. The signed plan also goes to the server's expiring offer-invite queue for offline members.
 
 ## Tests
 
@@ -353,7 +354,7 @@ The existing `<rendezvous-app>` mounts a persistent bottom `<circle-bar>` with *
 npm test
 ```
 
-The suite covers canonical encoding, merge laws and rejections, window edges with and without skew, one-sided and five-person swaps, timezone/DST/day rollover, the pair cap, membership chains, leave/ban/override edge cases, cross-circle counting, sync with out-of-order/duplicate delivery, BanVote delivery restrictions, prompt determinism, invitations, adapters, stores and leaderboard determinism.
+The suite covers canonical encoding, merge laws and rejections, window edges with and without skew, one-sided and five-person swaps, timezone/DST/day rollover, the pair cap, independent offers and per-offer joins, membership chains, leave/ban/override edge cases, cross-circle counting, sync with out-of-order/duplicate delivery, BanVote delivery restrictions, prompt determinism, invitations, adapters, stores and leaderboard determinism.
 
 ## File map
 
@@ -365,6 +366,7 @@ The suite covers canonical encoding, merge laws and rejections, window edges wit
 | `membership.ts` | chain, leaves, bans, view, connection policy |
 | `invitations.ts` | signed invite bundles, acceptance, message helpers |
 | `lifecycle.ts` | create circle, leave, cast ban vote |
+| `plans.ts` | offers, PlanJoin, gathering windows, attendance, offer views |
 | `rendezvous.ts` | kept pairs, window, signing guard, NTP |
 | `time.ts` | pure timezone day/week/month/season keys |
 | `prompts.ts` | replaceable daily/weekly prompt data |
@@ -378,4 +380,4 @@ The suite covers canonical encoding, merge laws and rejections, window edges wit
 
 ## Non-goals
 
-Hub-level daily streak and freezes, admin roles, peer-as-signaller, TURN, server-side circle history or offline circle queues, photo/voice transfer, scaling targets by circle size, public discovery, and automatic invitation acceptance.
+Hub-level daily streak and freezes, admin roles, peer-as-signaller, TURN, server-side circle history or offline circle queues, photo/voice transfer, scaling targets by circle size, public discovery, and automatic invitation acceptance beyond the current auto-accept policy.

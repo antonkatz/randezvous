@@ -36,6 +36,7 @@ export async function createRendezvousLink(
   await expect(page.locator('#done-link')).toHaveValue(/^http/u);
 
   const link = await page.locator('#done-link').inputValue();
+  expect(link.length).toBeLessThan(350);
   const appointmentId = await page.evaluate(() => {
     const app = document.querySelector('rendezvous-app') as unknown as {
       clientInstance: {

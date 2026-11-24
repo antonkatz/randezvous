@@ -3,6 +3,7 @@ import { dayKey } from './time';
 import type {
   CircleId,
   Identity,
+  PlanJoinRecord,
   PlanRecord,
   PublicKeyId,
   StoredCircleRecord,
@@ -115,6 +116,102 @@ export async function createCirclePlan(
     canonicalPlans([...existing, plan], input.circleId, timezoneFrom(existing) ?? 'UTC')
       .find((entry) => entry.canonical.id === plan.id) !== undefined;
   return { plan, canonical };
+}
+
+export interface CreatePlanJoinInput {
+  identity: Identity;
+  circleId: CircleId;
+  planId: string;
+  at: number;
+}
+
+/** Join one circle rendezvous offer. Joining is a free, independent choice. */
+export async function createPlanJoin(
+  input: CreatePlanJoinInput,
+): Promise<StoredCircleRecord> {
+  assertTimestamp('at', input.at);
+  return signRecord(input.identity, {
+    type: 'PlanJoin',
+    circleId: input.circleId,
+    planId: input.planId,
+    member: input.identity.selfKey,
+    at: input.at,
+  });
+}
+
+export interface CircleOffer {
+  plan: StoredCircleRecord;
+  joins: StoredCircleRecord[];
+  participants: PublicKeyId[];
+  confirmed: boolean;
+}
+
+/**
+ * Every upcoming plan is an independent offer. Members may join any of them;
+ * there is no canonical group moment and no expectation that everyone joins.
+ */
+export function circleOffers(
+  records: readonly StoredCircleRecord[],
+  circleId: CircleId,
+  now = Date.now(),
+  members?: ReadonlySet<PublicKeyId> | readonly PublicKeyId[],
+): CircleOffer[] {
+  const memberSet =
+    members === undefined
+      ? null
+      : members instanceof Set
+        ? members
+        : new Set(members);
+  const joinsByPlan = new Map<string, StoredCircleRecord[]>();
+  for (const entry of records) {
+    const record = entry.record;
+    if (
+      record.type !== 'PlanJoin' ||
+      record.circleId !== circleId ||
+      (memberSet && !memberSet.has(record.member))
+    ) {
+      continue;
+    }
+    const list = joinsByPlan.get(record.planId) ?? [];
+    list.push(entry);
+    joinsByPlan.set(record.planId, list);
+  }
+  const offers: CircleOffer[] = [];
+  for (const entry of records) {
+    const record = entry.record;
+    if (
+      record.type !== 'Plan' ||
+      record.circleId !== circleId ||
+      (memberSet && !memberSet.has(record.organizer)) ||
+      record.scheduledAt < now - 5 * 60_000
+    ) {
+      continue;
+    }
+    const joins = (joinsByPlan.get(entry.id) ?? []).sort((left, right) => {
+      const a = left.record as PlanJoinRecord;
+      const b = right.record as PlanJoinRecord;
+      if (a.at !== b.at) return a.at - b.at;
+      return compareStrings(a.member, b.member);
+    });
+    const participants = [
+      ...new Set([
+        record.organizer,
+        ...joins.map((join) => (join.record as PlanJoinRecord).member),
+      ]),
+    ];
+    offers.push({
+      plan: entry,
+      joins,
+      participants,
+      confirmed: participants.length >= 2,
+    });
+  }
+  return offers.sort((left, right) => {
+    const a = left.plan.record as PlanRecord;
+    const b = right.plan.record as PlanRecord;
+    if (a.scheduledAt !== b.scheduledAt) return a.scheduledAt - b.scheduledAt;
+    return compareStrings(left.plan.id, right.plan.id);
+  });
 }
 
 export interface CreateCircleWindowInput {

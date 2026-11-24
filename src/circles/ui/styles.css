@@ -624,6 +624,26 @@ h1 {
   color: var(--muted, #6d655a);
 }
 
+.circle-offer {
+  margin: 12px 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--line, rgba(21, 19, 16, 0.1));
+}
+
+.offer-state {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 9px !important;
+  color: var(--muted, #6d655a) !important;
+}
+
+.offer-state.is-confirmed {
+  color: #47613f !important;
+}
+
+.offer-state.is-pending {
+  color: #9d3c23 !important;
+}
+
 .plan-label {
   display: block;
   margin: 8px 0 4px;

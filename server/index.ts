@@ -20,6 +20,7 @@ import type {
   ClientSignalMessage,
   JoinRequest,
   PresenceEntry,
+  RendezvousNotice,
   RendezvousWire,
   RtcSignalPayload,
   ServerSignalMessage,
@@ -192,17 +193,11 @@ function deliverPending(target: ClientState): void {
     }
   }
   for (const rendezvous of store.rendezvous) {
-    if (rendezvous.toId === target.id) {
+    const intended = rendezvous.noticeTo ?? rendezvous.toId;
+    if (intended === target.id) {
       send(target.ws, {
         type: 'rendezvous:notice',
-        rendezvous: {
-          id: rendezvous.id,
-          fromId: rendezvous.fromId,
-          fromName: rendezvous.fromName,
-          scheduledFor: rendezvous.scheduledFor,
-          createdAt: rendezvous.createdAt,
-          liveAudioDisabled: rendezvous.liveAudioDisabled === true,
-        },
+        rendezvous: rendezvousNotice(rendezvous),
       });
     }
   }
@@ -253,6 +248,75 @@ function sanitizeRendezvous(value: unknown, state: ClientState): RendezvousWire 
     scheduledFor: input.scheduledFor,
     createdAt: Date.now(),
     liveAudioDisabled: input.liveAudioDisabled === true,
+    proposedBy: state.id ?? '',
+    confirmedBy: [],
+    revision: 0,
+    noticeTo: input.toId,
+  };
+}
+
+function rendezvousNotice(rendezvous: RendezvousWire): RendezvousNotice {
+  return {
+    id: rendezvous.id,
+    fromId: rendezvous.fromId,
+    fromName: rendezvous.fromName,
+    scheduledFor: rendezvous.scheduledFor,
+    createdAt: rendezvous.createdAt,
+    liveAudioDisabled: rendezvous.liveAudioDisabled === true,
+    proposedBy: rendezvous.proposedBy ?? rendezvous.fromId,
+    confirmedBy: [...(rendezvous.confirmedBy ?? [])],
+    revision: rendezvous.revision ?? 0,
+  };
+}
+
+function sanitizeRendezvousUpdate(
+  value: unknown,
+  state: ClientState,
+): RendezvousWire | null {
+  if (!value || typeof value !== 'object') return null;
+  const input = value as Partial<RendezvousWire>;
+  if (
+    typeof input.id !== 'string' ||
+    !/^rv_[A-Za-z0-9_-]{12,32}$/u.test(input.id) ||
+    typeof input.fromId !== 'string' ||
+    !isPeerId(input.fromId) ||
+    typeof input.toId !== 'string' ||
+    !isPeerId(input.toId) ||
+    input.fromId === input.toId ||
+    (input.fromId !== state.id && input.toId !== state.id) ||
+    typeof input.fromName !== 'string' ||
+    typeof input.scheduledFor !== 'number' ||
+    !Number.isFinite(input.scheduledFor) ||
+    input.scheduledFor < 0 ||
+    input.scheduledFor > Date.now() + 10 * 365 * 24 * 60 * 60 * 1000 ||
+    typeof input.createdAt !== 'number' ||
+    !Number.isFinite(input.createdAt) ||
+    (input.liveAudioDisabled !== undefined &&
+      typeof input.liveAudioDisabled !== 'boolean') ||
+    typeof input.proposedBy !== 'string' ||
+    (input.proposedBy !== input.fromId && input.proposedBy !== input.toId) ||
+    !Array.isArray(input.confirmedBy) ||
+    !input.confirmedBy.every(
+      (id): id is string =>
+        typeof id === 'string' && (id === input.fromId || id === input.toId),
+    ) ||
+    typeof input.revision !== 'number' ||
+    !Number.isSafeInteger(input.revision) ||
+    input.revision < 0
+  ) {
+    return null;
+  }
+  return {
+    id: input.id,
+    fromId: input.fromId,
+    fromName: normalizeName(input.fromName),
+    toId: input.toId,
+    scheduledFor: input.scheduledFor,
+    createdAt: input.createdAt,
+    liveAudioDisabled: input.liveAudioDisabled === true,
+    proposedBy: input.proposedBy,
+    confirmedBy: [...new Set(input.confirmedBy)],
+    revision: input.revision,
   };
 }
 
@@ -513,14 +577,82 @@ async function handleRendezvousCreate(state: ClientState, input: unknown): Promi
   if (target) {
     send(target, {
       type: 'rendezvous:notice',
-      rendezvous: {
-        id: rendezvous.id,
-        fromId: rendezvous.fromId,
-        fromName: rendezvous.fromName,
-        scheduledFor: rendezvous.scheduledFor,
-        createdAt: rendezvous.createdAt,
-        liveAudioDisabled: rendezvous.liveAudioDisabled === true,
-      },
+      rendezvous: rendezvousNotice(rendezvous),
+    });
+  }
+}
+
+async function handleRendezvousUpdate(
+  state: ClientState,
+  action: unknown,
+  input: unknown,
+): Promise<void> {
+  if (action !== 'counter' && action !== 'confirm') {
+    fail(state.ws, 'invalid-rendezvous', 'Invalid rendezvous update.');
+    return;
+  }
+  const wire = sanitizeRendezvousUpdate(input, state);
+  if (!wire || !state.id) {
+    fail(state.ws, 'invalid-rendezvous', 'Invalid rendezvous update.');
+    return;
+  }
+  const existing = store.rendezvous.find((entry) => entry.id === wire.id);
+  const revision = wire.revision ?? 0;
+  if (existing) {
+    if (existing.fromId !== wire.fromId || existing.toId !== wire.toId) {
+      fail(state.ws, 'invalid-rendezvous', 'Invalid rendezvous update.');
+      return;
+    }
+    if (action === 'counter') {
+      if (revision <= (existing.revision ?? 0)) {
+        send(state.ws, { type: 'rendezvous:updated', id: wire.id });
+        return;
+      }
+      existing.scheduledFor = wire.scheduledFor;
+      existing.proposedBy = state.id;
+      existing.confirmedBy = [];
+      existing.liveAudioDisabled = wire.liveAudioDisabled === true;
+      existing.revision = revision;
+      existing.noticeTo = existing.fromId === state.id ? existing.toId : existing.fromId;
+    } else {
+      if (
+        revision < (existing.revision ?? 0) ||
+        wire.scheduledFor !== existing.scheduledFor ||
+        wire.proposedBy !== (existing.proposedBy ?? existing.fromId)
+      ) {
+        send(state.ws, { type: 'rendezvous:updated', id: wire.id });
+        return;
+      }
+      existing.confirmedBy = [
+        ...new Set([...(existing.confirmedBy ?? []), ...(wire.confirmedBy ?? []), state.id]),
+      ];
+      existing.revision = Math.max(existing.revision ?? 0, revision);
+      existing.noticeTo = existing.fromId === state.id ? existing.toId : existing.fromId;
+    }
+    store.upsertRendezvous(existing);
+  } else {
+    const stored: RendezvousWire = {
+      ...wire,
+      proposedBy: action === 'counter' ? state.id : wire.proposedBy,
+      confirmedBy:
+        action === 'counter'
+          ? []
+          : [...new Set([...(wire.confirmedBy ?? []), state.id])],
+      noticeTo: wire.fromId === state.id ? wire.toId : wire.fromId,
+    };
+    store.addRendezvous(stored);
+  }
+
+  const current = store.rendezvous.find((entry) => entry.id === wire.id);
+  if (!current) return;
+  await store.persist();
+  send(state.ws, { type: 'rendezvous:updated', id: current.id });
+  const otherId = current.fromId === state.id ? current.toId : current.fromId;
+  const target = online.get(otherId);
+  if (target) {
+    send(target, {
+      type: 'rendezvous:notice',
+      rendezvous: rendezvousNotice(current),
     });
   }
 }
@@ -715,10 +847,13 @@ async function handleMessage(ws: WebSocket, message: ClientSignalMessage): Promi
     case 'rendezvous:create':
       await handleRendezvousCreate(state, message.rendezvous);
       break;
+    case 'rendezvous:update':
+      await handleRendezvousUpdate(state, message.action, message.rendezvous);
+      break;
     case 'rendezvous:ack': {
       if (typeof message.id !== 'string') return;
       const rendezvous = store.rendezvous.find((entry) => entry.id === message.id);
-      if (rendezvous?.toId === state.id) {
+      if (rendezvous && (rendezvous.noticeTo ?? rendezvous.toId) === state.id) {
         store.removeRendezvous(message.id);
         await store.persist();
       }
