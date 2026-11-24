@@ -35,6 +35,7 @@ import {
 } from './possession';
 import type {
   CircleRendezvousInvite,
+  InviteCircle,
   InvitePayload,
   JoinRequest,
   PresenceEntry,
@@ -312,13 +313,29 @@ export class RendezvousClient {
     return sent;
   }
 
-  /** Create a bearer link that also establishes the human relationship. */
+  /**
+   * Create a self-contained circle link. The embedded signed records let the
+   * opener join the circle without contacting the inviter; the inviter is only
+   * needed later for ordinary circle sync.
+   */
+  async createCircleLink(circle: InviteCircle): Promise<string> {
+    const token = await createInviteToken(this.requireIdentity(), {
+      circleId: circle.id,
+      circle,
+    });
+    return buildInviteUrl(token);
+  }
+
+  /**
+   * Legacy membership-only link. New links should use `createCircleLink` so
+   * membership does not depend on the inviter being online.
+   */
   async createCircleInviteLink(circleId: string): Promise<string> {
     const token = await createInviteToken(this.requireIdentity(), { circleId });
     return buildInviteUrl(token);
   }
 
-/** Publish a signed circle rendezvous invite for the server's expiring queue. */
+  /** Publish a signed circle rendezvous invite for the server's expiring queue. */
   publishCircleRendezvousInvite(
     invite: Omit<CircleRendezvousInvite, 'fromId' | 'fromName' | 'createdAt'>,
   ): boolean {
@@ -627,6 +644,20 @@ export class RendezvousClient {
           : `The link is saved. You and ${displayName(human.name)} will find each other whenever you’re both here.`,
         humanId: human.id,
       });
+      if (invite.circle) {
+        this.emit('circleLink', {
+          circle: invite.circle,
+          inviterId: invite.id,
+          inviterName: human.name,
+          humanId: human.id,
+        });
+      } else if (invite.circleId) {
+        this.emit('circleMemberRequest', {
+          circleId: invite.circleId,
+          humanId: human.id,
+          humanName: human.name,
+        });
+      }
       this.emitState();
       void this.flushPending();
     } catch (error) {

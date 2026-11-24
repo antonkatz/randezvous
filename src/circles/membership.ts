@@ -79,7 +79,12 @@ function timedRecords(records: readonly StoredCircleRecord[], circleId: CircleId
   for (const entry of records) {
     const record = entry.record;
     if (!isCircleScopedRecord(record) || record.circleId !== circleId) continue;
-    if (record.type === 'Invite' || record.type === 'Join' || record.type === 'Leave') {
+    if (
+      record.type === 'Invite' ||
+      record.type === 'LinkInvite' ||
+      record.type === 'Join' ||
+      record.type === 'Leave'
+    ) {
       result.push({
         at: record.at,
         id: entry.id,
@@ -146,6 +151,16 @@ function deriveChain(
       if (a.record.at !== b.record.at) return a.record.at - b.record.at;
       return compareStrings(a.entryId, b.entryId);
     });
+  const linkInvites = events
+    .filter((event) => event.record.type === 'LinkInvite')
+    .map((event) => ({
+      entryId: event.id,
+      record: event.record as Extract<CircleRecord, { type: 'LinkInvite' }>,
+    }))
+    .sort((a, b) => {
+      if (a.record.at !== b.record.at) return a.record.at - b.record.at;
+      return compareStrings(a.entryId, b.entryId);
+    });
 
   for (const event of events) {
     if (event.record.type === 'Leave') {
@@ -164,7 +179,19 @@ function deriveChain(
         wasValidAt(candidate.record.inviter, candidate.record.at) &&
         wasValidAt(candidate.record.inviter, join.at),
     );
-    if (invitation) open(join.member, join.at);
+    if (invitation) {
+      open(join.member, join.at);
+      continue;
+    }
+
+    const link = linkInvites.find(
+      (candidate) =>
+        candidate.record.at <= join.at &&
+        candidate.record.expiresAt >= join.at &&
+        wasValidAt(candidate.record.inviter, candidate.record.at) &&
+        wasValidAt(candidate.record.inviter, join.at),
+    );
+    if (link) open(join.member, join.at);
   }
 
   return { current, intervals };

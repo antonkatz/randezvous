@@ -120,6 +120,54 @@ describe('signed invitations and joins', () => {
     });
   });
 
+  it('round-trips a self-contained circle rendezvous link', async () => {
+    const ana = await makeIdentity('Ana');
+    const scheduledFor = Date.now() + 60_000;
+    const token = await createInviteToken(ana, {
+      rendezvous: {
+        id: 'rv_circle123456789',
+        scheduledFor,
+        createdAt: Date.now(),
+      },
+      circle: {
+        id: 'c_moon_garden',
+        linkId: 'lr_link123',
+        records: [
+          {
+            id: 'lr_link123',
+            record: {
+              type: 'LinkInvite',
+              circleId: 'c_moon_garden',
+              inviter: ana.id,
+              planId: 'pl_offer123',
+              at: Date.now(),
+              expiresAt: scheduledFor + 5 * 60_000,
+              sig: 'not-checked-by-the-token',
+            },
+          },
+        ],
+        plan: {
+          id: 'pl_offer123',
+          record: {
+            type: 'Plan',
+            circleId: 'c_moon_garden',
+            scheduledAt: scheduledFor,
+          },
+        },
+        keys: { [ana.id]: ana.publicKey },
+      },
+    });
+    const invite = await verifyInviteToken(token);
+
+    expect(token.startsWith('v3.')).toBe(true);
+    expect(invite.rendezvous?.id).toBe('rv_circle123456789');
+    expect(invite.circle?.id).toBe('c_moon_garden');
+    expect(invite.circle?.linkId).toBe('lr_link123');
+    expect(invite.circle?.records).toHaveLength(1);
+    expect(invite.circle?.keys[ana.id]).toBe(ana.publicKey);
+    expect(invite.circleId).toBe('c_moon_garden');
+  });
+
   it('still verifies legacy v1 invitation links', async () => {
     const ana = await makeIdentity('Ana');
     const payload = {

@@ -8,6 +8,7 @@ import {
   makeInvite,
   makeJoin,
   makeLeave,
+  makeLinkInvite,
   type TestIdentity,
 } from './testing';
 import type { MemberOverride, StoredCircleRecord } from './types';
@@ -78,6 +79,48 @@ describe('membership chain', () => {
     expect(result.shouldAcceptConnection(circleId, 'stranger')).toBe(false);
     expect(shouldAcceptConnection(result, circleId, baz.selfKey)).toBe(true);
     expect(shouldAcceptConnection(result, 'other-circle', baz.selfKey)).toBe(false);
+  });
+
+  it('admits a bearer link join before expiry and rejects it afterwards', async () => {
+    const { identities } = await createTestIdentities(3);
+    const [ana, baz, cy] = identities;
+    if (!ana || !baz || !cy) throw new Error('identities missing');
+
+    const records: StoredCircleRecord[] = [
+      await createCircle(ana),
+      await makeLinkInvite(ana, {
+        circleId,
+        planId: 'plan-offer',
+        at: 2_000,
+        expiresAt: 5_000,
+      }),
+      await makeJoin(baz, { circleId, at: 3_000 }),
+      await makeJoin(cy, { circleId, at: 5_001 }),
+    ];
+    const friends = new MemoryFriends([baz.selfKey, cy.selfKey]);
+    const result = view(records, ana, friends);
+    expect(result.members).toEqual([ana.selfKey, baz.selfKey].sort());
+  });
+
+  it('does not let a departed member grant link membership', async () => {
+    const { identities } = await createTestIdentities(3);
+    const [ana, baz, cy] = identities;
+    if (!ana || !baz || !cy) throw new Error('identities missing');
+
+    const records = [
+      await createCircle(ana),
+      ...(await addMembers(ana, [baz])),
+      await makeLeave(baz, { circleId, at: 4_000 }),
+      await makeLinkInvite(baz, {
+        circleId,
+        planId: null,
+        at: 5_000,
+        expiresAt: 9_000,
+      }),
+      await makeJoin(cy, { circleId, at: 6_000 }),
+    ];
+    const result = view(records, ana, new MemoryFriends([baz.selfKey, cy.selfKey]));
+    expect(result.members).toEqual([ana.selfKey]);
   });
 
   it('rejects joins without an invite or through a non-member', async () => {

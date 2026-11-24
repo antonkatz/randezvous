@@ -19,6 +19,7 @@ const MEMBERSHIP_TYPES = new Set([
   'Invite',
   'Join',
   'Leave',
+  'LinkInvite',
 ]);
 
 const EMPTY_FRIENDS: Friends = {
@@ -186,6 +187,162 @@ export async function createCircleInvite(
     at: input.at,
     records: sorted([...history, invite]),
     invite,
+  };
+}
+
+export interface CreateCircleLinkInviteInput {
+  identity: Identity;
+  records: readonly StoredCircleRecord[];
+  circleId: CircleId;
+  /** Bound circle offer, or null for a membership-only link. */
+  planId: string | null;
+  at: number;
+  expiresAt: number;
+  friends?: Friends;
+  overrides?: Readonly<Record<PublicKeyId, MemberOverride>>;
+}
+
+export interface CreatedCircleLinkInvite {
+  /** The signed LinkInvite. It is also present in `records`. */
+  link: StoredCircleRecord;
+  /** Membership proof plus the new LinkInvite, sorted by content id. */
+  records: StoredCircleRecord[];
+}
+
+/**
+ * Sign a bearer membership grant for a circle rendezvous link. The link is
+ * out-of-band and intentionally not addressed to one key; anyone holding it may
+ * join until `expiresAt`. The caller embeds the returned records in the link.
+ */
+export async function createCircleLinkInvite(
+  input: CreateCircleLinkInviteInput,
+): Promise<CreatedCircleLinkInvite> {
+  if (!Number.isFinite(input.at) || !Number.isSafeInteger(input.at) || input.at < 0) {
+    throw new Error('Invitation time must be a UTC timestamp');
+  }
+  if (
+    !Number.isFinite(input.expiresAt) ||
+    !Number.isSafeInteger(input.expiresAt) ||
+    input.expiresAt <= input.at
+  ) {
+    throw new Error('Invitation expiry must follow its creation');
+  }
+  if (input.planId !== null && input.planId.length === 0) {
+    throw new Error('planId must not be empty');
+  }
+
+  const scoped = input.records.filter(
+    (entry) =>
+      isMembershipEntry(entry) &&
+      isCircleScopedRecord(entry.record) &&
+      entry.record.circleId === input.circleId,
+  );
+  const verified = await mergeRecords(input.identity, [], scoped, {
+    circleId: input.circleId,
+  });
+  if (verified.rejected.length > 0) throw firstRejection(verified);
+  if (verified.records.length === 0) throw new Error('Circle records are missing');
+
+  const view = deriveMemberView(
+    verified.records,
+    input.identity.selfKey,
+    input.friends ?? EMPTY_FRIENDS,
+    input.overrides ?? {},
+    { circleId: input.circleId },
+  );
+  if (!view.members.includes(input.identity.selfKey)) {
+    throw new Error('Only a current member can create a circle link');
+  }
+
+  const link = await signRecord(input.identity, {
+    type: 'LinkInvite',
+    circleId: input.circleId,
+    inviter: input.identity.selfKey,
+    planId: input.planId,
+    at: input.at,
+    expiresAt: input.expiresAt,
+  });
+
+  return {
+    link,
+    records: sorted([...verified.records, link]),
+  };
+}
+
+export interface AcceptCircleLinkInviteInput {
+  identity: Identity;
+  /** Membership proof and LinkInvite carried by the link. */
+  records: readonly StoredCircleRecord[];
+  circleId: CircleId;
+  linkId: string;
+  at: number;
+  friends?: Friends;
+  overrides?: Readonly<Record<PublicKeyId, MemberOverride>>;
+}
+
+export interface CircleLinkInviteAcceptance {
+  /** Verified records plus the local Join, when one was needed. */
+  records: StoredCircleRecord[];
+  join: StoredCircleRecord | null;
+}
+
+/**
+ * Verify a circle link locally and sign the opener's Join. No inviter
+ * connection is required. Reopening a link from an existing member is
+ * idempotent and creates no duplicate Join.
+ */
+export async function acceptCircleLinkInvite(
+  input: AcceptCircleLinkInviteInput,
+): Promise<CircleLinkInviteAcceptance> {
+  if (!Number.isFinite(input.at) || !Number.isSafeInteger(input.at) || input.at < 0) {
+    throw new Error('Join time must be a UTC timestamp');
+  }
+  const verified = await mergeRecords(input.identity, [], input.records, {
+    circleId: input.circleId,
+  });
+  if (verified.rejected.length > 0) throw firstRejection(verified);
+
+  const linkEntry = verified.records.find(
+    (entry) => entry.id === input.linkId && entry.record.type === 'LinkInvite',
+  );
+  if (!linkEntry || linkEntry.record.type !== 'LinkInvite') {
+    throw new Error('This link has no valid circle invitation');
+  }
+  const link = linkEntry.record;
+  if (link.circleId !== input.circleId) {
+    throw new Error('The circle link belongs to another circle');
+  }
+  if (input.at < link.at) throw new Error('Join cannot predate the link');
+  if (input.at > link.expiresAt) {
+    throw new Error('This circle invitation link has expired');
+  }
+  if (!memberValidAt(verified.records, input.circleId, link.inviter, input.at)) {
+    throw new Error('The inviter is not a current member of this circle');
+  }
+
+  const view = deriveMemberView(
+    verified.records,
+    input.identity.selfKey,
+    input.friends ?? EMPTY_FRIENDS,
+    input.overrides ?? {},
+    { circleId: input.circleId },
+  );
+  if (view.members.includes(input.identity.selfKey)) {
+    return { records: verified.records, join: null };
+  }
+  if (view.banned.includes(input.identity.selfKey)) {
+    throw new Error('You are banned in this circle');
+  }
+
+  const join = await signRecord(input.identity, {
+    type: 'Join',
+    circleId: input.circleId,
+    member: input.identity.selfKey,
+    at: input.at,
+  });
+  return {
+    records: sorted([...verified.records, join]),
+    join,
   };
 }
 

@@ -101,6 +101,18 @@ export class CircleStatsPage extends HTMLElement {
         );
         return;
       }
+      if (target.getAttribute('data-action') === 'offer-link') {
+        const planId = target.getAttribute('data-plan-id');
+        if (!planId) return;
+        this.dispatchEvent(
+          new CustomEvent('circle-offer-link', {
+            detail: { circleId: this.stateStats.circleId, planId },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        return;
+      }
       if (target.getAttribute('data-action') === 'join-plan') {
         const planId = target.getAttribute('data-plan-id');
         if (!planId) return;
@@ -266,7 +278,7 @@ export class CircleStatsPage extends HTMLElement {
     const inviteBlock = `
         <section class="invite" part="invite">
           <h2>invite a human</h2>
-          <p>A circle invitation is also a human invitation. Existing humans receive it over your connection; someone new redeems a link that creates the human link first.</p>
+          <p>A circle invitation is also a human invitation. Existing humans receive it over your connection; someone new redeems a link that creates the human link and the circle membership locally.</p>
           ${
             inviteCandidates.length > 0
               ? `<ul class="invite-list">
@@ -293,7 +305,7 @@ export class CircleStatsPage extends HTMLElement {
                     <input id="new-circle-link" readonly value="${escapeHtml(this.stateNewInviteLink)}">
                     <button type="button" class="invite-button" data-action="copy-new-invite">copy</button>
                   </div>
-                  <p>Opening this link creates the direct-human link, then sends the signed circle invitation over that connection.</p>
+                  <p>Opening this link creates the direct-human link, adds the person to this circle immediately, and joins the offered moment when the link came from one. The inviter does not need to be online.</p>
                 </div>`
               : ''
           }
@@ -320,6 +332,7 @@ export class CircleStatsPage extends HTMLElement {
                   <p class="offer-state ${offer.confirmed ? 'is-confirmed' : 'is-pending'}">${offer.confirmed ? `confirmed · ${offer.participants.length} going` : 'pending · waiting for someone to join'}${people ? ` · ${escapeHtml(people)}` : ''}</p>
                   <div class="plan-row">
                     <button type="button" class="invite-button" data-action="join-plan" data-plan-id="${escapeHtml(offer.plan.id)}" ${organizer || joined ? 'disabled' : ''}>${organizer ? 'your offer' : joined ? 'joined' : 'join this moment'}</button>
+                    <button type="button" class="dashboard-button" data-action="offer-link" data-plan-id="${escapeHtml(offer.plan.id)}">invite by link</button>
                   </div>
                 </div>`;
             })

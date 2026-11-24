@@ -14,6 +14,7 @@ import {
   verifyText,
 } from './crypto';
 import type {
+  InviteCircle,
   InvitePayload,
   InviteRendezvous,
   JoinRequest,
@@ -23,8 +24,10 @@ import type { PublicIdentity, StoredIdentity } from './types';
 
 const INVITE_VERSION = 'v1';
 const INVITE_VERSION_COMPACT = 'v2';
+const INVITE_VERSION_CIRCLE = 'v3';
 const INVITE_DOMAIN = 'rendezvous/invite/v1';
 const INVITE_DOMAIN_COMPACT = 'rendezvous/invite/v2';
+const INVITE_DOMAIN_CIRCLE = 'rendezvous/invite/v3';
 const JOIN_DOMAIN = 'rendezvous/join/v1';
 const JOIN_PROOF_TRANSCRIPT_VERSION = 'rendezvous/join-proof/v1';
 const COMPACT_VERSION = 2;
@@ -299,6 +302,54 @@ function parseCircleId(value: unknown): string | undefined {
   return value;
 }
 
+function parseCircle(value: unknown): InviteCircle | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid invitation');
+  }
+  const circle = value as Partial<InviteCircle>;
+  if (
+    typeof circle.id !== 'string' ||
+    circle.id.length === 0 ||
+    circle.id.length > 512 ||
+    typeof circle.linkId !== 'string' ||
+    circle.linkId.length === 0 ||
+    circle.linkId.length > 512 ||
+    !Array.isArray(circle.records) ||
+    circle.records.length > 2_000 ||
+    !circle.records.every(
+      (entry) => entry !== null && typeof entry === 'object' && !Array.isArray(entry),
+    ) ||
+    (circle.plan !== undefined &&
+      (circle.plan === null ||
+        typeof circle.plan !== 'object' ||
+        Array.isArray(circle.plan))) ||
+    !circle.keys ||
+    typeof circle.keys !== 'object' ||
+    Array.isArray(circle.keys)
+  ) {
+    throw new Error('Invalid invitation');
+  }
+  const keys: Record<string, string> = {};
+  for (const [id, publicKey] of Object.entries(circle.keys)) {
+    if (
+      !isPeerId(id) ||
+      typeof publicKey !== 'string' ||
+      !isRawPublicKey(publicKey)
+    ) {
+      throw new Error('Invalid invitation');
+    }
+    keys[id] = publicKey;
+  }
+  return {
+    id: circle.id,
+    linkId: circle.linkId,
+    records: circle.records,
+    ...(circle.plan !== undefined ? { plan: circle.plan } : {}),
+    keys,
+  };
+}
+
 function parsePayload(raw: string): InvitePayload {
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== 'object') throw new Error('Invalid invitation');
@@ -319,6 +370,7 @@ function parsePayload(raw: string): InvitePayload {
   }
   const rendezvous = parseRendezvous(payload.rendezvous);
   const circleId = parseCircleId(payload.circleId);
+  const circle = parseCircle(payload.circle);
   const parsedPayload: InvitePayload = {
     v: 1,
     id: payload.id,
@@ -329,12 +381,14 @@ function parsePayload(raw: string): InvitePayload {
   };
   if (rendezvous) parsedPayload.rendezvous = rendezvous;
   if (circleId) parsedPayload.circleId = circleId;
+  if (circle) parsedPayload.circle = circle;
   return parsedPayload;
 }
 
 export interface InviteTokenOptions {
   rendezvous?: InviteRendezvous;
   circleId?: string;
+  circle?: InviteCircle;
 }
 
 function normalizeInviteOptions(
@@ -357,6 +411,27 @@ export async function createInviteToken(
 ): Promise<string> {
   const options = normalizeInviteOptions(optionsOrRendezvous);
   const issuedAt = Date.now();
+
+  if (options.circle) {
+    if (options.circleId && options.circleId !== options.circle.id) {
+      throw new Error('Invalid invitation circle');
+    }
+    const payload: InvitePayload = {
+      v: 1,
+      id: identity.id,
+      name: normalizeName(identity.name),
+      publicKey: identity.publicKey,
+      issuedAt,
+      nonce: randomToken(12),
+      circleId: options.circle.id,
+      circle: options.circle,
+      ...(options.rendezvous ? { rendezvous: options.rendezvous } : {}),
+    };
+    const bytes = invitePayloadBytes(payload);
+    const signature = await signDomain(identity.privateKey, INVITE_DOMAIN_CIRCLE, bytes);
+    return `${INVITE_VERSION_CIRCLE}.${bytesToBase64Url(bytes)}.${signature}`;
+  }
+
   const bytes = encodeCompactPayload(identity, options.rendezvous, options.circleId, issuedAt);
   const signature = await signDomain(identity.privateKey, INVITE_DOMAIN_COMPACT, bytes);
   return `${INVITE_VERSION_COMPACT}.${bytesToBase64Url(bytes)}.${signature}`;
@@ -385,6 +460,28 @@ export async function verifyInviteToken(token: string): Promise<InvitePayload> {
     const valid = await verifyDomain(
       payload.publicKey,
       INVITE_DOMAIN_COMPACT,
+      bytes,
+      signature,
+    );
+    if (!valid) throw new Error('Invalid invitation signature');
+    return payload;
+  }
+
+  if (parts[0] === INVITE_VERSION_CIRCLE) {
+    let bytes: Uint8Array;
+    let payload: InvitePayload;
+    try {
+      bytes = base64UrlToBytes(payloadPart);
+      payload = parsePayload(new TextDecoder().decode(bytes));
+    } catch {
+      throw new Error('Invalid invitation');
+    }
+    if (!payload.circle) throw new Error('Invalid invitation');
+    const expectedId = await derivePeerId(base64UrlToBytes(payload.publicKey));
+    if (expectedId !== payload.id) throw new Error('Invitation identity mismatch');
+    const valid = await verifyDomain(
+      payload.publicKey,
+      INVITE_DOMAIN_CIRCLE,
       bytes,
       signature,
     );

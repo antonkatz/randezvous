@@ -41,6 +41,23 @@ export interface JoinRecord {
   sig: string;
 }
 
+/**
+ * A bearer membership grant carried inside a circle rendezvous link. Unlike an
+ * Invite, it is not addressed to one key: any browser that opens the link may
+ * sign a Join until `expiresAt`. The inviter must be a valid member at both the
+ * grant and the join. It carries no media.
+ */
+export interface LinkInviteRecord {
+  type: 'LinkInvite';
+  circleId: CircleId;
+  inviter: PublicKeyId;
+  /** The circle offer this link belongs to, or null for a membership-only link. */
+  planId: string | null;
+  at: number;
+  expiresAt: number;
+  sig: string;
+}
+
 export interface LeaveRecord {
   type: 'Leave';
   circleId: CircleId;
@@ -123,6 +140,7 @@ export type CircleRecord =
   | InviteRecord
   | JoinRecord
   | LeaveRecord
+  | LinkInviteRecord
   | BanVoteRecord
   | PlanRecord
   | PlanJoinRecord
@@ -150,6 +168,7 @@ export function isCircleScopedRecord(
   | InviteRecord
   | JoinRecord
   | LeaveRecord
+  | LinkInviteRecord
   | BanVoteRecord
   | PlanRecord
   | PlanJoinRecord
@@ -160,6 +179,7 @@ export function isCircleScopedRecord(
     record.type === 'Invite' ||
     record.type === 'Join' ||
     record.type === 'Leave' ||
+    record.type === 'LinkInvite' ||
     record.type === 'BanVote' ||
     record.type === 'Plan' ||
     record.type === 'PlanJoin' ||
@@ -179,6 +199,7 @@ export function recordAuthor(record: CircleRecord): PublicKeyId {
     case 'CircleCreated':
       return record.creator;
     case 'Invite':
+    case 'LinkInvite':
       return record.inviter;
     case 'Join':
     case 'Leave':
@@ -205,6 +226,7 @@ export function recordTimestamp(record: CircleRecord): number {
     case 'Invite':
     case 'Join':
     case 'Leave':
+    case 'LinkInvite':
     case 'BanVote':
       return record.at;
     case 'Plan':

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { createRendezvousLink, setName } from './helpers';
 
 test('the circle bar creates, selects, and marks the active circle', async ({ page }) => {
   await page.goto('/');
@@ -47,4 +48,24 @@ test('the circle bar creates, selects, and marks the active circle', async ({ pa
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText('Sunday table');
   await expect(circle).toHaveAttribute('aria-current', 'true');
+});
+
+test('a circle can be created while a rendezvous is already waiting', async ({ page }) => {
+  await page.goto('/');
+  await setName(page, 'Ana');
+  await createRendezvousLink(page);
+
+  // A pending rendezvous hides the large hero action; the circle dock does not
+  // gate circle creation on an empty or idle schedule.
+  await expect(page.locator('#set-rendezvous')).toBeHidden();
+  const bar = page.locator('circle-bar');
+  const create = bar.getByRole('button', { name: 'Create a circle' });
+  await expect(create).toBeVisible();
+  await create.click();
+
+  const form = page.locator('circle-create-form');
+  await form.locator('input[name="name"]').fill('While Waiting');
+  await form.locator('input[name="timezone"]').fill('Europe/Berlin');
+  await form.getByRole('button', { name: 'create circle' }).click();
+  await expect(bar.getByRole('button', { name: 'While Waiting' })).toBeVisible();
 });

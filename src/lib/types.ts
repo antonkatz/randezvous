@@ -1,3 +1,5 @@
+import type { InviteCircle } from './protocol';
+
 /** Public, shareable identity. `publicKey` is a base64url-encoded raw P-256 key. */
 export interface PublicIdentity {
   id: string;
@@ -288,6 +290,13 @@ export interface CircleMemberRequestEvent {
   humanName: string;
 }
 
+export interface CircleLinkEvent {
+  circle: InviteCircle;
+  inviterId: string;
+  inviterName: string;
+  humanId: string;
+}
+
 export interface AudioEvent {
   audio: AudioSnapshot;
 }
@@ -311,6 +320,7 @@ export interface RendezvousClientEvents {
   app: AppRelayEvent;
   circleRendezvous: CircleRendezvousEvent;
   circleMemberRequest: CircleMemberRequestEvent;
+  circleLink: CircleLinkEvent;
   audio: AudioEvent;
 }
 

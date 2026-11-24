@@ -22,6 +22,7 @@ import type {
   InviteRecord,
   JoinRecord,
   LeaveRecord,
+  LinkInviteRecord,
   PeerChannel,
   PlanRecord,
   PublicKeyId,
@@ -161,6 +162,20 @@ export async function makeInvite(
     invitee: input.invitee,
     inviter: inviter.selfKey,
     at: input.at,
+  });
+}
+
+export async function makeLinkInvite(
+  inviter: Identity,
+  input: Omit<LinkInviteRecord, 'type' | 'inviter' | 'sig'>,
+): Promise<StoredCircleRecord> {
+  return signRecord(inviter, {
+    type: 'LinkInvite',
+    circleId: input.circleId,
+    inviter: inviter.selfKey,
+    planId: input.planId,
+    at: input.at,
+    expiresAt: input.expiresAt,
   });
 }
 

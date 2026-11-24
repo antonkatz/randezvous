@@ -23,6 +23,7 @@ export type {
   AudioPhase,
   AudioSnapshot,
   ClientNotice,
+  CircleLinkEvent,
   CircleMemberRequestEvent,
   CircleRelayEvent,
   CircleRendezvousEvent,

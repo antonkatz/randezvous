@@ -13,6 +13,23 @@ export interface InviteRendezvous {
   liveAudioDisabled?: boolean;
 }
 
+/**
+ * Self-contained circle data carried by a circle rendezvous link. The records
+ * are already signed by their authors; the token signature covers this object
+ * as well, so the inviter cannot be impersonated.
+ */
+export interface InviteCircle {
+  id: string;
+  /** Content id of the signed LinkInvite record inside `records`. */
+  linkId: string;
+  /** Membership proof plus the new LinkInvite record. */
+  records: unknown[];
+  /** Optional signed Plan for the circle rendezvous this link belongs to. */
+  plan?: unknown;
+  /** Public keys for record authors, keyed by public-key id. */
+  keys: Record<string, string>;
+}
+
 export interface InvitePayload {
   v: 1;
   id: string;
@@ -26,10 +43,15 @@ export interface InvitePayload {
    */
   rendezvous?: InviteRendezvous;
   /**
-   * When present, redeeming this link also starts circle membership: the
-   * inviter sends the addressed signed Circle Invite once the join arrives.
+   * Legacy circle hint for links that only start membership with the inviter
+   * online. New links carry the self-contained `circle` object instead.
    */
   circleId?: string;
+  /**
+   * When present, redeeming this link signs a Join and appends the included
+   * membership records locally. No inviter connection is required.
+   */
+  circle?: InviteCircle;
 }
 
 export interface JoinRequest {

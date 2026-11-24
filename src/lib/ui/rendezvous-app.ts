@@ -5,6 +5,7 @@ import {
   CircleSync,
   IndexedDbCircleStore,
   acceptCircleInvite,
+  acceptCircleLinkInvite,
   activePrompts,
   activeWindowRecord,
   availableInvitees,
@@ -16,6 +17,7 @@ import {
   createBrowserCircleIdentity,
   createCircle,
   createCircleInvite,
+  createCircleLinkInvite,
   createCirclePlan,
   createCircleWindow,
   createPlanJoin,
@@ -43,9 +45,17 @@ import {
   CircleDashboard,
   defineCircleStatsElements,
 } from '../../circles/ui';
-import { displayName, normalizeName } from '../crypto';
+import {
+  base64UrlToBytes,
+  derivePeerId,
+  displayName,
+  isPeerId,
+  isRawPublicKey,
+  normalizeName,
+} from '../crypto';
 import { formatCountdown, handoffPhase } from '../handoff';
 import { buildInviteUrl } from '../invite';
+import type { InviteCircle } from '../protocol';
 import { formatDuration, MAX_VOICE_NOTE_MS } from '../media';
 import { RendezvousClient } from '../client';
 import { RendezvousStore } from '../store';
@@ -899,6 +909,9 @@ export class RendezvousApp extends HTMLElement {
       this.client.on('circleMemberRequest', (event) => {
         void this.grantCircleInviteFromLink(event);
       }),
+      this.client.on('circleLink', (event) => {
+        void this.acceptCircleLink(event);
+      }),
     );
     this.renderEmptyState();
     try {
@@ -1029,6 +1042,9 @@ export class RendezvousApp extends HTMLElement {
       );
       dashboard.addEventListener('circle-invite-new', (event) =>
         void this.createNewCircleInvite(event),
+      );
+      dashboard.addEventListener('circle-offer-link', (event) =>
+        void this.createCircleOfferLink(event),
       );
       this.circleDashboard = dashboard;
     }
@@ -1664,23 +1680,222 @@ export class RendezvousApp extends HTMLElement {
     return this.circlePeers.get(humanId)?.channel ?? null;
   }
 
+  /**
+   * Build the signed records and keys embedded in a circle link. The link is a
+   * bearer capability: the opener signs their own Join locally, so membership
+   * never waits for the inviter to be online.
+   */
+  private async buildCircleLinkPayload(
+    circleId: string,
+    planId: string | null,
+  ): Promise<InviteCircle> {
+    await this.prepareCircles();
+    const identity = this.circleIdentity;
+    const store = this.circleStore;
+    if (!identity || !store) throw new Error('The circle store is not ready.');
+    const records = await store.load(circleId);
+    const view = deriveMemberView(records, identity.selfKey, this.circleFriends, {}, {
+      circleId,
+    });
+    if (!view.members.includes(identity.selfKey)) {
+      throw new Error('You are not a current member of this circle.');
+    }
+
+    let plan: StoredCircleRecord | undefined;
+    if (planId) {
+      plan = records.find(
+        (entry) => entry.id === planId && entry.record.type === 'Plan',
+      );
+      if (!plan || plan.record.type !== 'Plan') {
+        throw new Error('That circle rendezvous is not in the local record set.');
+      }
+    }
+
+    const now = Date.now();
+    const expiresAt =
+      plan?.record.type === 'Plan'
+        ? plan.record.scheduledAt + 5 * 60_000
+        : now + 7 * 24 * 60 * 60_000;
+    const created = await createCircleLinkInvite({
+      identity,
+      records,
+      circleId,
+      planId,
+      at: now,
+      expiresAt: Math.max(expiresAt, now + 60_000),
+      friends: this.circleFriends,
+    });
+    await store.append(circleId, [created.link]);
+    const keys: Record<string, string> = {};
+    for (const [id, publicKey] of this.circleDirectory.entries()) {
+      keys[id] = publicKey;
+    }
+    if (!keys[identity.selfKey]) keys[identity.selfKey] = this.circleSelfPublicKey ?? '';
+    return {
+      id: circleId,
+      linkId: created.link.id,
+      records: created.records,
+      ...(plan ? { plan } : {}),
+      keys,
+    };
+  }
+
   private async createNewCircleInvite(event: Event): Promise<void> {
     const detail = (event as CustomEvent<{ circleId?: string }>).detail;
     if (!detail?.circleId || !this.client) return;
     try {
-      await this.prepareCircles();
-      const link = await this.client.createCircleInviteLink(detail.circleId);
+      const circle = await this.buildCircleLinkPayload(detail.circleId, null);
+      const link = await this.client.createCircleLink(circle);
       if (this.circleDashboard) this.circleDashboard.newInviteLink = link;
       this.showToast({
         tone: 'info',
         title: 'Circle invitation link ready.',
-        message: 'Opening it creates the human link, then the signed circle invitation follows.',
+        message:
+          'Opening it adds someone new to this circle immediately, even while you are away.',
       });
     } catch (error) {
       this.showToast({
         tone: 'warning',
         title: 'The circle link was not created.',
         message: error instanceof Error ? error.message : 'The local identity is not ready.',
+      });
+    }
+  }
+
+  private async createCircleOfferLink(event: Event): Promise<void> {
+    const detail = (event as CustomEvent<{ circleId?: string; planId?: string }>).detail;
+    if (!detail?.circleId || !detail.planId || !this.client) return;
+    try {
+      const circle = await this.buildCircleLinkPayload(detail.circleId, detail.planId);
+      const link = await this.client.createCircleLink(circle);
+      if (this.circleDashboard) this.circleDashboard.newInviteLink = link;
+      this.showToast({
+        tone: 'info',
+        title: 'Circle rendezvous link ready.',
+        message:
+          'Opening it adds the person to the circle and to this offered moment. You do not need to be online.',
+      });
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'The rendezvous link was not created.',
+        message: error instanceof Error ? error.message : 'The local identity is not ready.',
+      });
+    }
+  }
+
+  private async acceptCircleLink(invite: {
+    circle: InviteCircle;
+    inviterId: string;
+    inviterName: string;
+    humanId: string;
+  }): Promise<void> {
+    try {
+      await this.prepareCircles();
+      const identity = this.circleIdentity;
+      const store = this.circleStore;
+      if (!identity || !store) throw new Error('The circle store is not ready.');
+
+      for (const [id, publicKey] of Object.entries(invite.circle.keys)) {
+        if (!isPeerId(id) || !isRawPublicKey(publicKey)) {
+          throw new Error('The link contains an invalid public key.');
+        }
+        const derived = await derivePeerId(base64UrlToBytes(publicKey));
+        if (derived !== id) throw new Error('The link contains a mismatched public key.');
+        this.circleDirectory.add(id, publicKey);
+      }
+
+      const linkEntry = (invite.circle.records as StoredCircleRecord[]).find(
+        (entry) => entry.id === invite.circle.linkId && entry.record.type === 'LinkInvite',
+      );
+      if (!linkEntry || linkEntry.record.type !== 'LinkInvite') {
+        throw new Error('The link has no valid circle invitation.');
+      }
+      const linkedPlan = linkEntry.record.planId;
+      const offeredPlan = invite.circle.plan as StoredCircleRecord | undefined;
+      if (linkedPlan !== null && offeredPlan?.id !== linkedPlan) {
+        throw new Error('The link is not bound to its offered moment.');
+      }
+      if (linkedPlan === null && offeredPlan) {
+        throw new Error('This membership link cannot carry an offer.');
+      }
+      if (
+        offeredPlan &&
+        (offeredPlan.record.type !== 'Plan' ||
+          offeredPlan.record.circleId !== invite.circle.id)
+      ) {
+        throw new Error('The link carries an offer from another circle.');
+      }
+
+      const acceptance = await acceptCircleLinkInvite({
+        identity,
+        records: invite.circle.records as StoredCircleRecord[],
+        circleId: invite.circle.id,
+        linkId: invite.circle.linkId,
+        at: Date.now(),
+        friends: this.circleFriends,
+      });
+
+      const incoming = [...acceptance.records];
+      if (invite.circle.plan) incoming.push(invite.circle.plan as StoredCircleRecord);
+      const existing = await store.load(invite.circle.id);
+      const merged = await mergeRecords(identity, existing, incoming, {
+        circleId: invite.circle.id,
+      });
+      if (merged.rejected.length > 0) {
+        throw new Error(merged.rejected[0]?.error ?? 'The circle link did not verify.');
+      }
+      if (merged.removed.length > 0) {
+        await store.remove?.(invite.circle.id, merged.removed);
+      }
+      if (merged.added.length > 0) {
+        await store.append(invite.circle.id, merged.added);
+      }
+
+      if (invite.circle.plan) {
+        const plan = invite.circle.plan as StoredCircleRecord;
+        if (
+          plan.record.type === 'Plan' &&
+          plan.record.organizer !== identity.selfKey &&
+          !merged.records.some(
+            (entry) =>
+              entry.record.type === 'PlanJoin' &&
+              entry.record.planId === plan.id &&
+              entry.record.member === identity.selfKey,
+          )
+        ) {
+          const join = await createPlanJoin({
+            identity,
+            circleId: invite.circle.id,
+            planId: plan.id,
+            at: Date.now(),
+          });
+          await store.append(invite.circle.id, [join]);
+        }
+      }
+
+      await this.reloadCircles();
+      await this.selectCircle(invite.circle.id);
+      void this.circleSync?.refresh();
+      const records = await store.load(invite.circle.id);
+      const view = deriveMemberView(records, identity.selfKey, this.circleFriends, {}, {
+        circleId: invite.circle.id,
+      });
+      this.showToast({
+        tone: 'success',
+        title: 'Circle joined.',
+        message: invite.circle.plan
+          ? `You are now in ${view.name || 'the circle'} and joined its offered moment.`
+          : `You are now in ${view.name || 'the circle'}.`,
+      });
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'The circle invitation was not applied.',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'The link contains circle records that did not verify.',
       });
     }
   }

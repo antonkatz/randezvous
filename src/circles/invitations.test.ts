@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   acceptCircleInvite,
+  acceptCircleLinkInvite,
   availableInvitees,
   createCircleInvite,
+  createCircleLinkInvite,
   isCircleInviteMessage,
   loadCircleMembership,
   mergeCircleInviteAcceptance,
@@ -107,6 +109,83 @@ describe('circle invitations', () => {
     expect(anaView.unconnectedToYou).toEqual([]);
     expect(danaView.unconnectedToYou).toContain(baz.selfKey);
     expect(anaView.shouldAcceptConnection(circleId, dana.selfKey)).toBe(true);
+  });
+
+  it('creates a self-contained bearer link and accepts it without the inviter', async () => {
+    const { identities } = await createTestIdentities(3);
+    const [ana, baz, dana] = identities;
+    if (!ana || !baz || !dana) throw new Error('identities missing');
+    const records = await baseMembership(ana, [baz]);
+    const danaFriends = new MemoryFriends([ana.selfKey]);
+
+    const created = await createCircleLinkInvite({
+      identity: ana,
+      records,
+      circleId,
+      planId: 'offer-1',
+      at: 3_000,
+      expiresAt: 10_000,
+    });
+    expect(created.link.record.type).toBe('LinkInvite');
+    expect(created.records.some((entry) => entry.id === created.link.id)).toBe(true);
+
+    const acceptance = await acceptCircleLinkInvite({
+      identity: dana,
+      records: created.records,
+      circleId,
+      linkId: created.link.id,
+      at: 4_000,
+      friends: danaFriends,
+    });
+    expect(acceptance.join?.record.type).toBe('Join');
+    expect(view(acceptance.records, dana, danaFriends).members).toEqual(
+      [ana.selfKey, baz.selfKey, dana.selfKey].sort(),
+    );
+
+    const repeated = await acceptCircleLinkInvite({
+      identity: dana,
+      records: acceptance.records,
+      circleId,
+      linkId: created.link.id,
+      at: 5_000,
+      friends: danaFriends,
+    });
+    expect(repeated.join).toBeNull();
+    expect(repeated.records).toHaveLength(acceptance.records.length);
+  });
+
+  it('refuses an expired or unknown bearer link', async () => {
+    const { identities } = await createTestIdentities(3);
+    const [ana, baz, dana] = identities;
+    if (!ana || !baz || !dana) throw new Error('identities missing');
+    const records = await baseMembership(ana, [baz]);
+    const created = await createCircleLinkInvite({
+      identity: ana,
+      records,
+      circleId,
+      planId: null,
+      at: 3_000,
+      expiresAt: 4_000,
+    });
+
+    await expect(
+      acceptCircleLinkInvite({
+        identity: dana,
+        records: created.records,
+        circleId,
+        linkId: created.link.id,
+        at: 4_001,
+      }),
+    ).rejects.toThrow(/expired/u);
+    await expect(
+      acceptCircleLinkInvite({
+        identity: dana,
+        records: created.records,
+        circleId,
+        linkId: 'missing-link',
+        at: 3_500,
+      }),
+    ).rejects.toThrow(/no valid circle invitation/u);
   });
 
   it('excludes BanVotes and rendezvous records from the bundle', async () => {
