@@ -129,8 +129,21 @@ const TEMPLATE = `
       <span id="humans-title">your humans</span>
       <span class="rule" aria-hidden="true"></span>
       <span class="section-count" id="humans-count">none yet</span>
+      <button class="humans-set" id="humans-set-rendezvous" type="button" aria-label="Set a rendezvous">
+        <span class="humans-set-plus" aria-hidden="true">+</span>
+        <span>set a rendezvous</span>
+      </button>
     </div>
     <div class="humans-list" id="humans-list"></div>
+  </section>
+
+  <section class="upcoming-wrap" id="upcoming-wrap" hidden aria-labelledby="upcoming-title">
+    <div class="section-heading">
+      <span id="upcoming-title">upcoming rendezvous</span>
+      <span class="rule" aria-hidden="true"></span>
+      <span class="section-count" id="upcoming-summary"></span>
+    </div>
+    <div class="upcoming-list" id="upcoming-list"></div>
   </section>
 
   <section class="wall-wrap" id="wall-wrap" hidden aria-labelledby="wall-title">
@@ -139,7 +152,6 @@ const TEMPLATE = `
       <span class="rule" aria-hidden="true"></span>
       <span id="wall-summary"></span>
     </div>
-    <div class="wall-next" id="wall-next" hidden></div>
     <div class="wall-board" id="wall-board"></div>
   </section>
 
@@ -884,6 +896,9 @@ export class RendezvousApp extends HTMLElement {
         void this.handleCircleRendezvousEvent(event.invite);
         this.emitHostEvent('rendezvous:circle-rendezvous', event);
       }),
+      this.client.on('circleMemberRequest', (event) => {
+        void this.grantCircleInviteFromLink(event);
+      }),
     );
     this.renderEmptyState();
     try {
@@ -1012,6 +1027,9 @@ export class RendezvousApp extends HTMLElement {
       dashboard.addEventListener('circle-window-clear', (event) =>
         void this.clearCircleGatheringWindow(event),
       );
+      dashboard.addEventListener('circle-invite-new', (event) =>
+        void this.createNewCircleInvite(event),
+      );
       this.circleDashboard = dashboard;
     }
 
@@ -1084,6 +1102,7 @@ export class RendezvousApp extends HTMLElement {
       },
     );
     dashboard.stats = computeCircleStats(records, view, Date.now(), { circleId });
+    dashboard.newInviteLink = '';
     dashboard.plans = canonicalPlans(records, circleId, view.timezone, view.members);
     dashboard.offers = circleOffers(records, circleId, Date.now(), view.members);
     const windowEntry = activeWindowRecord(records, circleId, Date.now());
@@ -1634,6 +1653,101 @@ export class RendezvousApp extends HTMLElement {
     }
   }
 
+  private async waitForCirclePeer(humanId: string, timeoutMs = 15_000): Promise<PeerChannel | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const peer = this.circlePeers.get(humanId);
+      if (peer) return peer.channel;
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+      this.syncCirclePeers();
+    }
+    return this.circlePeers.get(humanId)?.channel ?? null;
+  }
+
+  private async createNewCircleInvite(event: Event): Promise<void> {
+    const detail = (event as CustomEvent<{ circleId?: string }>).detail;
+    if (!detail?.circleId || !this.client) return;
+    try {
+      await this.prepareCircles();
+      const link = await this.client.createCircleInviteLink(detail.circleId);
+      if (this.circleDashboard) this.circleDashboard.newInviteLink = link;
+      this.showToast({
+        tone: 'info',
+        title: 'Circle invitation link ready.',
+        message: 'Opening it creates the human link, then the signed circle invitation follows.',
+      });
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'The circle link was not created.',
+        message: error instanceof Error ? error.message : 'The local identity is not ready.',
+      });
+    }
+  }
+
+  private async grantCircleInviteFromLink(event: {
+    circleId: string;
+    humanId: string;
+    humanName: string;
+  }): Promise<void> {
+    try {
+      await this.prepareCircles();
+      const identity = this.circleIdentity;
+      const store = this.circleStore;
+      if (!identity || !store) return;
+      const records = await store.load(event.circleId);
+      const view = deriveMemberView(records, identity.selfKey, this.circleFriends, {}, {
+        circleId: event.circleId,
+      });
+      if (!view.members.includes(identity.selfKey)) {
+        this.showToast({
+          tone: 'warning',
+          title: 'Circle invitation not sent.',
+          message: 'You are not a current member of that circle.',
+        });
+        return;
+      }
+      if (view.members.includes(event.humanId)) return;
+      const channel = await this.waitForCirclePeer(event.humanId);
+      if (!channel) {
+        this.showToast({
+          tone: 'warning',
+          title: 'Circle invitation waits.',
+          message: `${displayName(event.humanName)} joined, but the circle link is not open yet. Reopen this app while you are both here.`,
+        });
+        return;
+      }
+      const bundle = await createCircleInvite({
+        identity,
+        records,
+        circleId: event.circleId,
+        invitee: event.humanId,
+        at: Date.now(),
+        friends: this.circleFriends,
+      });
+      await sendCircleInvite(channel, bundle);
+      await this.reloadCircles();
+      if (this.activeCircleId === event.circleId) {
+        await this.selectCircle(event.circleId);
+      }
+      void this.circleSync?.refresh();
+      this.showToast({
+        tone: 'success',
+        title: 'Circle invitation sent.',
+        message: `${displayName(event.humanName)} is joining ${this.circleNameFromBundle(bundle)}.`,
+      });
+    } catch (error) {
+      this.showToast({
+        tone: 'warning',
+        title: 'Circle invitation not sent.',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'The signed circle invitation could not be delivered.',
+      });
+    }
+  }
+
   private emitHostEvent(name: string, detail: unknown): void {
     this.dispatchEvent(new CustomEvent(name, { detail, bubbles: true, composed: true }));
   }
@@ -1656,6 +1770,7 @@ export class RendezvousApp extends HTMLElement {
     this.$('#done-link-copy').addEventListener('click', () => void this.copyDoneLink());
     this.$('#signal-button').addEventListener('click', () => this.toggleDiagnostics());
     this.$('#set-rendezvous').addEventListener('click', () => this.openRendezvous());
+    this.$('#humans-set-rendezvous').addEventListener('click', () => this.openRendezvous());
     const circleBar = this.$<CircleBar>('#circle-bar');
     circleBar.addEventListener('circle-add', () => void this.openCircles({ create: true }));
     circleBar.addEventListener('circle-open', (event) => {
@@ -1854,12 +1969,7 @@ export class RendezvousApp extends HTMLElement {
     const copy = document.createElement('span');
     copy.className = 'humans-empty-copy';
     copy.textContent = 'No humans yet. Set a rendezvous for someone new.';
-    const start = document.createElement('button');
-    start.type = 'button';
-    start.className = 'inline-add';
-    start.textContent = 'Set a rendezvous ↗';
-    start.addEventListener('click', () => this.openRendezvous());
-    empty.append(copy, start);
+    empty.append(copy);
     humans.append(empty);
   }
 
@@ -2100,9 +2210,10 @@ export class RendezvousApp extends HTMLElement {
   }
 
   private renderWall(snapshot: RendezvousSnapshot): void {
+    const upcomingWrap = this.$('#upcoming-wrap');
+    const upcoming = this.$('#upcoming-list');
     const wrap = this.$('#wall-wrap');
     const board = this.$('#wall-board');
-    const next = this.$('#wall-next');
     const delivered = snapshot.prints.slice().sort((a, b) => {
       const arrival = b.deliveredAt - a.deliveredAt;
       return arrival !== 0 ? arrival : a.id.localeCompare(b.id);
@@ -2113,24 +2224,25 @@ export class RendezvousApp extends HTMLElement {
     const humans = new Map(snapshot.humans.map((human) => [human.id, human]));
 
     if (delivered.length === 0 && pending.length === 0) {
+      upcomingWrap.hidden = true;
+      upcoming.replaceChildren();
       wrap.hidden = true;
       board.replaceChildren();
-      next.replaceChildren();
-      next.hidden = true;
       this.pruneObjectUrls(new Set());
       return;
     }
-    wrap.hidden = false;
-    this.$('#wall-summary').textContent = [
-      delivered.length > 0 ? `${delivered.length} photograph${delivered.length === 1 ? '' : 's'}` : null,
-      pending.length > 0 ? `${pending.length} waiting` : null,
-    ]
-      .filter(Boolean)
-      .join(' · ');
 
+    upcomingWrap.hidden = pending.length === 0;
+    upcoming.replaceChildren();
+    this.$('#upcoming-summary').textContent =
+      pending.length > 0 ? `${pending.length} waiting` : '';
+
+    wrap.hidden = delivered.length === 0;
     board.replaceChildren();
-    next.replaceChildren();
-    next.hidden = pending.length === 0;
+    this.$('#wall-summary').textContent =
+      delivered.length > 0
+        ? `${delivered.length} photograph${delivered.length === 1 ? '' : 's'}`
+        : '';
     const liveKeys = new Set<string>();
 
     for (const record of pending) {
@@ -2212,7 +2324,7 @@ export class RendezvousApp extends HTMLElement {
       card.setAttribute('aria-label', `Open rendezvous with ${person} · ${formatMoment(record.scheduledFor)} · ${state.textContent}`);
       card.addEventListener('click', () => this.openRendezvousDetail(record.id));
       wrapRow.append(card);
-      next.append(wrapRow);
+      upcoming.append(wrapRow);
     }
 
     delivered.forEach((print, index) => {

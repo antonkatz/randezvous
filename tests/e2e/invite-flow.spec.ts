@@ -48,8 +48,10 @@ test('a rendezvous for someone new is already waiting when they join', async ({ 
   const pending = before.rendezvous.find((entry) => entry.id === created.appointmentId);
   expect(pending?.status).toBe('awaiting-join');
   expect(pending?.inviteToken).toBeTruthy();
-  await expect(ana.locator('#wall-next')).toContainText('for someone new');
-  await expect(ana.locator('#wall-next')).toContainText('waiting for them to join');
+  await expect(ana.locator('#upcoming-list')).toContainText('for someone new');
+  await expect(ana.locator('#upcoming-list')).toContainText('waiting for them to join');
+  await expect(ana.locator('#upcoming-wrap')).toBeVisible();
+  await expect(ana.locator('#wall-wrap')).toBeHidden();
 
   await baz.goto('/');
   await setName(baz, 'Baz');

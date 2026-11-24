@@ -941,6 +941,42 @@ button:disabled {
   color: var(--muted);
 }
 
+.humans-set {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 29px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 7.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.humans-set:hover {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fffaf0;
+}
+
+.humans-set-plus {
+  margin-top: -1px;
+  font-size: 12px;
+  font-weight: 300;
+  line-height: 1;
+}
+
 .humans-list {
   display: flex;
   flex-wrap: wrap;
@@ -1072,6 +1108,23 @@ button:disabled {
   border-radius: 50%;
 }
 
+/* ─── Upcoming rendezvous ───────────────────────────────── */
+
+.upcoming-wrap {
+  position: relative;
+  z-index: 4;
+  width: min(100%, 1220px);
+  margin: 0 auto;
+  padding: clamp(42px, 7vh, 86px) 30px 48px;
+}
+
+.upcoming-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
 /* ─── The wall ──────────────────────────────────────────── */
 
 .wall-wrap {
@@ -1080,6 +1133,10 @@ button:disabled {
   width: min(100%, 1220px);
   margin: 0 auto;
   padding: clamp(42px, 7vh, 86px) 30px 48px;
+}
+
+.upcoming-wrap:not([hidden]) + .wall-wrap {
+  padding-top: 0;
 }
 
 .wall-head {
@@ -1098,14 +1155,6 @@ button:disabled {
   flex: 1;
   height: 1px;
   background: var(--line);
-}
-
-.wall-next {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  gap: 8px;
-  margin-bottom: 34px;
 }
 
 .next-card {
@@ -1811,19 +1860,6 @@ dialog.modal::backdrop {
   font-family: var(--serif);
   font-size: 17px;
   line-height: 1.25;
-}
-
-.inline-add {
-  padding: 5px 0;
-  background: transparent;
-  border: 0;
-  color: var(--ink);
-  font-family: var(--mono);
-  font-size: 8px;
-  letter-spacing: 0.08em;
-  text-decoration: underline;
-  text-underline-offset: 4px;
-  text-transform: uppercase;
 }
 
 .rv-actions {
@@ -2862,6 +2898,7 @@ dialog.photo-dialog::backdrop {
 
 .app.is-loading .hero,
 .app.is-loading .humans,
+.app.is-loading .upcoming-wrap,
 .app.is-loading .wall-wrap {
   opacity: 0;
 }
@@ -3157,6 +3194,12 @@ dialog.photo-dialog::backdrop {
     padding: 0 16px 16px;
   }
 
+  .humans-set {
+    min-height: 34px;
+    padding: 5px 9px;
+    font-size: 7px;
+  }
+
   .humans-list {
     flex-wrap: nowrap;
     justify-content: flex-start;
@@ -3291,17 +3334,24 @@ dialog.photo-dialog::backdrop {
     gap: 9px;
   }
 
+  .upcoming-wrap {
+    padding: 34px 16px 28px;
+  }
+
+  .upcoming-list {
+    gap: 6px;
+  }
+
   .wall-wrap {
     padding: 34px 16px 28px;
   }
 
-  .wall-head {
-    margin-bottom: 17px;
+  .upcoming-wrap:not([hidden]) + .wall-wrap {
+    padding-top: 0;
   }
 
-  .wall-next {
-    margin-bottom: 24px;
-    gap: 6px;
+  .wall-head {
+    margin-bottom: 17px;
   }
 
   .next-card {

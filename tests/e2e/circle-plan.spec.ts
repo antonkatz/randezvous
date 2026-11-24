@@ -49,7 +49,7 @@ test('a circle offers independent moments, joins one, and sets an optional windo
   await expect(ana.locator('.circle-offer')).toHaveCount(1);
 
   // Inviting Baz auto-accepts on his side without a join click.
-  await ana.getByRole('button', { name: 'invite' }).click();
+  await ana.locator('button[data-invite-key]').first().click();
   await expect(
     baz.locator('circle-bar').getByRole('button', { name: 'Moon Garden' }),
   ).toBeVisible({ timeout: 20_000 });
@@ -87,7 +87,7 @@ test('an offline member receives the expiring circle rendezvous invite on reconn
   await form.locator('input[name="timezone"]').fill('Europe/Berlin');
   await form.getByRole('button', { name: 'create circle' }).click();
   await expect(ana.locator('circle-stats-page')).toContainText('Night Orchard');
-  await ana.getByRole('button', { name: 'invite' }).click();
+  await ana.locator('button[data-invite-key]').first().click();
   await expect(
     baz.locator('circle-bar').getByRole('button', { name: 'Night Orchard' }),
   ).toBeVisible({ timeout: 20_000 });

@@ -10,6 +10,17 @@ test('an upcoming rendezvous opens the exchange detail, not the verification pan
   const baz = await bazContext.newPage();
   await linkPages(ana, baz);
 
+  const setFromHumans = ana.locator('#humans-set-rendezvous');
+  await expect(setFromHumans).toBeVisible();
+  const setBox = await setFromHumans.boundingBox();
+  const humanListBox = await ana.locator('#humans-list').boundingBox();
+  expect(setBox).not.toBeNull();
+  expect(humanListBox).not.toBeNull();
+  expect(setBox!.y).toBeLessThan(humanListBox!.y);
+  await setFromHumans.click();
+  await expect(ana.locator('#rendezvous-dialog')).toHaveAttribute('open', '');
+  await ana.locator('#rv-close').click();
+
   const humanId = await ana.evaluate(() => {
     const app = document.querySelector('rendezvous-app') as unknown as {
       clientInstance: { getSnapshot: () => { humans: Array<{ id: string }> } };
@@ -45,6 +56,7 @@ test('an upcoming rendezvous opens the exchange detail, not the verification pan
 
   await expect(ana.locator('.next-card')).toBeVisible();
   await expect(ana.locator('#set-rendezvous')).toBeHidden();
+  await expect(setFromHumans).toBeVisible();
   await ana.locator('.next-card').first().click();
 
   const detail = ana.locator('#rendezvous-detail-dialog');

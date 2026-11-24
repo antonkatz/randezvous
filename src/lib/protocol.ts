@@ -25,6 +25,11 @@ export interface InvitePayload {
    * it and only establish the human relationship.
    */
   rendezvous?: InviteRendezvous;
+  /**
+   * When present, redeeming this link also starts circle membership: the
+   * inviter sends the addressed signed Circle Invite once the join arrives.
+   */
+  circleId?: string;
 }
 
 export interface JoinRequest {

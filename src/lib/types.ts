@@ -282,6 +282,12 @@ export interface CircleRendezvousEvent {
   invite: unknown;
 }
 
+export interface CircleMemberRequestEvent {
+  circleId: string;
+  humanId: string;
+  humanName: string;
+}
+
 export interface AudioEvent {
   audio: AudioSnapshot;
 }
@@ -304,6 +310,7 @@ export interface RendezvousClientEvents {
   circle: CircleRelayEvent;
   app: AppRelayEvent;
   circleRendezvous: CircleRendezvousEvent;
+  circleMemberRequest: CircleMemberRequestEvent;
   audio: AudioEvent;
 }
 

@@ -30,6 +30,7 @@ const JOIN_PROOF_TRANSCRIPT_VERSION = 'rendezvous/join-proof/v1';
 const COMPACT_VERSION = 2;
 const COMPACT_FLAG_RENDEZVOUS = 1;
 const COMPACT_FLAG_AUDIO_DISABLED = 2;
+const COMPACT_FLAG_CIRCLE = 4;
 const COMPACT_NONCE_BYTES = 8;
 const P256_FIELD_PRIME = 2n ** 256n - 2n ** 224n + 2n ** 192n + 2n ** 96n - 1n;
 const P256_CURVE_B =
@@ -123,12 +124,17 @@ function decompressPublicKey(compressed: Uint8Array): Uint8Array {
 function encodeCompactPayload(
   identity: StoredIdentity,
   rendezvous: InviteRendezvous | undefined,
+  circleId: string | undefined,
   issuedAt: number,
 ): Uint8Array {
   const name = utf8(normalizeName(identity.name));
   if (name.length > 255) throw new Error('Invalid invitation');
   const rendezvousId = rendezvous ? utf8(rendezvous.id) : null;
   if (rendezvousId && (rendezvousId.length === 0 || rendezvousId.length > 255)) {
+    throw new Error('Invalid invitation');
+  }
+  const circleBytes = circleId ? utf8(circleId) : null;
+  if (circleBytes && (circleBytes.length === 0 || circleBytes.length > 255)) {
     throw new Error('Invalid invitation');
   }
   const publicKey = compressPublicKey(base64UrlToBytes(identity.publicKey));
@@ -139,14 +145,16 @@ function encodeCompactPayload(
     publicKey.length +
     6 +
     nonce.length +
-    (rendezvous ? 1 + (rendezvousId?.length ?? 0) + 6 + 6 : 0);
+    (rendezvous ? 1 + (rendezvousId?.length ?? 0) + 6 + 6 : 0) +
+    (circleBytes ? 1 + circleBytes.length : 0);
   const bytes = new Uint8Array(size);
   let offset = 0;
   bytes[offset] = COMPACT_VERSION;
   offset += 1;
   bytes[offset] =
     (rendezvous ? COMPACT_FLAG_RENDEZVOUS : 0) |
-    (rendezvous?.liveAudioDisabled ? COMPACT_FLAG_AUDIO_DISABLED : 0);
+    (rendezvous?.liveAudioDisabled ? COMPACT_FLAG_AUDIO_DISABLED : 0) |
+    (circleBytes ? COMPACT_FLAG_CIRCLE : 0);
   offset += 1;
   bytes[offset] = name.length;
   offset += 1;
@@ -168,6 +176,12 @@ function encodeCompactPayload(
     writeU48(bytes, offset, rendezvous.createdAt);
     offset += 6;
   }
+  if (circleBytes) {
+    bytes[offset] = circleBytes.length;
+    offset += 1;
+    bytes.set(circleBytes, offset);
+    offset += circleBytes.length;
+  }
   return bytes;
 }
 
@@ -178,7 +192,7 @@ async function decodeCompactPayload(bytes: Uint8Array): Promise<InvitePayload> {
   if (version !== COMPACT_VERSION) throw new Error('Invalid invitation');
   const flags = bytes[offset];
   offset += 1;
-  if (flags === undefined || (flags & ~3) !== 0) throw new Error('Invalid invitation');
+  if (flags === undefined || (flags & ~7) !== 0) throw new Error('Invalid invitation');
   const nameLength = bytes[offset];
   offset += 1;
   if (
@@ -215,6 +229,21 @@ async function decodeCompactPayload(bytes: Uint8Array): Promise<InvitePayload> {
   } else if ((flags & COMPACT_FLAG_AUDIO_DISABLED) !== 0) {
     throw new Error('Invalid invitation');
   }
+
+  let circleId: string | undefined;
+  if ((flags & COMPACT_FLAG_CIRCLE) !== 0) {
+    const circleLength = bytes[offset];
+    offset += 1;
+    if (
+      circleLength === undefined ||
+      circleLength === 0 ||
+      offset + circleLength > bytes.length
+    ) {
+      throw new Error('Invalid invitation');
+    }
+    circleId = new TextDecoder().decode(bytes.subarray(offset, offset + circleLength));
+    offset += circleLength;
+  }
   if (offset !== bytes.length) throw new Error('Invalid invitation');
 
   return {
@@ -225,6 +254,7 @@ async function decodeCompactPayload(bytes: Uint8Array): Promise<InvitePayload> {
     issuedAt,
     nonce,
     ...(rendezvous ? { rendezvous } : {}),
+    ...(circleId ? { circleId } : {}),
   };
 }
 
@@ -261,6 +291,14 @@ function parseRendezvous(value: unknown): InviteRendezvous | undefined {
   return parsed;
 }
 
+function parseCircleId(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 512) {
+    throw new Error('Invalid invitation');
+  }
+  return value;
+}
+
 function parsePayload(raw: string): InvitePayload {
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== 'object') throw new Error('Invalid invitation');
@@ -280,6 +318,7 @@ function parsePayload(raw: string): InvitePayload {
     throw new Error('Invalid invitation');
   }
   const rendezvous = parseRendezvous(payload.rendezvous);
+  const circleId = parseCircleId(payload.circleId);
   const parsedPayload: InvitePayload = {
     v: 1,
     id: payload.id,
@@ -289,15 +328,36 @@ function parsePayload(raw: string): InvitePayload {
     nonce: payload.nonce,
   };
   if (rendezvous) parsedPayload.rendezvous = rendezvous;
+  if (circleId) parsedPayload.circleId = circleId;
   return parsedPayload;
+}
+
+export interface InviteTokenOptions {
+  rendezvous?: InviteRendezvous;
+  circleId?: string;
+}
+
+function normalizeInviteOptions(
+  value: InviteTokenOptions | InviteRendezvous | undefined,
+): InviteTokenOptions {
+  if (!value) return {};
+  if (
+    'id' in value &&
+    'scheduledFor' in value &&
+    'createdAt' in value
+  ) {
+    return { rendezvous: value as InviteRendezvous };
+  }
+  return value as InviteTokenOptions;
 }
 
 export async function createInviteToken(
   identity: StoredIdentity,
-  rendezvous?: InviteRendezvous,
+  optionsOrRendezvous: InviteTokenOptions | InviteRendezvous = {},
 ): Promise<string> {
+  const options = normalizeInviteOptions(optionsOrRendezvous);
   const issuedAt = Date.now();
-  const bytes = encodeCompactPayload(identity, rendezvous, issuedAt);
+  const bytes = encodeCompactPayload(identity, options.rendezvous, options.circleId, issuedAt);
   const signature = await signDomain(identity.privateKey, INVITE_DOMAIN_COMPACT, bytes);
   return `${INVITE_VERSION_COMPACT}.${bytesToBase64Url(bytes)}.${signature}`;
 }

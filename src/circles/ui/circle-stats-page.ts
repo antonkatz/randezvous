@@ -41,6 +41,7 @@ export class CircleStatsPage extends HTMLElement {
   private statePlans: readonly CircleDayPlans[] = [];
   private stateOffers: readonly CircleOffer[] = [];
   private stateWindow: { start: number; end: number } | null = null;
+  private stateNewInviteLink = '';
 
   constructor() {
     super();
@@ -60,6 +61,33 @@ export class CircleStatsPage extends HTMLElement {
         return;
       }
       if (!this.stateStats) return;
+      if (target.getAttribute('data-action') === 'invite-new') {
+        this.dispatchEvent(
+          new CustomEvent('circle-invite-new', {
+            detail: { circleId: this.stateStats.circleId },
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        return;
+      }
+      if (target.getAttribute('data-action') === 'copy-new-invite') {
+        const input = this.shadowRoot?.querySelector<HTMLInputElement>('#new-circle-link');
+        if (!input || !input.value.startsWith('http')) return;
+        void navigator.clipboard.writeText(input.value).then(
+          () => {
+            target.textContent = 'copied';
+            window.setTimeout(() => {
+              target.textContent = 'copy';
+            }, 2200);
+          },
+          () => {
+            input.focus();
+            input.select();
+          },
+        );
+        return;
+      }
       if (target.getAttribute('data-action') === 'set-plan') {
         const start = this.shadowRoot?.querySelector<HTMLInputElement>('#circle-plan-at');
         const at = start ? new Date(start.value).getTime() : NaN;
@@ -146,6 +174,15 @@ export class CircleStatsPage extends HTMLElement {
     return this.stateWindow;
   }
 
+  set newInviteLink(value: string) {
+    this.stateNewInviteLink = value;
+    this.render();
+  }
+
+  get newInviteLink(): string {
+    return this.stateNewInviteLink;
+  }
+
   set stats(value: CircleStats | null) {
     this.stateStats = value;
     this.render();
@@ -226,13 +263,13 @@ export class CircleStatsPage extends HTMLElement {
         : '';
 
     const inviteCandidates = this.stateInviteCandidates;
-    const inviteBlock =
-      inviteCandidates.length > 0
-        ? `
+    const inviteBlock = `
         <section class="invite" part="invite">
           <h2>invite a human</h2>
-          <p>Direct humans who are not in this circle yet. They receive a signed invitation over your existing connection.</p>
-          <ul class="invite-list">
+          <p>A circle invitation is also a human invitation. Existing humans receive it over your connection; someone new redeems a link that creates the human link first.</p>
+          ${
+            inviteCandidates.length > 0
+              ? `<ul class="invite-list">
             ${inviteCandidates
               .map(
                 (candidate) => `
@@ -242,9 +279,25 @@ export class CircleStatsPage extends HTMLElement {
               </li>`,
               )
               .join('')}
-          </ul>
-        </section>`
-        : '';
+          </ul>`
+              : `<p class="invite-empty">No linked humans are waiting to join this circle.</p>`
+          }
+          <div class="plan-row">
+            <button type="button" class="invite-button" data-action="invite-new">invite someone new</button>
+          </div>
+          ${
+            this.stateNewInviteLink
+              ? `<div class="new-circle-link">
+                  <label for="new-circle-link">the circle invitation link</label>
+                  <div class="link-row">
+                    <input id="new-circle-link" readonly value="${escapeHtml(this.stateNewInviteLink)}">
+                    <button type="button" class="invite-button" data-action="copy-new-invite">copy</button>
+                  </div>
+                  <p>Opening this link creates the direct-human link, then sends the signed circle invitation over that connection.</p>
+                </div>`
+              : ''
+          }
+        </section>`;
 
     const selfKey = this.stateView?.selfKey ?? '';
     const offers = this.stateOffers.filter(

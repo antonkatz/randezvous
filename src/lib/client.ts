@@ -15,6 +15,7 @@ import {
 import { AudioSession } from './audio';
 import { handoffPhase, isHandoffEligible } from './handoff';
 import {
+  buildInviteUrl,
   clearInviteFromUrl,
   createInviteToken,
   createJoinRequest,
@@ -311,7 +312,13 @@ export class RendezvousClient {
     return sent;
   }
 
- /** Publish a signed circle rendezvous invite for the server's expiring queue. */
+  /** Create a bearer link that also establishes the human relationship. */
+  async createCircleInviteLink(circleId: string): Promise<string> {
+    const token = await createInviteToken(this.requireIdentity(), { circleId });
+    return buildInviteUrl(token);
+  }
+
+/** Publish a signed circle rendezvous invite for the server's expiring queue. */
   publishCircleRendezvousInvite(
     invite: Omit<CircleRendezvousInvite, 'fromId' | 'fromName' | 'createdAt'>,
   ): boolean {
@@ -1023,6 +1030,13 @@ export class RendezvousClient {
     try {
       const human = await this.addHuman(verified.sender, inviteHash);
       await this.attachInvitationRendezvous(verified.invite, verified.sender);
+      if (human && verified.invite.circleId) {
+        this.emit('circleMemberRequest', {
+          circleId: verified.invite.circleId,
+          humanId: human.id,
+          humanName: human.name,
+        });
+      }
       this.joinRetryNotified.delete(join.id);
       if (human && !existing) {
         this.notice({
@@ -1909,7 +1923,7 @@ export class RendezvousClient {
       createdAt,
       ...(input.liveAudioDisabled ? { liveAudioDisabled: true } : {}),
     };
-    const inviteToken = await createInviteToken(identity, inviteRendezvous);
+    const inviteToken = await createInviteToken(identity, { rendezvous: inviteRendezvous });
     const record: StoredRendezvous = {
       id,
       direction: 'outgoing',

@@ -34,6 +34,7 @@ export class CircleDashboard extends HTMLElement {
   private statePlans: readonly CircleDayPlans[] = [];
   private stateOffers: readonly CircleOffer[] = [];
   private stateWindow: { start: number; end: number } | null = null;
+  private stateNewInviteLink = '';
   private stateBusy = false;
   private stateError = '';
   private stateDefaultTimezone = '';
@@ -122,6 +123,15 @@ export class CircleDashboard extends HTMLElement {
 
   get window(): { start: number; end: number } | null {
     return this.stateWindow;
+  }
+
+  set newInviteLink(value: string) {
+    this.stateNewInviteLink = value;
+    this.render();
+  }
+
+  get newInviteLink(): string {
+    return this.stateNewInviteLink;
   }
 
   set pendingInvite(value: CircleInviteBundle | null) {
@@ -267,6 +277,7 @@ export class CircleDashboard extends HTMLElement {
       page.plans = this.statePlans;
       page.offers = this.stateOffers;
       page.window = this.stateWindow;
+      page.newInviteLink = this.stateNewInviteLink;
       body.append(page);
       return;
     }
