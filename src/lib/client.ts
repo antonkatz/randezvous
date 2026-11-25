@@ -674,6 +674,7 @@ export class RendezvousClient {
       if (invite.rendezvous) {
         await this.storeInvitedRendezvous(invite, human);
       }
+      this.backfillRendezvousFor(human.id);
       const join = await createJoinRequest({
         identity: this.identity,
         inviterId: invite.id,
@@ -896,13 +897,18 @@ export class RendezvousClient {
     }
   }
 
-  private announce(record: StoredRendezvous): void {
+  private announce(record: StoredRendezvous, onlyPeerId?: string): void {
     const transport = this.transport;
     if (!transport?.isOnline) return;
     const identity = this.requireIdentity();
     const selfId = identity.id;
     const invitees = otherParticipants(record, selfId, identity.name);
     if (invitees.length === 0) return;
+    const knownPeers = new Set(this.humans.keys());
+    const targets = invitees.filter((peer) =>
+      onlyPeerId ? peer.id === onlyPeerId : knownPeers.has(peer.id),
+    );
+    if (targets.length === 0) return;
     const creatorId = creatorIdFor(record, selfId);
     const participants = participantsFor(record, selfId, identity.name);
     const isUpdate =
@@ -910,7 +916,7 @@ export class RendezvousClient {
       record.confirmedBy.length > 0 ||
       !isCreator(record, selfId);
     let sentAny = false;
-    for (const peer of invitees) {
+    for (const peer of targets) {
       const wire: RendezvousWire = {
         id: record.id,
         fromId: identity.id,
@@ -947,6 +953,22 @@ export class RendezvousClient {
         this.announceInFlight.delete(record.id);
         this.announceRetryAt.set(record.id, Date.now() + ANNOUNCE_RETRY_MS);
       }, ANNOUNCE_RETRY_MS);
+    }
+  }
+
+  private backfillRendezvousFor(humanId: string): void {
+    const selfId = this.identity?.id ?? '';
+    for (const record of this.rendezvous.values()) {
+      if (!isCreator(record, selfId)) continue;
+      if (!record.participants?.some((entry) => entry.id === humanId)) continue;
+      if (
+        record.status === 'delivered' ||
+        record.status === 'cancelled' ||
+        record.status === 'missed'
+      ) {
+        continue;
+      }
+      this.announce(record, humanId);
     }
   }
 
@@ -1172,6 +1194,7 @@ export class RendezvousClient {
     try {
       const human = await this.addHuman(verified.sender, inviteHash);
       await this.attachInvitationRendezvous(verified.invite, verified.sender);
+      if (human) this.backfillRendezvousFor(human.id);
       if (human && verified.invite.circleId) {
         this.emit('circleMemberRequest', {
           circleId: verified.invite.circleId,
@@ -2157,19 +2180,31 @@ export class RendezvousClient {
       throw new RendezvousClientError('invalid-photo', 'That voice note cannot be attached.');
     }
     const identity = this.requireIdentity();
+    const explicit = input.recipients
+      ? input.recipients
+          .filter((entry) => entry.id && entry.id !== identity.id)
+          .map((entry) => ({
+            id: entry.id,
+            name: normalizeName(entry.name || ''),
+          }))
+      : [];
     const requestedIds = [
       ...new Set(
-        input.humanIds && input.humanIds.length > 0
-          ? input.humanIds
-          : input.humanId
-            ? [input.humanId]
-            : [],
+        explicit.length > 0
+          ? explicit.map((entry) => entry.id)
+          : input.humanIds && input.humanIds.length > 0
+            ? input.humanIds
+            : input.humanId
+              ? [input.humanId]
+              : [],
       ),
     ];
     if (requestedIds.length === 0 && !input.circleId) {
       throw new RendezvousClientError('no-human', 'Choose at least one human.');
     }
     const invitees = requestedIds.map((id) => {
+      const supplied = explicit.find((entry) => entry.id === id);
+      if (supplied) return supplied;
       const human = this.humans.get(id);
       if (!human) throw new RendezvousClientError('no-human', 'Choose a human first.');
       return { id: human.id, name: human.name };

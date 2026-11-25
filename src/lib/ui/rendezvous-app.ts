@@ -3369,7 +3369,7 @@ export class RendezvousApp extends HTMLElement {
   }
 
   private async circleRecipients(circleId: string): Promise<{
-    ids: string[];
+    recipients: Array<{ id: string; name: string }>;
     excluded: number;
   }> {
     const identity = this.circleIdentity;
@@ -3384,14 +3384,20 @@ export class RendezvousApp extends HTMLElement {
     if (!view.members.includes(identity.selfKey)) {
       throw new Error('You are not a current member of that circle.');
     }
-    const humans = new Set((this.state?.humans ?? []).map((human) => human.id));
+    const direct = new Set((this.state?.humans ?? []).map((human) => human.id));
     const eligible = view.members.filter(
       (member) =>
         member !== identity.selfKey && !view.banned.includes(member),
     );
+    const recipients = eligible.map((member) => {
+      const human =
+        this.state?.humans.find((entry) => entry.id === member) ??
+        this.circleHumans.find((entry) => entry.id === member);
+      return { id: member, name: human?.name || member };
+    });
     return {
-      ids: eligible.filter((member) => humans.has(member)),
-      excluded: eligible.filter((member) => !humans.has(member)).length,
+      recipients,
+      excluded: recipients.filter((entry) => !direct.has(entry.id)).length,
     };
   }
 
@@ -3422,9 +3428,8 @@ export class RendezvousApp extends HTMLElement {
         });
       } else if (this.composerCircleId) {
         const recipients = await this.circleRecipients(this.composerCircleId);
-        const humanIds = recipients.ids;
         record = await this.client.scheduleRendezvous({
-          humanIds,
+          recipients: recipients.recipients,
           circleId: this.composerCircleId,
           photo: this.photo,
           fileName: this.photo.name,
@@ -3436,8 +3441,8 @@ export class RendezvousApp extends HTMLElement {
         if (recipients.excluded > 0) {
           this.showToast({
             tone: 'warning',
-            title: 'Some circle members are not direct humans yet.',
-            message: `${recipients.excluded} member${recipients.excluded === 1 ? '' : 's'} will not receive this notice until you link them directly.`,
+            title: 'Some circle members are not linked yet.',
+            message: `${recipients.excluded} member${recipients.excluded === 1 ? '' : 's'} will receive this rendezvous as soon as you link with them.`,
           });
         }
       } else {

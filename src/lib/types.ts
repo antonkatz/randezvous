@@ -366,6 +366,12 @@ export interface ScheduleInput {
   humanId?: string;
   /** One or more direct humans invited to the same rendezvous. */
   humanIds?: string[];
+  /**
+   * Full participant list for a circle channel, including members without a
+   * direct human link. Notices to members without a link are backfilled when
+   * the link is established.
+   */
+  recipients?: RendezvousParticipant[];
   /** Post the same rendezvous to every current non-banned member of this circle. */
   circleId?: string;
   photo: File | Blob;
