@@ -367,6 +367,7 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 - The board filter and human search match either representation.
 - An identifier is displayed at the shortest length that is unambiguous in the current view.
 - On the landing page, a rendezvous emoji prefix uses a minimum of 3 emoji and is extended against every known rendezvous, including pinned-only and filtered-out rendezvous. It never exceeds the 11-emoji canonical ID.
+- Human rows use a minimum of 6 emoji and may wrap; they are never reduced to a single truncated emoji. The full 11-emoji sequence remains the canonical ID.
 - On collision, the displayed emoji or word string is extended until the entries differ.
 - Extending the display does not change the underlying identity.
 - The full sequence is used for verification, never the shortened display.
@@ -472,7 +473,7 @@ The specification does not promise that every peer can reach every other peer. N
 
 ### VS-1 — The landing page
 
-As anyone landing on RDZ, I see the full list of humans currently online and the rendezvous channels. Each channel shows its emoji ID and next `HH:mm` time.
+As anyone landing on RDZ, I see the full list of humans currently online and the rendezvous channels. The hero says **The Internet is Here** in large type. Each channel shows its emoji ID and next `HH:mm` time.
 
 ### VS-2 — Rendezvous times
 
@@ -480,7 +481,7 @@ For a rendezvous channel, I see the humans grouped by the `HH:mm` time they anno
 
 ### VS-3 — Online humans
 
-When I see all humans online, verified humans are shown first. Verified humans who are offline remain visible with an offline state.
+When I see all humans online, verified humans are shown first. Verified humans who are offline remain visible with an offline state. Every human row shows a distinguishing emoji prefix of at least 6 emoji, extended to 11 if needed, never collapsed to a single ellipsized emoji.
 
 ### VS-4 — Emoji IDs
 

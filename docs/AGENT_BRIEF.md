@@ -40,7 +40,7 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 
 ### Landing page and channels
 
-- Landing page shows the full list of humans currently online and the rendezvous channels.
+- Landing page shows the full list of humans currently online and the rendezvous channels. The large hero heading is **The Internet is Here**.
 - The landing hero keeps the subtle elliptical orbit animation from the previous RDZ look: one slow dot, decorative only, absent from channel screens, and disabled for reduced motion.
 - The masthead reads `rendezvous ✳ by [InstantHero mark]`. The three intersecting lines are the RDZ mark and also appear in the top-bar brand button.
 - The landing search field has a magnifying-glass icon.
@@ -54,6 +54,7 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - A human may appear multiple times if they announced multiple times.
 - Each row shows online/offline state. Online rows offer `send photo` and `open voice`.
 - Verified humans sort before unverified humans.
+- Human rows show at least 6 distinguishing emoji, extended up to 11 and allowed to wrap; never a single ellipsized emoji.
 - `T + 3` removes only that `GOING` announcement from the channel board. The human remains in the global online list and any other channel.
 - There is no `T + 5` end. The channel screen closes only when the user explicitly leaves it.
 

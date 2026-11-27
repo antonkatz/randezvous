@@ -170,7 +170,7 @@ test('one-minute audio request, consent, live panel, and end', async ({ browser 
 test('the app starts without a seed and reports offline honestly', async ({ browser }) => {
   const a = await openPage(browser, '?seed=off');
   await expect(a.page.locator('.live')).toHaveText('off');
-  await expect(a.page.getByRole('heading', { name: 'Who is here now?' })).toBeVisible();
+  await expect(a.page.getByRole('heading', { name: 'The Internet is Here' })).toBeVisible();
   expect(a.errors).toEqual([]);
   await a.context.close();
 });
@@ -447,6 +447,14 @@ test('I see my active mask in the online list', async ({ browser }) => {
   await expect(a.page.locator('.masthead-name')).toHaveText('rendezvous');
   await expect(a.page.locator('.masthead-stamp svg')).toBeVisible();
   await expect(a.page.locator('.brand-mark svg')).toBeVisible();
+  const humanEmoji = (await selfRow.locator('.human-emoji').innerText()).trim();
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  expect([...segmenter.segment(humanEmoji)].length).toBeGreaterThanOrEqual(6);
+  const humanEmojiStyle = await selfRow.locator('.human-emoji').evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { whiteSpace: style.whiteSpace, textOverflow: style.textOverflow };
+  });
+  expect(humanEmojiStyle).toEqual({ whiteSpace: 'normal', textOverflow: 'clip' });
   await expect(selfRow).toBeVisible();
   await expect(selfRow).toContainText('me · active mask');
   await expect(selfRow).toContainText('here now');
