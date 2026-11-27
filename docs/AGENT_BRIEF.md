@@ -51,6 +51,7 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - You cannot send a photo or open voice with yourself.
 - Actions exist only inside a specific rendezvous channel screen.
 - A channel screen lists humans grouped by announced `HH:mm`, ascending, with subtle separators.
+- My own announcement is confirmed in a dedicated "your rendezvous" line above the groups. It is not listed as another participant.
 - A human may appear multiple times if they announced multiple times.
 - Each row shows online/offline state. Online rows offer `send photo` and `open voice`.
 - Verified humans sort before unverified humans.

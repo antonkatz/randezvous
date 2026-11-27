@@ -46,6 +46,7 @@ As anyone, I want to set a rendezvous without creating an account, so that I can
 - Setting a rendezvous does not ask for or attach an image.
 - Setting a rendezvous sends a signed `GOING` message.
 - The rendezvous appears on my board immediately and propagates to other peers.
+- The channel screen confirms the time I announced in a dedicated "your rendezvous" line. I am not listed as another participant.
 - No account, registration, or approval is involved.
 
 ### US-4 — I see every human who is online
@@ -477,7 +478,7 @@ As anyone landing on RDZ, I see the full list of humans currently online and the
 
 ### VS-2 — Rendezvous times
 
-For a rendezvous channel, I see the humans grouped by the `HH:mm` time they announced, in ascending time order, with subtle separators between groups. A human appears once for each time they announced. Each row shows whether that human is online. Online rows offer `send photo` and `open voice`. An announcement leaves this channel board at its scheduled time plus 3 minutes, while the human remains on the landing page's online list.
+For a rendezvous channel, I see the humans grouped by the `HH:mm` time they announced, in ascending time order, with subtle separators between groups. My own announcement is confirmed above the groups in a dedicated "your rendezvous" line and is not counted as another participant. A human appears once for each time they announced. Each row shows whether that human is online. Online rows offer `send photo` and `open voice`. An announcement leaves this channel board at its scheduled time plus 3 minutes, while the human remains on the landing page's online list.
 
 ### VS-3 — Online humans
 

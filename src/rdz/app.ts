@@ -1070,6 +1070,18 @@ export class RdzApp {
       ),
       this.humans,
     );
+    const ownEntries = sortAnnouncements(
+      dedupeAnnouncements(
+        activeAnnouncements(
+          [...this.announcements.values()].filter(
+            (entry) =>
+              entry.channelId === channelId && entry.author === this.identity.humanId,
+          ),
+          this.now,
+        ),
+      ),
+      this.humans,
+    );
     const groups = groupAnnouncementsByMinute(entries);
     const authorIds = [...new Set(entries.map((entry) => entry.author))];
     const words = formatWords(shortWords(idToWords(channelId)));
@@ -1109,6 +1121,7 @@ export class RdzApp {
         ${audioRequests.length ? this.renderAudioRequests(audioRequests) : ''}
         ${incoming.length ? this.renderImageOffers(incoming) : ''}
         ${progress.length ? this.renderProgress(progress) : ''}
+        ${ownEntries.length ? this.renderOwnAnnouncements(ownEntries) : ''}
         <section class="time-groups">
           ${
             groups.size
@@ -1137,6 +1150,24 @@ export class RdzApp {
             : '<p class="empty">This channel is pinned but has no live announcements.</p>'
         }
       </main>
+    `;
+  }
+
+  private renderOwnAnnouncements(entries: GoingAnnouncement[]): string {
+    return `
+      <section class="own-announcements" aria-label="Your rendezvous announcements">
+        <p class="eyebrow">your rendezvous</p>
+        ${entries
+          .map(
+            (entry) => `
+              <p class="own-announcement">
+                You set this rendezvous for
+                <strong>${escapeHtml(formatTime(entry.scheduledAt))}</strong>${formatDay(entry.scheduledAt, this.now) ? ` · ${escapeHtml(formatDay(entry.scheduledAt, this.now))}` : ''}.
+              </p>
+            `,
+          )
+          .join('')}
+      </section>
     `;
   }
 

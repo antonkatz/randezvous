@@ -606,6 +606,29 @@ h2 {
   margin: 18px 0;
 }
 
+.own-announcements {
+  margin: 18px 0;
+  padding: 15px 16px;
+  border: 1px solid rgba(52, 38, 134, 0.28);
+  border-radius: 18px;
+  background: linear-gradient(90deg, rgba(216, 208, 234, 0.55), var(--paper-bright));
+}
+
+.own-announcements .eyebrow {
+  color: var(--accent);
+}
+
+.own-announcements .own-announcement {
+  margin-top: 6px;
+  color: var(--ink-soft);
+}
+
+.own-announcement strong {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 1rem;
+}
+
 .audio-panel {
   border: 1px solid rgba(236, 143, 168, 0.5);
   border-radius: 18px;

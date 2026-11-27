@@ -257,6 +257,7 @@ test('a GOING announcement leaves the channel three minutes after its time', asy
   await aPage.getByRole('button', { name: 'set a time' }).click();
   await aPage.getByRole('button', { name: 'cancel' }).click();
   await expect(aPage.locator('.time-group')).toHaveCount(0);
+  await expect(aPage.locator('.own-announcements')).toHaveCount(0);
   await expect(aPage.getByText('No one else has announced a time here yet.')).toBeVisible();
 
   await aContext.close();
@@ -488,6 +489,7 @@ test('I see my active mask in the online list', async ({ browser }) => {
   await expect(a.page.locator('.human-row').filter({ hasText: first })).toHaveCount(0);
 
   await createChannel(a.page, futureTime());
+  await expect(a.page.locator('.own-announcements')).toContainText('You set this rendezvous for');
   await expect(a.page.locator('.time-group')).toHaveCount(0);
   await expect(a.page.locator('.human-row')).toHaveCount(0);
   await expect(a.page.locator('.orbit')).toHaveCount(0);
