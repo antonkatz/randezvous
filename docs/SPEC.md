@@ -508,11 +508,19 @@ During a one-minute audio conversation, a gentle pink progress bar shows the rem
 
 ### VS-10 — Mask switcher
 
-The identity chip opens a mask switcher. It lists every stored mask by its emoji and words, marks exactly one as active, and offers create, switch, and remove actions. Switching shows a brief connecting state and ends any active image or audio session. At no point are two masks shown as active.
+The identity chip opens a mask switcher. It lists every stored mask by its emoji and words, marks exactly one as active, and offers create, switch, and remove actions. Switching shows a brief connecting state and ends any active image or audio session. At no point are two masks shown as active. The active mask's full 8-word verification sequence wraps inside the dialog and is never truncated with an ellipsis.
 
 ### VS-11 — Landing rendezvous emoji prefixes
 
 Every rendezvous card on the landing page shows its full distinguishing emoji prefix, never a clipped or ellipsized fragment. The prefix starts at 3 emoji and grows only when another known rendezvous shares it. The maximum is the canonical 11 emoji.
+
+### VS-12 — Landing orbit
+
+The landing hero carries a subtle elliptical orbit with one slow-moving dot behind the content. The motion is decorative, takes about 26 seconds per revolution, does not intercept input, and does not appear inside a rendezvous channel. Reduced-motion preferences stop the animation.
+
+### VS-13 — Masthead and marks
+
+The app shows a centered, low-contrast masthead reading `rendezvous ✳ by [InstantHero mark]` above the top bar. The three intersecting lines are the RDZ mark and also appear in the top-bar brand button. The InstantHero stamp is decorative. The masthead does not intercept input.
 
 ---
 

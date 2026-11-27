@@ -41,6 +41,9 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 ### Landing page and channels
 
 - Landing page shows the full list of humans currently online and the rendezvous channels.
+- The landing hero keeps the subtle elliptical orbit animation from the previous RDZ look: one slow dot, decorative only, absent from channel screens, and disabled for reduced motion.
+- The masthead reads `rendezvous ✳ by [InstantHero mark]`. The three intersecting lines are the RDZ mark and also appear in the top-bar brand button.
+- The landing search field has a magnifying-glass icon.
 - Rendezvous cards show a full distinguishing emoji prefix: minimum 3, maximum 11, computed against every known rendezvous before filtering and never clipped.
 - The active mask appears in the landing online list and is marked as me.
 - The active mask is never listed inside a rendezvous channel, even when it announced a `GOING` there.

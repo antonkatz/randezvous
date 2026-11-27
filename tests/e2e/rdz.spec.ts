@@ -184,6 +184,7 @@ test('pin a channel, filter by its local label, and reopen from the dock', async
   await expect(a.page.locator('.dock-item')).toHaveCount(1);
 
   await a.page.getByRole('button', { name: /landing/ }).click();
+  await expect(a.page.locator('.filter-icon')).toBeVisible();
   await a.page.locator('#filter').fill('moon');
   await expect(a.page.locator('.channel-card').filter({ hasText: 'moon circle' })).toBeVisible();
 
@@ -443,13 +444,33 @@ test('I see my active mask in the online list', async ({ browser }) => {
   const first = await identityWords(a.page);
   const selfRow = humanRow(a.page, first);
 
+  await expect(a.page.locator('.masthead-name')).toHaveText('rendezvous');
+  await expect(a.page.locator('.masthead-stamp svg')).toBeVisible();
+  await expect(a.page.locator('.brand-mark svg')).toBeVisible();
   await expect(selfRow).toBeVisible();
   await expect(selfRow).toContainText('me · active mask');
   await expect(selfRow).toContainText('here now');
   await expect(selfRow.getByRole('button', { name: 'send photo' })).toHaveCount(0);
+  await expect(a.page.locator('.hero .orbit')).toBeVisible();
 
   await selfRow.locator('.human-main').click();
   await expect(a.page.getByRole('heading', { name: 'Masks' })).toBeVisible();
+  const fullWords = a.page.locator('.identity-words.full.mono').first();
+  const fullText = (await fullWords.innerText()).trim();
+  expect(fullText.split(/\s+/)).toHaveLength(8);
+  const fullStyle = await fullWords.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      whiteSpace: style.whiteSpace,
+      overflow: style.overflow,
+      textOverflow: style.textOverflow,
+    };
+  });
+  expect(fullStyle).toEqual({
+    whiteSpace: 'normal',
+    overflow: 'visible',
+    textOverflow: 'clip',
+  });
   await a.page.getByRole('button', { name: 'new mask' }).click();
   await expect.poll(async () => identityWords(a.page)).not.toBe(first);
   const second = await identityWords(a.page);
@@ -461,6 +482,7 @@ test('I see my active mask in the online list', async ({ browser }) => {
   await createChannel(a.page, futureTime());
   await expect(a.page.locator('.time-group')).toHaveCount(0);
   await expect(a.page.locator('.human-row')).toHaveCount(0);
+  await expect(a.page.locator('.orbit')).toHaveCount(0);
 
   await a.context.close();
 });

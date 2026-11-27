@@ -21,6 +21,7 @@ import {
   uniqueEmojiDisplay,
   uniqueWordDisplay,
 } from './ids';
+import instantHeroMark from '../ui/instanthero-mark.svg?raw';
 import { ConnectionBudget } from './connection-budget';
 import { MeshManager, resolveBootstrapUrl, type MeshStatus } from './mesh';
 import { RtcManager } from './rtc';
@@ -915,9 +916,19 @@ export class RdzApp {
       : this.renderLanding();
     root.innerHTML = `
       <div class="shell">
+        <p class="masthead">
+          <span class="masthead-name">rendezvous</span>
+          <span class="masthead-star" aria-hidden="true">
+            <svg viewBox="0 0 32 32"><path d="M16 4v24M5.6 10l20.8 12M26.4 10 5.6 22" /></svg>
+          </span>
+          <span class="masthead-by">by</span>
+          <span class="masthead-stamp" role="img" aria-label="InstantHero">${instantHeroMark}</span>
+        </p>
         <header class="topbar">
           <button class="brand" data-action="identity" type="button">
-            <span class="brand-mark">◌</span>
+            <span class="brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 32 32"><path d="M16 4v24M5.6 10l20.8 12M26.4 10 5.6 22" /></svg>
+            </span>
             <span>RDZ</span>
           </button>
           <div class="top-actions">
@@ -953,13 +964,22 @@ export class RdzApp {
     return `
       <main class="landing">
         <section class="hero">
-          <p class="eyebrow">public presence · no accounts</p>
-          <h1>Who is here now?</h1>
-          <p class="lede">A rendezvous is only a time people agreed to. Everything else is direct.</p>
-          <button class="primary" data-action="new-rendezvous" type="button">Set a rendezvous</button>
+          <div class="orbit" aria-hidden="true"></div>
+          <div class="hero-content">
+            <p class="eyebrow">public presence · no accounts</p>
+            <h1>Who is here now?</h1>
+            <p class="lede">A rendezvous is only a time people agreed to. Everything else is direct.</p>
+            <button class="primary" data-action="new-rendezvous" type="button">Set a rendezvous</button>
+          </div>
         </section>
         <div class="filter-row">
-          <input id="filter" class="filter" type="search" placeholder="filter humans or channels by words or emoji" value="${escapeAttr(this.query)}" />
+          <div class="filter-field">
+            <svg class="filter-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="10.5" cy="10.5" r="6.25"></circle>
+              <path d="m15.2 15.2 4.3 4.3"></path>
+            </svg>
+            <input id="filter" class="filter" type="search" placeholder="filter humans or channels by words or emoji" value="${escapeAttr(this.query)}" />
+          </div>
         </div>
         <div class="columns">
           <section class="panel">

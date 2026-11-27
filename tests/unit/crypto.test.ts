@@ -91,6 +91,7 @@ describe('message freshness', () => {
   it('expires SIGNAL after two minutes', () => {
     const now = Date.now();
     const envelope = base({
+      createdAt: now,
       type: 'SIGNAL',
       payload: {
         kind: 'SIGNAL',
