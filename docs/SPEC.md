@@ -172,6 +172,25 @@ As a participant, I want to request a live audio channel with another participan
 - If the recipient declines, no audio starts and the rest of the rendezvous continues normally.
 - Audio ends at the one-minute cap or on disconnect.
 
+### US-13 — I can keep multiple masks and activate one at a time
+
+As a person with more than one online identity, I want my browser to hold several masks and choose which one is active, so that I can move between identities without creating accounts or exposing all of them at once.
+
+**Acceptance criteria**
+
+- A browser can store multiple masks. Each mask is a distinct human identity with its own P-256 keypair, public key, emoji and word human ID, verification word set, and verification records.
+- Exactly one mask is active at any time.
+- The active mask is the only identity that sends `PING`, signs new `GOING` and `SIGNAL` messages, appears online, and can send or receive images and audio.
+- Inactive masks are offline. They do not send `PING`, receive `SIGNAL`, hold live peer connections, or appear as the sender of new messages.
+- The identity surface lists every stored mask, marks the active one, and allows creating, switching, and removing a mask.
+- Switching masks ends any active image transfer or audio conversation, closes the active relay identity, reconnects as the new mask, and sends a fresh `PING`.
+- Verification words and verified-human state shown in the interface belong to the active mask. Verification records for inactive masks persist locally.
+- Existing single-mask data is migrated into the first mask.
+- Removing a mask deletes its private key and local verification state. Messages already signed by that mask remain valid and unchanged. There is no recovery.
+- Clearing site data removes all masks. The next visit creates a new default mask.
+- Pinned channels and local channel labels are browser-level UI preferences. They remain visible across masks and are not part of a mask's identity.
+- Switching masks never rewrites, retracts, or reassigns a `GOING` announcement already signed by another mask. Existing announcements remain valid until `T + 3`.
+
 ## Functional Requirements
 
 ### FR-1 — The seed peer is optional
@@ -274,11 +293,11 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 
 ### FR-10 — Identity
 
-- Each browser creates a persistent P-256 keypair.
+- Each mask creates a persistent P-256 keypair.
 - The private key is stored in IndexedDB as a non-extractable `CryptoKey`.
-- The public key, emoji human ID, verification state, and pinned keys are stored with it in IndexedDB.
-- Identity is scoped to the browser profile and origin.
-- Clearing site data creates a new identity. There is no account recovery and no cross-device sync.
+- The public key, emoji human ID, verification state, and pinned keys are stored with that mask in IndexedDB.
+- Masks are scoped to the browser profile and origin.
+- Clearing site data removes all masks. The next use creates a new default mask.
 - The human ID is derived from the public key.
 
 ### FR-11 — Emoji and word identifiers
@@ -376,6 +395,19 @@ The specification does not promise that every peer can reach every other peer. N
 - The seed peer forwards `SIGNAL` exactly like any other peer.
 - `SIGNAL` is never displayed as a human or rendezvous message.
 
+### FR-19 — Multiple masks, one active identity
+
+- The identity store supports multiple masks per browser.
+- Each mask has its own P-256 keypair, public key, human ID, verification word sequence, verified-human records, and pinned peer keys.
+- Exactly one mask is active for a browser profile and origin at any time.
+- Only the active mask sends `PING`, signs new `GOING` and `SIGNAL` messages, appears online, and can hold image or audio connections.
+- Inactive masks never send, receive, or hold live peer connections.
+- Switching masks stops the active `PING` loop, closes the relay identity, tears down active image transfers and audio, reconnects using the new mask, and sends a fresh `PING`.
+- Verification state and pinned peer keys are per mask. Pinned channels and local channel labels are browser-level preferences shared across masks.
+- Existing single-mask data is migrated into the first mask.
+- Removing a mask deletes its private key and local verification state. Messages already signed by that mask remain valid. There is no recovery.
+- `GOING` announcements already signed by a mask are not retracted or reassigned when the active mask changes. They remain valid until `T + 3`.
+
 ## Visual User Stories
 
 ### VS-1 — The landing page
@@ -413,6 +445,10 @@ An incoming photo offer shows the sender and the image size in MB. It shows no p
 ### VS-9 — Audio progress
 
 During a one-minute audio conversation, a gentle pink progress bar shows the remaining time without numbers.
+
+### VS-10 — Mask switcher
+
+The identity chip opens a mask switcher. It lists every stored mask by its emoji and words, marks exactly one as active, and offers create, switch, and remove actions. Switching shows a brief connecting state and ends any active image or audio session. At no point are two masks shown as active.
 
 ---
 

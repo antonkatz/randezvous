@@ -12,6 +12,7 @@ This file is the compact handoff from the specification conversation. It is cont
 - The new RDZ app, seed relay, protocol, UI, and automated tests are implemented.
 - `npm test` and `npm run test:e2e` pass.
 - `README.md` describes the new app.
+- `docs/SPEC.md` now includes the multi-mask identity story and FR-19; the current implementation still stores a single mask and needs the multi-mask store/switcher.
 - Remaining reference-build deviations from the ideal transport spec are listed in `docs/IMPLEMENTATION_DECISIONS.md`: WebSocket metadata relay, no 100-peer mesh/rotation, no seedless first contact, and a non-WebRTC seed bootstrap.
 
 ## Mission
@@ -30,6 +31,7 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - The new RDZ implementation is in `src/rdz/`, `src/ui/`, `src/main.ts`, and `server/index.ts`.
 - The old implementation is archived under `archive/legacy/`.
 - `README.md` describes the new app.
+- `docs/SPEC.md` now includes the multi-mask identity story and FR-19; the current implementation still stores a single mask and needs the multi-mask store/switcher.
 - The reference transport is a signed WebSocket relay for `PING`/`GOING`/`SIGNAL`, with direct WebRTC for images and audio. The pure-peer mesh, 100-connection rotation, and seedless first contact are not implemented; they are documented as reference-build deviations in `docs/IMPLEMENTATION_DECISIONS.md`.
 
 ## Non-negotiable product behavior
