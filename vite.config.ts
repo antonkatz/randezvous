@@ -4,9 +4,6 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    // Development tunnels such as `cloudflared tunnel --url ...` present
-    // their own Host header. Only these hostnames are allowed through Vite's
-    // dev host check; the server still listens locally by default.
     allowedHosts: ['.trycloudflare.com', '.ngrok-free.app', '.ngrok.app', '.loca.lt'],
     proxy: {
       '/signal': {

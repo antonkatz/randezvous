@@ -5,8 +5,8 @@ const browserPath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
 
 export default defineConfig({
   testDir: './tests/e2e',
-  timeout: 70_000,
-  expect: { timeout: 12_000 },
+  timeout: 90_000,
+  expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
   reporter: [['list']],
@@ -23,11 +23,7 @@ export default defineConfig({
     },
   },
   webServer: {
-    command:
-      `rm -rf .rendezvous-test && mkdir -p .rendezvous-test && ` +
-      `RENDEZVOUS_HOST=127.0.0.1 PORT=${port} ` +
-      `RENDEZVOUS_JOIN_RETRY_MS=1500 ` +
-      `RENDEZVOUS_DATA_FILE=.rendezvous-test/e2e-store.json npm start`,
+    command: `RENDEZVOUS_HOST=127.0.0.1 PORT=${port} npm start`,
     url: `http://127.0.0.1:${port}/health`,
     reuseExistingServer: false,
     timeout: 120_000,

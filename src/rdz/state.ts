@@ -1,0 +1,200 @@
+import { ANNOUNCEMENT_GRACE_MS, PRESENCE_MS } from './crypto';
+import { formatEmoji, formatWords, idToEmoji, idToWords } from './ids';
+import type {
+  ChannelView,
+  GoingAnnouncement,
+  Human,
+  PinRecord,
+} from './types';
+
+export function isOnline(human: Human, now = Date.now()): boolean {
+  return human.lastSeen + PRESENCE_MS > now;
+}
+
+export function activeAnnouncements(
+  announcements: readonly GoingAnnouncement[],
+  now = Date.now(),
+): GoingAnnouncement[] {
+  return announcements.filter((entry) => entry.scheduledAt + ANNOUNCEMENT_GRACE_MS >= now);
+}
+
+export function humanLabel(human: Pick<Human, 'id'>, full = false): string {
+  const words = idToWords(human.id);
+  return full ? formatWords(words) : formatWords(words.slice(0, 4));
+}
+
+export function humanEmojiLabel(human: Pick<Human, 'id'>, full = false): string {
+  const emoji = idToEmoji(human.id);
+  return formatEmoji(full ? emoji : emoji.slice(0, 6));
+}
+
+export function sortHumans(humans: readonly Human[], now = Date.now()): Human[] {
+  return [...humans].sort((left, right) => {
+    const leftOnline = isOnline(left, now) ? 0 : 1;
+    const rightOnline = isOnline(right, now) ? 0 : 1;
+    if (left.verified !== right.verified) return left.verified ? -1 : 1;
+    if (leftOnline !== rightOnline) return leftOnline - rightOnline;
+    return humanLabel(left).localeCompare(humanLabel(right));
+  });
+}
+
+export function sortAnnouncements(
+  announcements: readonly GoingAnnouncement[],
+  humans: ReadonlyMap<string, Human>,
+): GoingAnnouncement[] {
+  return [...announcements].sort((left, right) => {
+    if (left.scheduledAt !== right.scheduledAt) return left.scheduledAt - right.scheduledAt;
+    const leftHuman = humans.get(left.author);
+    const rightHuman = humans.get(right.author);
+    if (leftHuman?.verified !== rightHuman?.verified) return leftHuman?.verified ? -1 : 1;
+    return humanLabel({ id: left.author }).localeCompare(humanLabel({ id: right.author }));
+  });
+}
+
+export function dedupeAnnouncements(
+  announcements: readonly GoingAnnouncement[],
+): GoingAnnouncement[] {
+  const byKey = new Map<string, GoingAnnouncement>();
+  for (const entry of announcements) {
+    const minute = Math.floor(entry.scheduledAt / 60_000);
+    const key = `${entry.author}|${entry.channelId}|${minute}`;
+    const existing = byKey.get(key);
+    if (!existing || entry.createdAt > existing.createdAt) byKey.set(key, entry);
+  }
+  return [...byKey.values()];
+}
+
+export function groupAnnouncementsByMinute(
+  announcements: readonly GoingAnnouncement[],
+): Map<number, GoingAnnouncement[]> {
+  const groups = new Map<number, GoingAnnouncement[]>();
+  for (const announcement of announcements) {
+    const minute = Math.floor(announcement.scheduledAt / 60_000) * 60_000;
+    const group = groups.get(minute);
+    if (group) group.push(announcement);
+    else groups.set(minute, [announcement]);
+  }
+  return groups;
+}
+
+export function buildChannels(
+  announcements: readonly GoingAnnouncement[],
+  pins: readonly PinRecord[],
+  now = Date.now(),
+): ChannelView[] {
+  const active = activeAnnouncements(announcements, now);
+  const byId = new Map<string, GoingAnnouncement[]>();
+  for (const announcement of active) {
+    const entries = byId.get(announcement.channelId);
+    if (entries) entries.push(announcement);
+    else byId.set(announcement.channelId, [announcement]);
+  }
+  const pinned = new Map(pins.map((pin) => [pin.channelId, pin]));
+  const channels: ChannelView[] = [];
+  for (const [id, entries] of byId) {
+    channels.push({
+      id,
+      announcements: entries,
+      nextAt: Math.min(...entries.map((entry) => entry.scheduledAt)),
+      pinnedLabel: pinned.get(id)?.label ?? null,
+    });
+  }
+  for (const pin of pins) {
+    if (byId.has(pin.channelId)) continue;
+    channels.push({
+      id: pin.channelId,
+      announcements: [],
+      nextAt: 0,
+      pinnedLabel: pin.label,
+    });
+  }
+  return channels.sort((left, right) => {
+    if (left.nextAt && right.nextAt) return left.nextAt - right.nextAt;
+    if (left.nextAt) return -1;
+    if (right.nextAt) return 1;
+    return (left.pinnedLabel ?? left.id).localeCompare(right.pinnedLabel ?? right.id);
+  });
+}
+
+export function filterHumans(humans: readonly Human[], query: string): Human[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [...humans];
+  return humans.filter((human) => {
+    const words = formatWords(idToWords(human.id)).toLowerCase();
+    const emoji = formatEmoji(idToEmoji(human.id));
+    return words.includes(normalized) || emoji.includes(query.trim());
+  });
+}
+
+export function filterChannels(channels: readonly ChannelView[], query: string): ChannelView[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [...channels];
+  return channels.filter((channel) => {
+    const words = formatWords(idToWords(channel.id)).toLowerCase();
+    const emoji = formatEmoji(idToEmoji(channel.id));
+    const label = channel.pinnedLabel?.toLowerCase() ?? '';
+    return words.includes(normalized) || emoji.includes(query.trim()) || label.includes(normalized);
+  });
+}
+
+export function formatTime(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(timestamp);
+}
+
+export function formatDay(timestamp: number, now = Date.now()): string {
+  const date = new Date(timestamp);
+  const today = new Date(now);
+  if (
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  ) {
+    return '';
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  }).format(timestamp);
+}
+
+export function nextOccurrence(hour: number, minute: number, now = Date.now()): number {
+  const date = new Date(now);
+  date.setSeconds(0, 0);
+  date.setHours(hour, minute, 0, 0);
+  if (date.getTime() <= now) date.setDate(date.getDate() + 1);
+  return date.getTime();
+}
+
+export function parseTimeInput(value: string, now = Date.now()): number | null {
+  const match = /^(\d{1,2}):(\d{2})$/u.exec(value.trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+  return nextOccurrence(hour, minute, now);
+}
+
+export function isVerified(
+  humanId: string,
+  verifications: ReadonlyMap<string, { verifiedAt: number | null }>,
+): boolean {
+  return Boolean(verifications.get(humanId)?.verifiedAt);
+}
+
+export const AUDIO_LIMIT_MS = 60_000;
+
+export function audioRemaining(startedAt: number | null, now = Date.now()): number {
+  if (startedAt === null) return AUDIO_LIMIT_MS;
+  return Math.max(0, AUDIO_LIMIT_MS - (now - startedAt));
+}
+
+export function humanDisplay(human: Human): string {
+  return `${humanEmojiLabel(human)} ${humanLabel(human)}`;
+}

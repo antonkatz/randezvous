@@ -1,52 +1,27 @@
 {
-  "name": "@instanthero/rendezvous",
-  "version": "0.1.0",
-  "description": "A private, browser-to-browser photo rendezvous service.",
+  "name": "rdz",
+  "version": "1.0.0",
+  "description": "A permissionless peer-to-peer rendezvous board with direct image and one-minute voice.",
   "type": "module",
-  "private": false,
-  "files": [
-    "dist-lib",
-    "docs",
-    "README.md",
-    "src/circles/README.md"
-  ],
-  "main": "./dist-lib/rendezvous.js",
-  "module": "./dist-lib/rendezvous.js",
-  "types": "./dist-lib/types/lib/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist-lib/types/lib/index.d.ts",
-      "import": "./dist-lib/rendezvous.js"
-    },
-    "./circles": {
-      "types": "./dist-lib/types/circles/index.d.ts",
-      "import": "./dist-lib/circles.js"
-    },
-    "./circles/ui": {
-      "types": "./dist-lib/types/circles/ui/index.d.ts",
-      "import": "./dist-lib/circles-ui.js"
-    }
-  },
+  "private": true,
   "scripts": {
-    "dev": "concurrently -k -P -n web,signal -c cyan,magenta \"vite {@}\" \"tsx watch server/index.ts\" --",
+    "dev": "concurrently -k -P -n web,seed -c cyan,magenta \"vite {@}\" \"tsx watch server/index.ts\" --",
     "dev:web": "vite",
-    "dev:signal": "tsx watch server/index.ts",
-    "build": "npm run typecheck && npm run build:app && npm run build:lib && npm run build:server",
+    "dev:seed": "tsx watch server/index.ts",
+    "build": "npm run typecheck && npm run build:app && npm run build:server",
     "build:app": "vite build",
-    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
     "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist-server/index.js --external:ws --sourcemap",
     "start": "node dist-server/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build && playwright test",
-    "preview": "vite preview",
-    "test:unit": "vitest run"
+    "preview": "vite preview"
   },
   "keywords": [
     "webrtc",
-    "photo-sharing",
     "peer-to-peer",
-    "rendezvous"
+    "rendezvous",
+    "presence"
   ],
   "license": "UNLICENSED",
   "engines": {

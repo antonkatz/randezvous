@@ -6,9 +6,9 @@
     <meta name="theme-color" content="#f1ece2" />
     <meta
       name="description"
-      content="A private photo rendezvous between two browsers. The photo travels directly, only when you are both here."
+      content="RDZ is a permissionless peer-to-peer board for rendezvous, presence, images, and one-minute voice."
     />
-    <title>Rendezvous</title>
+    <title>RDZ</title>
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='50' fill='%23151310'/%3E%3Ccircle cx='50' cy='50' r='25' fill='none' stroke='%23f1ece2' stroke-width='1.5' stroke-dasharray='3 5'/%3E%3Ccircle cx='50' cy='25' r='4' fill='%23e84822'/%3E%3C/svg%3E"
@@ -23,22 +23,22 @@
       body {
         min-height: 100svh;
       }
-      rendezvous-app {
-        display: block;
+      #app {
         min-height: 100svh;
       }
-      .noscript {
-        margin: 0;
-        padding: 48px;
-        font-family: Georgia, serif;
+      .fatal {
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 64px 24px;
         color: #151310;
+        font-family: Georgia, serif;
       }
     </style>
   </head>
   <body>
-    <rendezvous-app></rendezvous-app>
+    <div id="app"></div>
     <noscript>
-      <p class="noscript">Rendezvous needs JavaScript, WebRTC, and a modern browser.</p>
+      <p style="padding: 48px; font-family: Georgia, serif">RDZ needs JavaScript and WebRTC.</p>
     </noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
