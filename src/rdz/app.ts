@@ -966,7 +966,6 @@ export class RdzApp {
         <section class="hero">
           <div class="orbit" aria-hidden="true"></div>
           <div class="hero-content">
-            <p class="eyebrow">public presence · no accounts</p>
             <h1>The Internet is Here</h1>
             <button class="primary" data-action="new-rendezvous" type="button">Set a rendezvous</button>
           </div>
