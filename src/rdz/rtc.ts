@@ -14,6 +14,14 @@ import type {
 } from './types';
 
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+const ALLOWED_IMAGE_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+]);
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const CHUNK_SIZE = 64 * 1024;
 const OFFER_TIMEOUT_MS = 120_000;
 const AUDIO_LIMIT_MS = 60_000;
@@ -30,7 +38,7 @@ interface RtcDeps {
   canAcceptChannel: (humanId: HumanId, channelId: RendezvousId) => boolean;
   onImageOffer: (offer: IncomingImageOffer) => void;
   onImageProgress: (progress: ImageTransferProgress) => void;
-  onImageComplete: (transferId: string, blob: Blob, name: string) => void;
+  onImageComplete: (transferId: string, blob: Blob, mime: string) => void;
   onImageFailed: (transferId: string, message: string) => void;
   onAudioRequest: (request: IncomingAudioRequest) => void;
   onAudioState: (session: AudioSession | null) => void;
@@ -57,7 +65,6 @@ interface IncomingImage {
   chunks: Uint8Array[];
   received: number;
   expected: number;
-  name: string;
   mime: string;
   accepted: boolean;
 }
@@ -134,8 +141,8 @@ export class RtcManager {
       transferId,
       direction: 'incoming',
       peer: transfer.sender,
-      name: transfer.offer.name,
-      size: transfer.offer.size,
+      name: 'image',
+      size: Math.round(transfer.offer.sizeMb * 1024 * 1024),
       phase: 'connecting',
       transferred: 0,
       error: null,
@@ -160,8 +167,8 @@ export class RtcManager {
 
   sendImage(target: HumanId, channelId: RendezvousId, file: File): void {
     if (this.outgoingImage) throw new Error('Only one image can be sent at a time.');
-    if (!file.type.startsWith('image/')) throw new Error('Only image files are allowed.');
-    if (file.size > 25 * 1024 * 1024) throw new Error('Images must be 25 MB or smaller.');
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) throw new Error('Only PNG, JPEG, WebP, GIF, or AVIF images are allowed.');
+    if (file.size > MAX_IMAGE_BYTES) throw new Error('Images must be 25 MB or smaller.');
     const transferId = randomTransferId();
     const transfer: OutgoingImage = {
       transferId,
@@ -175,15 +182,13 @@ export class RtcManager {
     };
     this.outgoingImage = transfer;
     this.deps.sendSignal(target, channelId, 'image-offer', transferId, {
-      name: file.name,
-      size: file.size,
-      mime: file.type,
+      sizeMb: file.size / (1024 * 1024),
     });
     this.deps.onImageProgress({
       transferId,
       direction: 'outgoing',
       peer: target,
-      name: file.name,
+      name: 'image',
       size: file.size,
       phase: 'waiting',
       transferred: 0,
@@ -300,14 +305,13 @@ export class RtcManager {
     const transferId = payload.transferId;
 
     if (payload.signal === 'image-offer') {
-      const data = payload.data as { name?: unknown; size?: unknown; mime?: unknown } | undefined;
+      const data = payload.data as { sizeMb?: unknown } | undefined;
       if (
         !data ||
-        typeof data.name !== 'string' ||
-        typeof data.size !== 'number' ||
-        typeof data.mime !== 'string' ||
-        !data.mime.startsWith('image/') ||
-        data.size > 25 * 1024 * 1024
+        typeof data.sizeMb !== 'number' ||
+        !Number.isFinite(data.sizeMb) ||
+        data.sizeMb <= 0 ||
+        data.sizeMb > 25
       ) {
         return;
       }
@@ -318,9 +322,7 @@ export class RtcManager {
         senderWords: [],
         senderEmoji: [],
         verified: true,
-        size: data.size,
-        name: data.name,
-        mime: data.mime,
+        sizeMb: data.sizeMb,
         receivedAt: Date.now(),
       };
       this.incomingImages.set(transferId, {
@@ -332,9 +334,8 @@ export class RtcManager {
         channel: null,
         chunks: [],
         received: 0,
-        expected: data.size,
-        name: data.name,
-        mime: data.mime,
+        expected: 0,
+        mime: '',
         accepted: false,
       });
       this.deps.onImageOffer(offer);
@@ -354,7 +355,7 @@ export class RtcManager {
           transferId,
           direction: 'outgoing',
           peer: this.outgoingImage.target,
-          name: this.outgoingImage.file.name,
+          name: 'image',
           size: this.outgoingImage.file.size,
           phase: 'declined',
           transferred: 0,
@@ -456,7 +457,7 @@ export class RtcManager {
       transferId: transfer.transferId,
       direction: 'outgoing',
       peer: transfer.target,
-      name: transfer.file.name,
+      name: 'image',
       size: transfer.file.size,
       phase: 'connecting',
       transferred: 0,
@@ -470,7 +471,7 @@ export class RtcManager {
     channel.send(
       JSON.stringify({
         type: 'meta',
-        name: transfer.file.name,
+        name: 'image',
         size: transfer.file.size,
         mime: transfer.file.type,
       }),
@@ -487,7 +488,7 @@ export class RtcManager {
         transferId: transfer.transferId,
         direction: 'outgoing',
         peer: transfer.target,
-        name: transfer.file.name,
+        name: 'image',
         size: transfer.file.size,
         phase: 'transferring',
         transferred: offset,
@@ -506,7 +507,7 @@ export class RtcManager {
             transferId: transfer.transferId,
             direction: 'outgoing',
             peer: transfer.target,
-            name: transfer.file.name,
+            name: 'image',
             size: transfer.file.size,
             phase: 'done',
             transferred: transfer.file.size,
@@ -597,17 +598,36 @@ export class RtcManager {
     }
   }
 
+  private failIncomingImage(transfer: IncomingImage, message: string): void {
+    this.deps.onImageFailed(transfer.transferId, message);
+    closePeer(transfer.pc);
+    this.connections.release(`image:in:${transfer.transferId}`);
+    this.incomingImages.delete(transfer.transferId);
+  }
+
   private receiveImageChunk(transfer: IncomingImage, event: MessageEvent): void {
     if (typeof event.data === 'string') {
       try {
-        const message = JSON.parse(event.data) as { type?: string; size?: number };
-        if (message.type === 'meta' && typeof message.size === 'number') {
+        const message = JSON.parse(event.data) as { type?: string; size?: number; mime?: string };
+        if (message.type === 'meta') {
+          if (
+            typeof message.size !== 'number' ||
+            !Number.isFinite(message.size) ||
+            message.size <= 0 ||
+            message.size > MAX_IMAGE_BYTES ||
+            typeof message.mime !== 'string' ||
+            !ALLOWED_IMAGE_TYPES.has(message.mime)
+          ) {
+            this.failIncomingImage(transfer, 'Unsupported or oversized image.');
+            return;
+          }
           transfer.expected = message.size;
+          transfer.mime = message.mime;
           this.deps.onImageProgress({
             transferId: transfer.transferId,
             direction: 'incoming',
             peer: transfer.sender,
-            name: transfer.name,
+            name: 'image',
             size: transfer.expected,
             phase: 'transferring',
             transferred: 0,
@@ -626,7 +646,7 @@ export class RtcManager {
       transferId: transfer.transferId,
       direction: 'incoming',
       peer: transfer.sender,
-      name: transfer.name,
+      name: 'image',
       size: transfer.expected,
       phase: 'transferring',
       transferred: transfer.received,
@@ -635,7 +655,7 @@ export class RtcManager {
     if (transfer.received >= transfer.expected) {
       const blob = new Blob(transfer.chunks as unknown as BlobPart[], { type: transfer.mime || 'application/octet-stream' });
       transfer.channel?.send(JSON.stringify({ type: 'ack' }));
-      this.deps.onImageComplete(transfer.transferId, blob, transfer.name);
+      this.deps.onImageComplete(transfer.transferId, blob, transfer.mime);
       closePeer(transfer.pc);
       this.connections.release(`image:in:${transfer.transferId}`);
       this.incomingImages.delete(transfer.transferId);
@@ -649,7 +669,7 @@ export class RtcManager {
       transferId: transfer.transferId,
       direction: 'outgoing',
       peer: transfer.target,
-      name: transfer.file.name,
+      name: 'image',
       size: transfer.file.size,
       phase: 'failed',
       transferred: 0,

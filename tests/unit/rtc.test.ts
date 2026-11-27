@@ -22,7 +22,14 @@ describe('image validation', () => {
     const rtc = await manager();
     expect(() =>
       rtc.sendImage('peer', 'channel', new File(['hello'], 'note.txt', { type: 'text/plain' })),
-    ).toThrow('Only image files are allowed.');
+    ).toThrow('Only PNG, JPEG, WebP, GIF, or AVIF images are allowed.');
+  });
+
+  it('rejects SVG and other active-content image types', async () => {
+    const rtc = await manager();
+    expect(() =>
+      rtc.sendImage('peer', 'channel', new File(['<svg/>'], 'evil.svg', { type: 'image/svg+xml' })),
+    ).toThrow('Only PNG, JPEG, WebP, GIF, or AVIF images are allowed.');
   });
 
   it('rejects images larger than 25 MiB before opening a connection', async () => {

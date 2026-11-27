@@ -32,7 +32,7 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - The old implementation is archived under `archive/legacy/`.
 - `README.md` describes the new app.
 - `docs/SPEC.md` now includes the multi-mask identity story and FR-19; the current implementation still stores a single mask and needs the multi-mask store/switcher.
-- The reference transport is a signed WebSocket relay for `PING`/`GOING`/`SIGNAL`, with direct WebRTC for images and audio. The pure-peer mesh, 100-connection rotation, and seedless first contact are not implemented; they are documented as reference-build deviations in `docs/IMPLEMENTATION_DECISIONS.md`.
+- **The current reference transport violates FR-0:** it still sends `PING`/`GOING`/`SIGNAL` over WebSocket. The required next refactor is a WebRTC data-channel mesh with peer-assisted signalling. Images and audio are already direct WebRTC. Seedless first contact is explicitly out of scope.
 
 ## Non-negotiable product behavior
 
@@ -94,16 +94,18 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 
 ### Peer graph and transport
 
-- Use WebRTC for peer traffic whenever possible.
-- Peers relay WebRTC offers, answers, and ICE candidates.
-- STUN: Google free STUN servers by default.
+- **FR-0 is the primary invariant:** `PING`, `GOING`, and `SIGNAL` travel only over WebRTC data channels. Never over WebSocket or HTTP.
+- WebSocket/HTTPS is bootstrap-only: discovery and the first SDP/ICE exchange. Bootstrap messages are not application messages.
+- Peer-assisted signalling: connected peers relay `SIGNAL` and peer introductions over WebRTC for other peers.
+- STUN: Google free STUN servers by default, or self-hosted.
 - TURN is optional; do not promise universal reachability.
-- A browser maintains at most 100 simultaneous unverified peer connections.
-- Verified peers do not count toward the 100 cap and are never rotated out.
-- Every 5 minutes, replace 20% of unverified connections with random new peers when available.
+- A browser maintains at most 100 simultaneous WebRTC peer connections; known humans are not limited.
+- Verified peers are prioritized for retention but count toward the 100 live connections.
+- Every 5 minutes, replace 20% of non-priority connections with random new peers when available.
 - Jitter refresh timers. Never drop a connection during an active image or audio session.
 - Random candidates come from the browser's internal peer registry, built from peers learned from other peers.
-- Persist the peer registry in IndexedDB so the seed is optional across restarts.
+- Persist the peer registry in IndexedDB.
+- The seed may be disconnected after the first mesh connection.
 
 ### Seed peer
 

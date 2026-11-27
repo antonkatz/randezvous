@@ -97,9 +97,7 @@ export interface IncomingImageOffer {
   senderWords: string[];
   senderEmoji: string[];
   verified: boolean;
-  size: number;
-  name: string;
-  mime: string;
+  sizeMb: number;
   receivedAt: number;
 }
 

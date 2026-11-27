@@ -136,8 +136,8 @@ test('image consent, direct transfer, save, dismiss, reuse, and decline', async 
   await expect(b.page.locator('img.received-image')).toHaveCount(0);
 
   await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
-  await expect(a.page.getByRole('button', { name: /reuse one\.png/ })).toBeVisible();
-  await a.page.getByRole('button', { name: /reuse one\.png/ }).click();
+  await expect(a.page.getByRole('button', { name: /reuse last image/ })).toBeVisible();
+  await a.page.getByRole('button', { name: /reuse last image/ }).click();
   await expect(b.page.getByRole('button', { name: 'decline', exact: true })).toBeVisible();
   await b.page.getByRole('button', { name: 'decline', exact: true }).click();
   await expect(a.page.getByText('The image was declined.')).toBeVisible();

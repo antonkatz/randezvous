@@ -46,3 +46,9 @@ Decisions made where `docs/SPEC.md` is silent or incomplete. Append new entries;
 33. **Mask-local versus browser-level state.** Verification and pinned peers are mask-local. Pinned channels and local channel labels are browser-level preferences shared across masks. Existing `GOING` announcements are not retracted when the active mask changes.
 34. **Migration.** Existing single-mask identity data migrates into the first mask. Removing a mask deletes its private key and verification state; signed messages already published remain valid.
 35. **Implementation status.** The multi-mask story and functional requirements are in the spec, but the UI/store implementation is not yet updated for multiple masks.
+
+## 2026-11-27 — FR-0 made primary
+
+36. **WebRTC-exclusive application messages are now the primary transport invariant.** `PING`, `GOING`, and `SIGNAL` must travel only over WebRTC data channels. WebSocket/HTTPS is bootstrap-only: discovery and the first SDP/ICE exchange. The seed must not receive, cache, replay, or forward application messages.
+37. **Peer-assisted signalling is mandatory.** Connected peers relay `SIGNAL` and peer introductions over WebRTC data channels. New peers use existing peers as introducers wherever possible.
+38. **Current build non-compliance.** The committed reference build still relays `PING`, `GOING`, and `SIGNAL` over the seed WebSocket. This must be refactored before the transport can be called complete. The 100 live connection cap and direct WebRTC media path remain useful pieces of that refactor.

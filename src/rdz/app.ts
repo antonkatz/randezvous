@@ -74,8 +74,9 @@ type Modal =
 interface ImageViewer {
   transferId: string;
   url: string;
-  name: string;
+  label: string;
   size: number;
+  filename: string;
 }
 
 export class RdzApp {
@@ -129,7 +130,7 @@ export class RdzApp {
       canAcceptChannel: (humanId, channelId) => this.canAcceptChannel(humanId, channelId),
       onImageOffer: (offer) => this.handleImageOffer(offer),
       onImageProgress: (progress) => this.handleImageProgress(progress),
-      onImageComplete: (transferId, blob, name) => this.handleImageComplete(transferId, blob, name),
+      onImageComplete: (transferId, blob, mime) => this.handleImageComplete(transferId, blob, mime),
       onImageFailed: (transferId, message) => this.handleImageFailed(transferId, message),
       onAudioRequest: (request) => this.handleAudioRequest(request),
       onAudioState: (session) => this.handleAudioState(session),
@@ -370,12 +371,18 @@ export class RdzApp {
     this.scheduleRender();
   }
 
-  private handleImageComplete(transferId: string, blob: Blob, name: string): void {
+  private handleImageComplete(transferId: string, blob: Blob, mime: string): void {
     this.incomingImages.delete(transferId);
     this.imageProgress.delete(transferId);
     if (this.imageViewer) URL.revokeObjectURL(this.imageViewer.url);
     const url = URL.createObjectURL(blob);
-    this.imageViewer = { transferId, url, name, size: blob.size };
+    this.imageViewer = {
+      transferId,
+      url,
+      label: 'image',
+      size: blob.size,
+      filename: safeImageFilename(mime),
+    };
     this.scheduleRender();
   }
 
@@ -905,7 +912,7 @@ export class RdzApp {
               <div class="offer ${offer.verified ? 'is-verified' : ''}">
                 <div>
                   <strong>${escapeHtml(formatWords(shortWords(offer.senderWords)))}</strong>
-                  <span>${formatBytes(offer.size)}${offer.verified ? ' · verified' : ''}</span>
+                  <span>${formatMb(offer.sizeMb)}${offer.verified ? ' · verified' : ''}</span>
                 </div>
                 <div class="row-actions">
                   <button class="small" data-action="accept-image" data-transfer="${escapeAttr(offer.transferId)}" type="button">accept</button>
@@ -1065,7 +1072,7 @@ export class RdzApp {
           <p class="modal-copy">One image at a time. The recipient must accept before any bytes move.</p>
           <div class="modal-actions">
             <button class="primary" data-action="choose-photo" data-id="${escapeAttr(this.modal.humanId)}" type="button">choose image</button>
-            ${this.lastImage ? `<button class="small" data-action="reuse-photo" data-id="${escapeAttr(this.modal.humanId)}" type="button">reuse ${escapeHtml(this.lastImage.name)}</button>` : ''}
+            ${this.lastImage ? `<button class="small" data-action="reuse-photo" data-id="${escapeAttr(this.modal.humanId)}" type="button">reuse last image</button>` : ''}
             <button class="small ghost" data-action="close-modal" type="button">cancel</button>
           </div>
         `,
@@ -1077,12 +1084,12 @@ export class RdzApp {
   private renderImage(): string {
     if (!this.imageViewer) return '';
     return this.modalShell(
-      escapeHtml(this.imageViewer.name),
+      this.imageViewer.label,
       `
-        <img class="received-image" src="${escapeAttr(this.imageViewer.url)}" alt="${escapeAttr(this.imageViewer.name)}" />
+        <img class="received-image" src="${escapeAttr(this.imageViewer.url)}" alt="received image" />
         <p class="modal-copy">${formatBytes(this.imageViewer.size)} · save it now; dismissing removes the in-app copy.</p>
         <div class="modal-actions">
-          <a class="primary" href="${escapeAttr(this.imageViewer.url)}" download="${escapeAttr(this.imageViewer.name)}">save to device</a>
+          <a class="primary" href="${escapeAttr(this.imageViewer.url)}" download="${escapeAttr(this.imageViewer.filename)}">save to device</a>
           <button class="small ghost" data-action="dismiss-image" type="button">dismiss</button>
         </div>
       `,
@@ -1099,6 +1106,27 @@ export class RdzApp {
       </div>
     `;
   }
+}
+
+function formatMb(sizeMb: number): string {
+  return `${Math.max(0.1, sizeMb).toFixed(1)} MB`;
+}
+
+function safeImageFilename(mime: string): string {
+  const extension =
+    mime === 'image/png'
+      ? 'png'
+      : mime === 'image/jpeg'
+        ? 'jpg'
+        : mime === 'image/webp'
+          ? 'webp'
+          : mime === 'image/gif'
+            ? 'gif'
+            : mime === 'image/avif'
+              ? 'avif'
+              : 'img';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `rdz-image-${stamp}.${extension}`;
 }
 
 function formatBytes(bytes: number): string {

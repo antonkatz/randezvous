@@ -7,7 +7,9 @@ A permissionless, peer-to-peer rendezvous board.
 - Presence is announced with signed `PING` messages.
 - A rendezvous is just people announcing `GOING` to a channel at a time.
 - Images and one-minute voice travel directly between browsers over WebRTC.
-- The seed peer only relays signed metadata and signalling. It never holds images or audio.
+- The seed is bootstrap-only. Application messages are meant to travel over WebRTC data channels.
+
+> **Transport status:** the canonical spec now requires `PING`, `GOING`, and `SIGNAL` to travel exclusively over WebRTC data channels, with peer-assisted signalling. The current reference build still uses the seed WebSocket as an application relay for those messages. That is a known non-compliance and the next required refactor. Images and audio are already direct WebRTC.
 
 The canonical specification is [`docs/SPEC.md`](docs/SPEC.md). Deferred features are in [`docs/FUTURE_SPEC.md`](docs/FUTURE_SPEC.md). The old spec is reference only in [`docs/SPEC_v0.md`](docs/SPEC_v0.md). Archived legacy code lives in [`archive/`](archive/README.md).
 
@@ -50,10 +52,19 @@ PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium npm run test:e2e
 
 ## How it works
 
+Target transport:
+
 ```text
-Browser A ── signed PING / GOING / SIGNAL ──► seed peer ──► Browser B
-                                                    │
-Browser A ◄══════ direct WebRTC image/audio ═══════► Browser B
+Browser A ◄════ WebRTC data channel: PING / GOING / SIGNAL ════► Browser B
+     │                                                              │
+     └──────── bootstrap SDP/ICE through the seed, first connection only ────────┘
+```
+
+Current reference transport:
+
+```text
+Browser A ── signed PING / GOING / SIGNAL over WebSocket ──► seed peer ──► Browser B
+Browser A ◄════════════ direct WebRTC image/audio ════════════► Browser B
 ```
 
 1. Each browser creates a persistent P-256 keypair in IndexedDB.
@@ -64,7 +75,7 @@ Browser A ◄══════ direct WebRTC image/audio ═══════�
 6. The landing page shows the full online human list and live channels. A channel screen groups humans by `HH:mm`.
 7. `T + 3` removes the announcement from the channel. The human remains online and reachable.
 8. Images and voice are requested only inside a channel and only between humans who have verified each other.
-9. An image offer shows the sender and size in MB only. The recipient must accept before any bytes move.
+9. An image offer shows the sender and a numeric size in MB only. The recipient must accept before any bytes move.
 10. Audio is pairwise, lasts one minute, can be restarted, and never records or uploads.
 
 ## Verification
@@ -92,9 +103,11 @@ Only verified humans can open a channel connection. Unverified humans remain vis
 
 ## Seed peer
 
-The seed is a long-running, in-memory relay. It stores no media and has no human identity. A new browser connects to the same-origin `/signal` endpoint by default.
+The seed is a bootstrap peer. It stores no media and has no human identity. A new browser connects to the same-origin `/signal` endpoint by default.
 
-The current reference transport uses a signed WebSocket relay for `PING`, `GOING`, and `SIGNAL`; images and audio are direct WebRTC. This is documented as a reference implementation decision in [`docs/IMPLEMENTATION_DECISIONS.md`](docs/IMPLEMENTATION_DECISIONS.md). The seed cannot be fully removed for first contact in this build; `?seed=off` starts the app offline with cached state.
+The target design uses the seed only to discover peers and carry the first SDP/ICE exchange. `PING`, `GOING`, and `SIGNAL` then travel over WebRTC data channels, with peers relaying signalling for other peers.
+
+The current reference build still relays `PING`, `GOING`, and `SIGNAL` over WebSocket. This is a known non-compliance with FR-0 and is documented in [`docs/IMPLEMENTATION_DECISIONS.md`](docs/IMPLEMENTATION_DECISIONS.md). `?seed=off` starts the app offline with cached state.
 
 The production seed host is `randezvous.instanthero.ca`.
 
@@ -118,7 +131,8 @@ Environment:
 
 ## Limitations
 
-- The reference transport is a seed relay, not a full peer-to-peer relay mesh.
+- **FR-0 is not yet met.** The current reference build still sends `PING`, `GOING`, and `SIGNAL` over the seed WebSocket. The required refactor is to move them to WebRTC data channels and add peer-assisted signalling.
+- The WebRTC relay mesh and 20% peer rotation are not implemented. The 100 live connection cap currently applies to direct WebRTC media connections.
 - No TURN is configured; some NAT pairs will not connect.
 - No universal reachability is promised.
 - The app stores identity, verification, pins, and recent signed messages locally. Images are not kept after dismissal.

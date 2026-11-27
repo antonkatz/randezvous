@@ -120,6 +120,7 @@ As a photo recipient, I want to save the photo while it is displayed, so that I 
 - A received photo can be saved through the browser's download mechanism while it is displayed.
 - Dismissing the photo removes the in-app copy.
 - The app provides no photo wall or persistent gallery.
+- Saving uses a locally generated filename and extension. The sender's filename is never transmitted, displayed, or used.
 - A saved file remains on the device, subject to the operating system and browser download rules.
 
 ### US-10 — I can offer an image to another participant
@@ -132,6 +133,7 @@ As a participant, I want to choose an image and offer it to a specific human, so
 - During an active rendezvous, the participants are listed individually with a send action.
 - Pressing send for one human lets me choose an image from my device or reuse the last image I sent.
 - Each press sends one image to that human only.
+- My local filename is never transmitted. The offer contains only a numeric size in megabytes.
 - No image bytes are sent before that human accepts.
 - I can have only one outgoing image transfer in progress at a time.
 - The next send becomes available only after the current recipient accepts and the image is received, or the offer is declined or fails.
@@ -145,7 +147,8 @@ As a recipient, I want to accept or decline an incoming image before any bytes a
 
 **Acceptance criteria**
 
-- An incoming offer shows the sender and the image size in MB before any image bytes are sent.
+- An incoming offer shows the sender and a numeric size in megabytes before any image bytes are sent.
+- The offer carries no filename, path, MIME type, preview, or other sender-supplied metadata.
 - No preview is shown. Accepting is at the user's own risk.
 - Multiple incoming offers can be pending at once. All are listed.
 - Offers from verified humans are listed before offers from unverified humans.
@@ -193,29 +196,45 @@ As a person with more than one online identity, I want my browser to hold severa
 
 ## Functional Requirements
 
+### FR-0 — WebRTC-exclusive application messages and peer-assisted signalling
+
+This is the primary transport invariant, ahead of every other functional requirement.
+
+- `PING`, `GOING`, and `SIGNAL` are application messages. They MUST travel only over WebRTC data channels between peers.
+- No `PING`, `GOING`, or `SIGNAL` may be sent, received, cached, replayed, or forwarded over WebSocket, HTTP, or any other non-WebRTC transport.
+- WebSocket or HTTPS may be used only for bootstrap discovery and the SDP/ICE exchange required to establish the first WebRTC data channel. Bootstrap messages are not `PING`, `GOING`, or `SIGNAL`, and must not carry application content.
+- The seed peer is not an application-message relay. It must not receive, store, replay, or forward `PING`, `GOING`, or `SIGNAL`.
+- Peer-assisted signalling is a key design principle. Connected peers forward `SIGNAL` envelopes for other peers over WebRTC data channels. A new peer uses an existing peer as its introducer wherever possible.
+- Flood-once relay, deduplication, replay to new peers, and expiry all happen over the WebRTC mesh.
+- If no WebRTC data channel exists, a client must not fall back to a non-WebRTC transport for application messages. It reports the peer as unreachable.
+- The 100 live peer connection cap applies to the WebRTC mesh. It does not limit how many humans the browser knows about.
+- The seed may be disconnected after the first mesh connection. Existing peers continue without it.
+
 ### FR-1 — The seed peer is optional
 
 The 24/7 RDZ peer is optional. No core function may depend on it. Presence, rendezvous discovery, message relay and replay, verification, and photo or voice handoff must all continue with zero configured seed peers, provided a browser has at least one known peer. The seed may be removed, offline, or absent from configuration without stopping the rest of the network.
 
-### FR-2 — The 24/7 peer behaves like any other peer
+### FR-2 — The seed peer is bootstrap-only
 
 - The default seed peer is `randezvous.instanthero.ca`. A brand-new browser with no cached peers connects there first.
 - The seed address is deployment configuration, not a protocol constant. A client may have no seed (FR-1) or a different one.
-- The 24/7 peer is a long-running, in-memory-only process.
+- The 24/7 peer is a long-running, in-memory-only bootstrap process.
 - It is not a human. It has no human ID, sends no human `PING`, and never appears in the human list.
-- It relays and replays all valid, unexpired `PING` and `GOING` messages freely.
+- It may help peers discover each other and may carry bootstrap SDP/ICE envelopes needed to establish the first WebRTC data channel.
+- It must not receive, cache, replay, or forward `PING`, `GOING`, or `SIGNAL`. It is not an application-message relay.
 - It never accepts, stores, or relays photographs or voice memos.
-- It has no durable state. A restart loses its in-memory message set.
-- It follows the same signature, deduplication, relay, and expiry rules as every other peer.
-- It may serve as the initial bootstrap address and relay WebRTC signalling.
+- It has no durable state. A restart loses its bootstrap state.
+- It may be disconnected after the first mesh connection. Existing peers continue without it.
+- Bootstrap envelopes are separate from application messages and must not carry application content.
 
 ### FR-3 — Transport
 
-- Peer traffic uses WebRTC whenever possible.
-- Peers relay WebRTC offers, answers, and ICE candidates for other peers.
-- The first connection to the seed peer uses WebRTC. The seed handles the initial offer/answer exchange.
-- STUN uses Google's free STUN servers by default.
+- Application traffic (`PING`, `GOING`, `SIGNAL`) uses WebRTC data channels exclusively.
+- Bootstrap discovery and the first SDP/ICE exchange may use the seed over WebSocket or HTTPS. Bootstrap is not application traffic.
+- Connected peers relay `SIGNAL` envelopes and peer introductions for other peers over WebRTC data channels.
+- STUN uses Google's free STUN servers by default, or a self-hosted STUN endpoint.
 - TURN is optional. There is no universal reachability guarantee.
+- There is no non-WebRTC fallback for application messages. If a WebRTC path cannot be established, the peer is reported unreachable.
 
 ### FR-4 — Messages are signed
 
@@ -263,11 +282,12 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 ### FR-7 — Relay, replay, and deduplication
 
 - Each peer caches every valid, unexpired `PING` and `GOING` message it has seen.
-- Each unique message is forwarded at most once by each peer to its known peers, excluding the sender.
+- Each unique message is forwarded at most once by each peer to its known peers over WebRTC data channels, excluding the sender.
 - Deduplication is keyed by a hash of the canonical signed bytes.
-- On a new authenticated peer connection, a peer replays all valid messages it holds, then continues live relay.
+- On a new authenticated WebRTC peer connection, a peer replays all valid messages it holds, then continues live relay.
 - Both sides replay to each other. Duplicates are absorbed by deduplication.
 - Expired messages are purged and never replayed.
+- The seed peer never caches or replays application messages.
 - Photographs and voice memos are never cached or replayed by the relay layer.
 
 ### FR-8 — Announcement expiry and channel lifetime
@@ -283,13 +303,14 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 
 ### FR-9 — Peer connections
 
-- A browser maintains at most 100 simultaneous unverified peer connections.
-- Verified peers are never rotated out and do not count toward the 100-connection cap.
-- Every 5 minutes, 20% of the unverified connections are replaced with random new peers when more peers are available.
+- A browser maintains at most 100 simultaneous WebRTC peer connections.
+- The cap applies only to live connections. It does not limit how many humans the browser knows about.
+- Verified peers are prioritized for retention but still count toward the 100 live connections.
+- Every 5 minutes, 20% of the non-priority connections are replaced with random new peers when more peers are available.
 - Random candidates are drawn from the browser's internal peer registry, which is built from peers it learns about from other peers.
 - Refresh timers are jittered.
 - A connection is not dropped during an active photo or voice session; refresh waits until it finishes.
-- If fewer than 100 unverified peers are available, the browser connects to all of them and does not rotate until more appear.
+- If fewer than 100 peers are available, the browser connects to all of them and does not rotate until more appear.
 
 ### FR-10 — Identity
 
@@ -352,11 +373,15 @@ The specification does not promise that every peer can reach every other peer. N
 - Pressing send for a participant opens image selection or reuses the last image sent.
 - A sender has at most one outgoing image transfer in flight at a time.
 - The next send is enabled only after the current transfer is acknowledged as received, or the offer is declined or fails.
-- An offer carries the sender and the image size in MB only. No preview is shown.
-- No image bytes are sent before the recipient accepts. Accepting is at the user's own risk.
+- An offer carries only a numeric size in megabytes, plus routing and consent fields.
+- The sender's filename, path, MIME type, and preview are never transmitted in the offer.
+- The exact byte length and safe image type are sent only after consent, inside the transfer channel.
+- The receiver generates a safe local filename when saving. A sender-supplied filename is never displayed or used.
 - The recipient explicitly accepts or declines.
+- No image bytes are sent before the recipient accepts. Accepting is at the user's own risk.
 - Multiple sends to the same or different recipients are independent, each with its own image choice and consent.
-- Only image MIME types are accepted. The default maximum size is 25 MiB.
+- Only raster image formats are accepted. SVG and other active-content image types are rejected.
+- The default maximum size is 25 MiB. A transfer that exceeds the actual byte limit is aborted.
 - An accepted transfer uses the authenticated WebRTC connection and is acknowledged per direction.
 - An accepted image is displayed in the live rendezvous surface.
 - An accepted image can be saved through the browser while it is displayed. Dismissing it removes the in-app copy.
@@ -380,19 +405,20 @@ The specification does not promise that every peer can reach every other peer. N
 ### FR-18 — SIGNAL envelopes
 
 - `SIGNAL` carries WebRTC offers, answers, and ICE candidates between peers.
+- `SIGNAL` travels only inside WebRTC data channels. It is never sent over the seed WebSocket.
 - Every `SIGNAL` envelope is addressed to a target human ID.
 - Every `SIGNAL` envelope is signed by its creator.
 - A client accepts a channel `SIGNAL` only when its creator is a human that client has verified locally.
 - A verified `SIGNAL` is accepted only when it names a channel the recipient is currently viewing or has an active `GOING` announcement in.
 - A channel connection completes only when both humans have verified each other locally.
 - A `SIGNAL` from an unverified human is ignored.
-- The seed bootstrap connection is not a human channel `SIGNAL` and is exempt.
-- Relay connections to unverified peers may still exist for `PING`, `GOING`, and `SIGNAL` forwarding. They do not grant channel access.
+- Connected peers forward `SIGNAL` for other peers over WebRTC data channels. This is peer-assisted signalling.
+- Bootstrap SDP/ICE exchanges used to create the first WebRTC data channel are separate bootstrap messages, not `SIGNAL`, and may be carried by the seed.
+- The seed never forwards `SIGNAL`.
 - Peers forward `SIGNAL` flood-once, preserving the original signature.
 - Relays never modify or re-sign a `SIGNAL` envelope.
 - `SIGNAL` envelopes are short-lived. Stale envelopes are discarded.
 - `SIGNAL` carries no image, audio, or file bytes.
-- The seed peer forwards `SIGNAL` exactly like any other peer.
 - `SIGNAL` is never displayed as a human or rendezvous message.
 
 ### FR-19 — Multiple masks, one active identity
@@ -440,7 +466,7 @@ The rendezvous screen has no automatic close. It stays open until I explicitly l
 
 ### VS-8 — Photo offer
 
-An incoming photo offer shows the sender and the image size in MB. It shows no preview.
+An incoming photo offer shows the sender and a numeric size in megabytes. It shows no filename, path, MIME type, or preview.
 
 ### VS-9 — Audio progress
 
