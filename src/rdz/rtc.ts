@@ -1,3 +1,4 @@
+import { ConnectionBudget } from './connection-budget';
 import { randomTransferId } from './ids';
 import type {
   AudioSession,
@@ -94,6 +95,7 @@ export class RtcManager {
   private outgoingAudio: OutgoingAudio | null = null;
   private incomingAudio = new Map<string, IncomingAudio>();
   private audioSession: AudioSession | null = null;
+  private readonly connections = new ConnectionBudget();
   private stopped = false;
 
   constructor(
@@ -104,9 +106,17 @@ export class RtcManager {
   stop(): void {
     this.stopped = true;
     this.closeOutgoingImage();
-    for (const transfer of this.incomingImages.values()) closePeer(transfer.pc);
+    for (const [id, transfer] of this.incomingImages) {
+      closePeer(transfer.pc);
+      this.connections.release(`image:in:${id}`);
+    }
     this.incomingImages.clear();
     this.closeAudio(false);
+    this.connections.clear();
+  }
+
+  get liveConnectionCount(): number {
+    return this.connections.size;
   }
 
   /** Called after the local user accepts an incoming image offer. */
@@ -144,6 +154,7 @@ export class RtcManager {
     const transfer = this.incomingImages.get(transferId);
     if (!transfer) return;
     closePeer(transfer.pc);
+    this.connections.release(`image:in:${transferId}`);
     this.incomingImages.delete(transferId);
   }
 
@@ -420,6 +431,10 @@ export class RtcManager {
 
   private async startImageOffer(transfer: OutgoingImage): Promise<void> {
     window.clearTimeout(transfer.timeout);
+    if (!this.connections.tryAcquire(`image:out:${transfer.transferId}`)) {
+      this.failOutgoingImage(`At most ${this.connections.size} live peer connections are allowed.`);
+      return;
+    }
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     transfer.pc = pc;
     const channel = pc.createDataChannel('image', { ordered: true });
@@ -520,6 +535,11 @@ export class RtcManager {
 
     if (payload.signal === 'offer' && data?.sdp) {
       if (incoming && incoming.accepted) {
+        if (!this.connections.tryAcquire(`image:in:${incoming.transferId}`)) {
+          this.deps.sendSignal(incoming.sender, incoming.channelId, 'image-decline', incoming.transferId);
+          this.incomingImages.delete(incoming.transferId);
+          return;
+        }
         const peer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         incoming.pc = peer;
         peer.addEventListener('datachannel', (event) => {
@@ -537,6 +557,11 @@ export class RtcManager {
         return;
       }
       if (incomingAudio?.accepted) {
+        if (!this.connections.tryAcquire(`audio:in:${incomingAudio.transferId}`)) {
+          this.deps.sendSignal(incomingAudio.sender, incomingAudio.channelId, 'audio-decline', incomingAudio.transferId);
+          this.incomingAudio.delete(incomingAudio.transferId);
+          return;
+        }
         const peer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         incomingAudio.pc = peer;
         peer.addEventListener('track', (event) => {
@@ -612,6 +637,7 @@ export class RtcManager {
       transfer.channel?.send(JSON.stringify({ type: 'ack' }));
       this.deps.onImageComplete(transfer.transferId, blob, transfer.name);
       closePeer(transfer.pc);
+      this.connections.release(`image:in:${transfer.transferId}`);
       this.incomingImages.delete(transfer.transferId);
     }
   }
@@ -636,10 +662,16 @@ export class RtcManager {
     if (!this.outgoingImage) return;
     window.clearTimeout(this.outgoingImage.timeout);
     closePeer(this.outgoingImage.pc);
+    this.connections.release(`image:out:${this.outgoingImage.transferId}`);
     this.outgoingImage = null;
   }
 
   private async startAudioOffer(outgoing: OutgoingAudio): Promise<void> {
+    if (!this.connections.tryAcquire(`audio:out:${outgoing.transferId}`)) {
+      this.deps.sendSignal(outgoing.target, outgoing.channelId, 'audio-decline', outgoing.transferId);
+      this.closeAudio(false);
+      return;
+    }
     try {
       outgoing.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
@@ -710,12 +742,14 @@ export class RtcManager {
       window.clearInterval(outgoing.ticker);
       for (const track of outgoing.stream?.getTracks() ?? []) track.stop();
       closePeer(outgoing.pc);
+      this.connections.release(`audio:out:${outgoing.transferId}`);
     }
     for (const session of incoming) {
       window.clearTimeout(session.timer);
       window.clearInterval(session.ticker);
       for (const track of session.stream?.getTracks() ?? []) track.stop();
       closePeer(session.pc);
+      this.connections.release(`audio:in:${session.transferId}`);
     }
     this.outgoingAudio = null;
     this.incomingAudio.clear();
