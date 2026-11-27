@@ -106,7 +106,7 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 ### Peer graph and transport
 
 - **FR-0 is the primary invariant:** `PING`, `GOING`, and `SIGNAL` travel only over WebRTC data channels. Never over WebSocket or HTTP.
-- WebSocket/HTTPS is bootstrap-only: discovery and the first SDP/ICE exchange. Bootstrap messages are not application messages.
+- WebSocket/HTTPS is bootstrap-only: discovery and the first SDP/ICE exchange. Bootstrap messages are not application messages. The default seed is same-origin `/signal`, so LAN and tunnel clients share one seed.
 - Peer-assisted signalling: connected peers relay `SIGNAL` and peer introductions over WebRTC for other peers.
 - STUN: Google free STUN servers by default, or self-hosted.
 - TURN is optional; do not promise universal reachability.

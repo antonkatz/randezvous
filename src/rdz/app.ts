@@ -1364,7 +1364,7 @@ export class RdzApp {
       return this.modalShell(
         'Send an image',
         `
-          <p class="modal-copy">One image at a time. The recipient must accept before any bytes move.</p>
+          <p class="modal-copy">One image at a time. Both humans must have verified each other. The recipient must accept before any bytes move.</p>
           <div class="modal-actions">
             <button class="primary" data-action="choose-photo" data-id="${escapeAttr(this.modal.humanId)}" type="button">choose image</button>
             ${this.lastImage ? `<button class="small" data-action="reuse-photo" data-id="${escapeAttr(this.modal.humanId)}" type="button">reuse last image</button>` : ''}

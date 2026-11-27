@@ -48,6 +48,14 @@ npx playwright install chromium
 PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium npm run test:e2e
 ```
 
+### Testing with a phone
+
+Phones require a secure context for Web Crypto and WebRTC. Open the same HTTPS URL on both devices. A plain `http://192.168.x.x:5173` page cannot use Web Crypto or WebRTC; RDZ now shows an **HTTPS required** screen instead of failing silently.
+
+For local phone testing, expose the Vite port through an HTTPS tunnel and open the tunnel URL on both the phone and the desktop. Both devices then use the same same-origin seed. Alternatively use the production TLS deployment.
+
+If both devices are online but a photo or voice request does not arrive, verify **both directions**. Each side only accepts media requests from a human it has marked as verified.
+
 ## How it works
 
 ```text
@@ -76,7 +84,7 @@ peer-assisted signalling; connected peers relay `SIGNAL` for other peers.
 
 Each human has eight words derived from their public key. Compare those words out loud or through another app, then mark the human verified. There is no pairwise code. Verification is local and persists in IndexedDB.
 
-Only verified humans can open a channel connection. Unverified humans remain visible for discovery and verification.
+Only verified humans can open a channel connection. Unverified humans remain visible for discovery and verification. Media requests only appear when both humans have verified each other.
 
 ## Images
 

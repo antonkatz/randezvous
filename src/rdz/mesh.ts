@@ -784,19 +784,28 @@ export class MeshManager {
 
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
 
-export function resolveBootstrapUrl(): string {
-  const params = new URLSearchParams(window.location.search);
+export function bootstrapUrlFrom(
+  protocol: string,
+  host: string,
+  search: string,
+  configured?: string,
+): string {
+  const params = new URLSearchParams(search);
   const override = params.get('seed');
   if (override === 'off') return '';
   if (override) return override;
-  const configured = import.meta.env.VITE_SEED_URL as string | undefined;
   if (configured?.trim()) return configured.trim();
-  const host = window.location.hostname;
-  if (host === 'localhost' || host === '127.0.0.1' || host === 'randezvous.instanthero.ca') {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}/signal`;
-  }
-  return 'wss://randezvous.instanthero.ca/signal';
+  const socketProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${socketProtocol}//${host}/signal`;
+}
+
+export function resolveBootstrapUrl(): string {
+  return bootstrapUrlFrom(
+    window.location.protocol,
+    window.location.host,
+    window.location.search,
+    import.meta.env.VITE_SEED_URL as string | undefined,
+  );
 }
 
 function expiryFor(envelope: Envelope): number {
