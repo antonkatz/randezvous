@@ -274,3 +274,133 @@ test('a recipient can hold multiple image offers at once', async ({ browser }, t
   await b.context.close();
   await c.context.close();
 });
+
+test('application messages travel only over the WebRTC mesh', async ({ browser }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const frames: string[] = [];
+  page.on('websocket', (socket) => {
+    socket.on('framesent', (event) => {
+      if (typeof event.payload === 'string') frames.push(event.payload);
+    });
+    socket.on('framereceived', (event) => {
+      if (typeof event.payload === 'string') frames.push(event.payload);
+    });
+  });
+
+  await page.goto('/');
+  await expectLive(page);
+  await createChannel(page, futureTime());
+  await page.waitForTimeout(500);
+
+  const types = frames
+    .map((frame) => {
+      try {
+        return (JSON.parse(frame) as { type?: string }).type ?? '';
+      } catch {
+        return '';
+      }
+    })
+    .filter(Boolean);
+
+  expect(types).toContain('bootstrap-offer');
+  expect(types).toContain('bootstrap-answer');
+  expect(types.every((type) => type.startsWith('bootstrap-'))).toBe(true);
+  expect(types.some((type) => type === 'PING' || type === 'GOING' || type === 'SIGNAL')).toBe(false);
+
+  await context.close();
+});
+
+test('the seed is a headless WebRTC peer and counts as a live peer', async ({ browser, request }) => {
+  const a = await openPage(browser);
+  await expectLive(a.page);
+
+  await expect
+    .poll(async () => {
+      const health = (await (await request.get('/health')).json()) as {
+        sessions: number;
+        peers: number;
+      };
+      return health.peers;
+    })
+    .toBeGreaterThanOrEqual(1);
+
+  const health = (await (await request.get('/health')).json()) as {
+    sessions: number;
+    peers: number;
+  };
+  expect(health.sessions).toBeGreaterThanOrEqual(1);
+  expect(health.peers).toBeGreaterThanOrEqual(1);
+
+  await a.context.close();
+});
+
+test('multiple masks: create, switch, persist, and remove', async ({ browser }) => {
+  const a = await openPage(browser);
+  const first = await identityWords(a.page);
+
+  await a.page.locator('.identity-chip').click();
+  await expect(a.page.getByRole('heading', { name: 'Masks' })).toBeVisible();
+  await expect(a.page.locator('.mask-row')).toHaveCount(1);
+
+  await a.page.getByRole('button', { name: 'new mask' }).click();
+  await expect(a.page.locator('.mask-row')).toHaveCount(2);
+  await expect(a.page.locator('.mask-row.is-active')).toHaveCount(1);
+  const second = await identityWords(a.page);
+  expect(second).not.toBe(first);
+  await expectLive(a.page);
+
+  const firstRow = a.page
+    .locator('.mask-row')
+    .filter({ hasText: first.split(' ').slice(0, 4).join(' ') });
+  await firstRow.getByRole('button', { name: 'switch' }).click();
+  await expect.poll(async () => identityWords(a.page)).toBe(first);
+  await expect(a.page.locator('.mask-row.is-active')).toHaveCount(1);
+  await expectLive(a.page);
+
+  await a.page.reload();
+  await expectLive(a.page);
+  expect(await identityWords(a.page)).toBe(first);
+
+  await a.page.locator('.identity-chip').click();
+  await expect(a.page.locator('.mask-row')).toHaveCount(2);
+  await a.page.locator('.mask-row.is-active').getByRole('button', { name: 'remove' }).click();
+  await expect(a.page.locator('.mask-row')).toHaveCount(1);
+  await expect.poll(async () => identityWords(a.page)).toBe(second);
+  await expectLive(a.page);
+
+  await a.page.locator('.mask-row').getByRole('button', { name: 'remove' }).click();
+  await expect.poll(async () => identityWords(a.page)).not.toBe(second);
+  await expect(a.page.locator('.mask-row')).toHaveCount(1);
+  const third = await identityWords(a.page);
+  expect([first, second]).not.toContain(third);
+
+  await a.context.close();
+});
+
+test('verification is scoped to the active mask', async ({ browser }) => {
+  const { a, b, aWords, bWords } = await setupPair(browser);
+  await expect(humanRow(a.page, bWords)).toContainText('verified');
+
+  await a.page.locator('.identity-chip').click();
+  await a.page.getByRole('button', { name: 'new mask' }).click();
+  await expect.poll(async () => identityWords(a.page)).not.toBe(aWords);
+  const newWords = await identityWords(a.page);
+
+  await expect(humanRow(a.page, bWords)).toContainText('not verified');
+  await expect(humanRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toHaveCount(0);
+  await expect(a.page.locator('.time-group')).toHaveCount(1);
+  await b.page.getByRole('button', { name: /landing/ }).click();
+  await expect(humanRow(b.page, newWords)).toBeVisible();
+
+  const firstRow = a.page
+    .locator('.mask-row')
+    .filter({ hasText: aWords.split(' ').slice(0, 4).join(' ') });
+  await firstRow.getByRole('button', { name: 'switch' }).click();
+  await expect.poll(async () => identityWords(a.page)).toBe(aWords);
+  await expect(humanRow(a.page, bWords)).toContainText('verified');
+  await expect(humanRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toBeVisible();
+
+  await a.context.close();
+  await b.context.close();
+});

@@ -21,6 +21,9 @@ export interface GoingPayload {
 }
 
 export type SignalKind =
+  | 'mesh-offer'
+  | 'mesh-answer'
+  | 'mesh-ice'
   | 'offer'
   | 'answer'
   | 'ice'
@@ -56,10 +59,24 @@ export interface Envelope<T extends EnvelopePayload = EnvelopePayload> {
 }
 
 export interface StoredIdentity {
-  key: string;
   privateKey: CryptoKey;
   publicKey: string;
   humanId: HumanId;
+}
+
+export interface MaskRecord extends StoredIdentity {
+  id: string;
+  createdAt: number;
+}
+
+export interface MaskState {
+  masks: MaskRecord[];
+  activeMaskId: string;
+}
+
+export interface MaskVerificationRecord extends VerificationRecord {
+  id: string;
+  maskId: string;
 }
 
 export interface VerificationRecord {
@@ -68,10 +85,21 @@ export interface VerificationRecord {
   verifiedAt: number | null;
 }
 
+export interface MeshPeerInfo {
+  humanId: HumanId;
+  publicKey: string;
+}
+
 export interface PinRecord {
   channelId: RendezvousId;
   label: string;
   createdAt: number;
+}
+
+export interface PeerRecord {
+  humanId: HumanId;
+  publicKey: string;
+  lastSeen: number;
 }
 
 export interface GoingAnnouncement {

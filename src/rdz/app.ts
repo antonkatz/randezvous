@@ -6,6 +6,7 @@ import {
   isValidGoing,
   isValidPing,
   PING_INTERVAL_MS,
+  PRESENCE_MS,
   SIGNAL_TTL_MS,
   verifyEnvelope,
 } from './crypto';
@@ -20,7 +21,8 @@ import {
   uniqueEmojiDisplay,
   uniqueWordDisplay,
 } from './ids';
-import { RelayClient, resolveRelayUrl, type RelayStatus } from './relay';
+import { ConnectionBudget } from './connection-budget';
+import { MeshManager, resolveBootstrapUrl, type MeshStatus } from './mesh';
 import { RtcManager } from './rtc';
 import {
   activeAnnouncements,
@@ -38,14 +40,20 @@ import {
   sortHumans,
 } from './state';
 import {
+  createMaskRecord,
   deleteEnvelopes,
   loadEnvelopes,
-  loadIdentity,
+  loadMaskState,
+  loadPeerRegistry,
   loadPins,
   loadVerifications,
+  removeMaskRecord,
   removePin,
   saveEnvelope,
+  saveMask,
+  savePeerRegistryEntry,
   savePin,
+  setActiveMask,
   setVerification,
 } from './store';
 import type {
@@ -57,9 +65,9 @@ import type {
   ImageTransferProgress,
   IncomingAudioRequest,
   IncomingImageOffer,
+  MaskRecord,
   PinRecord,
   SignalKind,
-  StoredIdentity,
   VerificationRecord,
 } from './types';
 
@@ -80,17 +88,20 @@ interface ImageViewer {
 }
 
 export class RdzApp {
-  private identity!: StoredIdentity;
+  private masks: MaskRecord[] = [];
+  private identity!: MaskRecord;
   private verifications = new Map<string, VerificationRecord>();
   private pins: PinRecord[] = [];
   private humans = new Map<string, Human>();
   private announcements = new Map<string, GoingAnnouncement>();
   private goingEnvelopes = new Map<string, Envelope>();
-  private seen = new Set<string>();
-  private relay: RelayClient | null = null;
+  private seen = new Map<string, number>();
+  private mesh: MeshManager | null = null;
   private rtc!: RtcManager;
-  private relayStatus: RelayStatus = 'offline';
-  private relayUrl = '';
+  private meshStatus: MeshStatus = 'offline';
+  private readonly budget = new ConnectionBudget();
+  private runtimeGeneration = 0;
+  private signalChain: Promise<void> = Promise.resolve();
   private now = Date.now();
   private query = '';
   private activeChannelId: string | null = null;
@@ -112,35 +123,21 @@ export class RdzApp {
   private fileInput!: HTMLInputElement;
 
   async start(): Promise<void> {
-    this.identity = await loadIdentity();
-    this.verifications = await loadVerifications();
+    const maskState = await loadMaskState();
+    this.masks = maskState.masks;
+    this.identity = this.masks.find((mask) => mask.id === maskState.activeMaskId) ?? this.masks[0]!;
+    this.verifications = await loadVerifications(this.identity.id);
     this.pins = await loadPins();
-    this.humans.set(this.identity.humanId, {
-      id: this.identity.humanId,
-      publicKey: this.identity.publicKey,
-      words: idToWords(this.identity.humanId),
-      emoji: idToEmoji(this.identity.humanId),
-      lastSeen: Date.now(),
-      verified: true,
-    });
-    this.rtc = new RtcManager(this.identity, {
-      sendSignal: (target, channelId, signal, transferId, data) =>
-        this.sendSignal(target, channelId, signal, transferId, data),
-      isVerified: (humanId) => this.isVerified(humanId),
-      canAcceptChannel: (humanId, channelId) => this.canAcceptChannel(humanId, channelId),
-      onImageOffer: (offer) => this.handleImageOffer(offer),
-      onImageProgress: (progress) => this.handleImageProgress(progress),
-      onImageComplete: (transferId, blob, mime) => this.handleImageComplete(transferId, blob, mime),
-      onImageFailed: (transferId, message) => this.handleImageFailed(transferId, message),
-      onAudioRequest: (request) => this.handleAudioRequest(request),
-      onAudioState: (session) => this.handleAudioState(session),
-    });
+    this.addSelfHuman();
+    this.rtc = this.createRtc();
+    this.mesh = this.createMesh();
 
     const cached = await loadEnvelopes();
     const expired: string[] = [];
     for (const entry of cached) {
       if (entry.envelope.type === 'GOING' && isValidGoing(entry.envelope)) {
         this.goingEnvelopes.set(entry.id, entry.envelope);
+        this.mesh.remember(entry.envelope);
         void this.processEnvelope(entry.envelope, false);
       } else {
         expired.push(entry.id);
@@ -148,15 +145,8 @@ export class RdzApp {
     }
     await deleteEnvelopes(expired);
 
-    this.relayUrl = resolveRelayUrl();
-    if (this.relayUrl) {
-      this.relay = new RelayClient({
-        url: this.relayUrl,
-        onEnvelope: (value) => void this.handleRelayEnvelope(value),
-        onStatus: (status) => this.handleRelayStatus(status),
-      });
-      this.relay.start();
-    }
+    this.mesh.start();
+    void this.considerKnownPeers();
 
     this.ticker = window.setInterval(() => this.tick(), 10_000);
     this.pingTicker = window.setInterval(() => this.sendPing(), PING_INTERVAL_MS);
@@ -169,6 +159,75 @@ export class RdzApp {
     this.bind();
     this.render();
     this.sendPing();
+  }
+
+  private createRtc(): RtcManager {
+    const generation = this.runtimeGeneration;
+    const current = (): boolean => this.runtimeGeneration === generation;
+    return new RtcManager(
+      this.identity,
+      {
+        sendSignal: (target, channelId, signal, transferId, data) => {
+          if (current()) this.sendSignal(target, channelId, signal, transferId, data);
+        },
+        isVerified: (humanId) => this.isVerified(humanId),
+        canAcceptChannel: (humanId, channelId) => this.canAcceptChannel(humanId, channelId),
+        onImageOffer: (offer) => {
+          if (current()) this.handleImageOffer(offer);
+        },
+        onImageProgress: (progress) => {
+          if (current()) this.handleImageProgress(progress);
+        },
+        onImageComplete: (transferId, blob, mime) => {
+          if (current()) this.handleImageComplete(transferId, blob, mime);
+        },
+        onImageFailed: (transferId, message) => {
+          if (current()) this.handleImageFailed(transferId, message);
+        },
+        onAudioRequest: (request) => {
+          if (current()) this.handleAudioRequest(request);
+        },
+        onAudioState: (session) => {
+          if (current()) this.handleAudioState(session);
+        },
+      },
+      this.budget,
+    );
+  }
+
+  private createMesh(): MeshManager {
+    const generation = this.runtimeGeneration;
+    const current = (): boolean => this.runtimeGeneration === generation;
+    return new MeshManager(this.identity, {
+      budget: this.budget,
+      bootstrapUrl: resolveBootstrapUrl(),
+      isVerified: (humanId) => this.isVerified(humanId),
+      isBusy: (humanId) => this.rtc.busyPeers().has(humanId),
+      onEnvelope: (value) => {
+        if (current()) void this.handleMeshEnvelope(value);
+      },
+      onStatus: (status) => {
+        if (current()) this.handleMeshStatus(status);
+      },
+      onPeers: (peers) => {
+        if (!current()) return;
+        for (const peer of peers) {
+          this.mesh?.considerPeer(peer.humanId, peer.publicKey);
+          void savePeerRegistryEntry({ ...peer, lastSeen: Date.now() });
+        }
+      },
+    });
+  }
+
+  private addSelfHuman(): void {
+    this.humans.set(this.identity.humanId, {
+      id: this.identity.humanId,
+      publicKey: this.identity.publicKey,
+      words: idToWords(this.identity.humanId),
+      emoji: idToEmoji(this.identity.humanId),
+      lastSeen: Date.now(),
+      verified: true,
+    });
   }
 
   private bind(): void {
@@ -214,7 +273,7 @@ export class RdzApp {
     });
   }
 
-  private async handleRelayEnvelope(value: unknown): Promise<void> {
+  private async handleMeshEnvelope(value: unknown): Promise<void> {
     await this.processEnvelope(value, true);
   }
 
@@ -227,10 +286,21 @@ export class RdzApp {
     if (envelope.type === 'SIGNAL' && Date.now() - envelope.createdAt > SIGNAL_TTL_MS) return;
 
     const id = await envelopeId(envelope);
-    if (this.seen.has(id)) return;
-    this.seen.add(id);
+    const expiresAt = envelopeExpiry(envelope);
+    if (expiresAt <= Date.now()) return;
+    const prior = this.seen.get(id);
+    if (prior && prior > Date.now()) return;
+    this.seen.set(id, expiresAt);
 
     this.upsertHuman(envelope);
+    if (envelope.author !== this.identity.humanId) {
+      this.mesh?.considerPeer(envelope.author, envelope.publicKey);
+      void savePeerRegistryEntry({
+        humanId: envelope.author,
+        publicKey: envelope.publicKey,
+        lastSeen: Date.now(),
+      });
+    }
     if (persist && envelope.type === 'GOING') {
       void saveEnvelope(id, envelope);
     }
@@ -258,27 +328,28 @@ export class RdzApp {
   private upsertHuman(envelope: Envelope): void {
     const existing = this.humans.get(envelope.author);
     const verification = this.verifications.get(envelope.author);
+    const otherLocalMask = this.masks.some(
+      (mask) => mask.id !== this.identity.id && mask.humanId === envelope.author,
+    );
     const verified =
-      envelope.author === this.identity.humanId ||
-      Boolean(verification?.verifiedAt && verification.publicKey === envelope.publicKey);
+      !otherLocalMask &&
+      (envelope.author === this.identity.humanId ||
+        Boolean(verification?.verifiedAt && verification.publicKey === envelope.publicKey));
     const next: Human = {
       id: envelope.author,
       publicKey: envelope.publicKey,
       words: idToWords(envelope.author),
       emoji: idToEmoji(envelope.author),
-      lastSeen: Math.max(existing?.lastSeen ?? 0, envelope.createdAt),
+      lastSeen: otherLocalMask ? 0 : Math.max(existing?.lastSeen ?? 0, envelope.createdAt),
       verified,
     };
     this.humans.set(envelope.author, next);
   }
 
-  private handleRelayStatus(status: RelayStatus): void {
-    this.relayStatus = status;
+  private handleMeshStatus(status: MeshStatus): void {
+    this.meshStatus = status;
     if (status === 'online') {
       this.sendPing();
-      for (const envelope of this.goingEnvelopes.values()) {
-        if (isValidGoing(envelope)) this.relay?.send(envelope);
-      }
     }
     this.scheduleRender();
   }
@@ -289,9 +360,10 @@ export class RdzApp {
 
   private async buildAndSend(payload: Parameters<typeof createEnvelope>[1]): Promise<Envelope | null> {
     if (!this.identity) return null;
+    const generation = this.runtimeGeneration;
     const envelope = await createEnvelope(this.identity, payload);
-    if (!this.relay) return envelope;
-    this.relay.send(envelope);
+    if (generation !== this.runtimeGeneration) return null;
+    void this.mesh?.publish(envelope);
     return envelope;
   }
 
@@ -302,14 +374,22 @@ export class RdzApp {
     transferId: string,
     data?: unknown,
   ): void {
-    void this.buildAndSend({
-      kind: 'SIGNAL',
-      target,
-      channelId,
-      signal,
-      transferId,
-      ...(data === undefined ? {} : { data }),
-    });
+    const generation = this.runtimeGeneration;
+    this.signalChain = this.signalChain
+      .then(async () => {
+        if (generation !== this.runtimeGeneration) return;
+        const envelope = await createEnvelope(this.identity, {
+          kind: 'SIGNAL',
+          target,
+          channelId,
+          signal,
+          transferId,
+          ...(data === undefined ? {} : { data }),
+        });
+        if (generation !== this.runtimeGeneration) return;
+        await this.mesh?.publish(envelope);
+      })
+      .catch(() => undefined);
   }
 
   private isVerified(humanId: string): boolean {
@@ -343,6 +423,9 @@ export class RdzApp {
       }
     }
     if (removed.length) void deleteEnvelopes(removed);
+    for (const [id, expiresAt] of this.seen) {
+      if (expiresAt <= this.now) this.seen.delete(id);
+    }
     this.scheduleRender();
   }
 
@@ -479,6 +562,18 @@ export class RdzApp {
       this.render();
       return;
     }
+    if (action === 'create-mask') {
+      await this.createMask();
+      return;
+    }
+    if (action === 'switch-mask') {
+      await this.activateMask(id);
+      return;
+    }
+    if (action === 'remove-mask') {
+      await this.removeMask(id);
+      return;
+    }
     if (action === 'close-modal') {
       this.modal = null;
       this.render();
@@ -487,8 +582,8 @@ export class RdzApp {
     if (action === 'verify-human') {
       const human = this.humans.get(id);
       if (!human) return;
-      await setVerification(id, human.publicKey, true);
-      this.verifications = await loadVerifications();
+      await setVerification(this.identity.id, id, human.publicKey, true);
+      this.verifications = await loadVerifications(this.identity.id);
       human.verified = true;
       this.showToast('Human verified.');
       this.modal = null;
@@ -498,8 +593,8 @@ export class RdzApp {
     if (action === 'unverify-human') {
       const human = this.humans.get(id);
       if (!human) return;
-      await setVerification(id, human.publicKey, false);
-      this.verifications = await loadVerifications();
+      await setVerification(this.identity.id, id, human.publicKey, false);
+      this.verifications = await loadVerifications(this.identity.id);
       human.verified = false;
       this.render();
       return;
@@ -612,7 +707,7 @@ export class RdzApp {
       });
       if (envelope) {
         const envelopeKey = await envelopeId(envelope);
-        this.seen.add(envelopeKey);
+        this.seen.set(envelopeKey, scheduledAt + ANNOUNCEMENT_GRACE_MS);
         this.announcements.set(envelopeKey, {
           envelopeId: envelopeKey,
           author: envelope.author,
@@ -636,6 +731,109 @@ export class RdzApp {
       this.pins = await loadPins();
       this.modal = null;
       this.render();
+    }
+  }
+
+  private async createMask(): Promise<void> {
+    const mask = await createMaskRecord();
+    await saveMask(mask);
+    this.masks = (await loadMaskState()).masks;
+    await this.activateMask(mask.id);
+  }
+
+  private async activateMask(maskId: string): Promise<void> {
+    const mask = this.masks.find((entry) => entry.id === maskId);
+    if (!mask) return;
+    await setActiveMask(maskId);
+    if (mask.id === this.identity.id) {
+      this.scheduleRender();
+      return;
+    }
+    this.identity = mask;
+    this.verifications = await loadVerifications(maskId);
+    this.teardownForMaskSwitch();
+    this.restartRuntime();
+    this.refreshVerifiedFlags();
+    this.addSelfHuman();
+    this.showToast('Mask active. Reconnecting.');
+    this.render();
+  }
+
+  private async removeMask(maskId: string): Promise<void> {
+    const mask = this.masks.find((entry) => entry.id === maskId);
+    if (!mask) return;
+    const human = this.humans.get(mask.humanId);
+    if (human) {
+      human.lastSeen = 0;
+      human.verified = false;
+    }
+    const wasActive = this.identity.id === maskId;
+    await removeMaskRecord(maskId);
+    const state = await loadMaskState();
+    this.masks = state.masks;
+    if (wasActive) {
+      await this.activateMask(state.activeMaskId);
+      return;
+    }
+    this.verifications = await loadVerifications(this.identity.id);
+    this.refreshVerifiedFlags();
+    this.showToast('Mask removed.');
+    this.render();
+  }
+
+  private teardownForMaskSwitch(): void {
+    this.runtimeGeneration += 1;
+    this.mesh?.stop();
+    this.mesh = null;
+    this.rtc?.stop();
+    this.signalChain = Promise.resolve();
+    this.budget.clear();
+    this.incomingImages.clear();
+    this.incomingAudio.clear();
+    this.imageProgress.clear();
+    this.audioSession = null;
+    if (this.imageViewer) URL.revokeObjectURL(this.imageViewer.url);
+    this.imageViewer = null;
+    this.lastImage = null;
+    this.pendingSend = null;
+    if (this.remoteAudio) {
+      this.remoteAudio.pause();
+      this.remoteAudio.srcObject = null;
+    }
+    if (this.audioTicker) {
+      window.clearInterval(this.audioTicker);
+      this.audioTicker = 0;
+    }
+    if (this.modal && this.modal.type !== 'identity') this.modal = null;
+  }
+
+  private restartRuntime(): void {
+    this.rtc = this.createRtc();
+    this.mesh = this.createMesh();
+    this.mesh.start();
+    this.sendPing();
+    void this.considerKnownPeers();
+  }
+
+  private async considerKnownPeers(): Promise<void> {
+    const peers = await loadPeerRegistry();
+    for (const peer of peers) this.mesh?.considerPeer(peer.humanId, peer.publicKey);
+  }
+
+  private refreshVerifiedFlags(): void {
+    for (const human of this.humans.values()) {
+      const record = this.verifications.get(human.id);
+      human.verified =
+        human.id === this.identity.humanId ||
+        Boolean(record?.verifiedAt && record.publicKey === human.publicKey);
+    }
+    for (const mask of this.masks) {
+      if (mask.humanId === this.identity.humanId) continue;
+      const human = this.humans.get(mask.humanId);
+      if (human) {
+        human.lastSeen = 0;
+        human.verified = false;
+      }
     }
   }
 
@@ -691,8 +889,8 @@ export class RdzApp {
     if (!root) return;
     this.now = Date.now();
     const statusLabel =
-      this.relayStatus === 'online' ? 'live' : this.relayStatus === 'connecting' ? 'connecting' : 'off';
-    const statusClass = this.relayStatus === 'online' ? 'is-live' : '';
+      this.meshStatus === 'online' ? 'live' : this.meshStatus === 'connecting' ? 'connecting' : 'off';
+    const statusClass = this.meshStatus === 'online' ? 'is-live' : '';
     const ownShortWords = formatWords(shortWords(idToWords(this.identity.humanId)));
     const ownShortEmoji = formatEmoji(shortEmoji(idToEmoji(this.identity.humanId)));
     const body = this.activeChannelId
@@ -706,7 +904,7 @@ export class RdzApp {
             <span>RDZ</span>
           </button>
           <div class="top-actions">
-            <span class="live ${statusClass}" title="seed connection"><span class="dot"></span>${statusLabel}</span>
+            <span class="live ${statusClass}" title="WebRTC mesh"><span class="dot"></span>${statusLabel}</span>
             <button class="identity-chip" data-action="identity" type="button">
               <span class="identity-emoji">${escapeHtml(ownShortEmoji)}</span>
               <span class="identity-words">${escapeHtml(ownShortWords)}</span>
@@ -1055,13 +1253,40 @@ export class RdzApp {
       );
     }
     if (this.modal.type === 'identity') {
+      const ids = this.masks.map((mask) => mask.humanId);
       return this.modalShell(
-        'You',
+        'Masks',
         `
+          <p class="modal-copy">One mask is active at a time. Switching closes media and reconnects as the chosen identity.</p>
+          <div class="mask-list">
+            ${this.masks
+              .map((mask) => {
+                const active = mask.id === this.identity.id;
+                const words = formatWords(uniqueWordDisplay(ids, mask.humanId));
+                const emoji = formatEmoji(uniqueEmojiDisplay(ids, mask.humanId));
+                return `
+                  <div class="mask-row ${active ? 'is-active' : ''}">
+                    <div class="mask-copy">
+                      <span class="mask-emoji">${escapeHtml(emoji)}</span>
+                      <strong>${escapeHtml(words)}</strong>
+                    </div>
+                    <div class="row-actions">
+                      ${active ? '<span class="mask-active">active</span>' : `<button class="small ghost" data-action="switch-mask" data-id="${escapeAttr(mask.id)}" type="button">switch</button>`}
+                      <button class="small ghost" data-action="remove-mask" data-id="${escapeAttr(mask.id)}" type="button">remove</button>
+                    </div>
+                  </div>
+                `;
+              })
+              .join('')}
+          </div>
+          <p class="modal-copy">Verification words for the active mask:</p>
           <div class="identity-words full">${escapeHtml(formatEmoji(idToEmoji(this.identity.humanId)))}</div>
           <div class="identity-words full mono">${escapeHtml(formatWords(idToWords(this.identity.humanId)))}</div>
-          <p class="modal-copy">These eight words are your verification set. They are derived from this browser's key. There is no account to recover.</p>
-          <div class="modal-actions"><button class="small ghost" data-action="close-modal" type="button">close</button></div>
+          <p class="modal-copy">These eight words are this mask's verification set. They are derived from its key. There is no account to recover.</p>
+          <div class="modal-actions">
+            <button class="primary" data-action="create-mask" type="button">new mask</button>
+            <button class="small ghost" data-action="close-modal" type="button">close</button>
+          </div>
         `,
       );
     }
@@ -1106,6 +1331,14 @@ export class RdzApp {
       </div>
     `;
   }
+}
+
+function envelopeExpiry(envelope: Envelope): number {
+  if (envelope.type === 'PING') return envelope.createdAt + PRESENCE_MS;
+  if (envelope.type === 'GOING' && envelope.payload.kind === 'GOING') {
+    return envelope.payload.scheduledAt + ANNOUNCEMENT_GRACE_MS;
+  }
+  return envelope.createdAt + SIGNAL_TTL_MS;
 }
 
 function formatMb(sizeMb: number): string {

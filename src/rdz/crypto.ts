@@ -13,7 +13,7 @@ export async function createIdentity(): Promise<StoredIdentity> {
   const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
   const privateKey = await crypto.subtle.importKey('jwk', privateJwk, ECDSA, false, ['sign']);
   const humanId = await humanIdFromPublicKey(publicKey);
-  return { key: 'self', privateKey, publicKey, humanId };
+  return { privateKey, publicKey, humanId };
 }
 
 export async function sha256Base64Url(value: Uint8Array | string): Promise<string> {

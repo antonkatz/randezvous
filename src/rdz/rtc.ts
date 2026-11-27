@@ -102,13 +102,16 @@ export class RtcManager {
   private outgoingAudio: OutgoingAudio | null = null;
   private incomingAudio = new Map<string, IncomingAudio>();
   private audioSession: AudioSession | null = null;
-  private readonly connections = new ConnectionBudget();
+  private readonly connections: ConnectionBudget;
   private stopped = false;
 
   constructor(
     private readonly identity: StoredIdentity,
     private readonly deps: RtcDeps,
-  ) {}
+    connections?: ConnectionBudget,
+  ) {
+    this.connections = connections ?? new ConnectionBudget();
+  }
 
   stop(): void {
     this.stopped = true;
@@ -119,11 +122,20 @@ export class RtcManager {
     }
     this.incomingImages.clear();
     this.closeAudio(false);
-    this.connections.clear();
   }
 
   get liveConnectionCount(): number {
     return this.connections.size;
+  }
+
+  /** Humans with an active or pending photo or voice session. */
+  busyPeers(): Set<HumanId> {
+    const peers = new Set<HumanId>();
+    if (this.outgoingImage) peers.add(this.outgoingImage.target);
+    for (const transfer of this.incomingImages.values()) peers.add(transfer.sender);
+    if (this.outgoingAudio) peers.add(this.outgoingAudio.target);
+    for (const transfer of this.incomingAudio.values()) peers.add(transfer.sender);
+    return peers;
   }
 
   /** Called after the local user accepts an incoming image offer. */
@@ -224,6 +236,11 @@ export class RtcManager {
       remoteStream: null,
       error: null,
     });
+    this.outgoingAudio.timer = window.setTimeout(() => {
+      if (this.outgoingAudio?.transferId === transferId && !this.outgoingAudio.startedAt) {
+        this.closeAudio(false);
+      }
+    }, 30_000);
     this.deps.sendSignal(target, channelId, 'audio-request', transferId);
   }
 
@@ -240,6 +257,15 @@ export class RtcManager {
       return;
     }
     this.deps.sendSignal(request.sender, request.channelId, 'audio-accept', transferId);
+    request.timer = window.setTimeout(() => {
+      if (this.incomingAudio.get(transferId)?.startedAt === null) {
+        closePeer(request.pc);
+        for (const track of request.stream?.getTracks() ?? []) track.stop();
+        this.connections.release(`audio:in:${transferId}`);
+        this.incomingAudio.delete(transferId);
+        this.setAudio(null);
+      }
+    }, 30_000);
     this.setAudio({
       transferId,
       peer: request.sender,
@@ -441,8 +467,16 @@ export class RtcManager {
     const channel = pc.createDataChannel('image', { ordered: true });
     transfer.channel = channel;
     channel.binaryType = 'arraybuffer';
-    channel.addEventListener('open', () => void this.sendImageBytes(transfer));
+    channel.addEventListener('open', () => {
+      window.clearTimeout(transfer.timeout);
+      void this.sendImageBytes(transfer);
+    });
     this.wireIce(pc, transfer.target, transfer.channelId, transfer.transferId);
+    transfer.timeout = window.setTimeout(() => {
+      if (transfer.channel?.readyState !== 'open') {
+        this.failOutgoingImage('The direct connection timed out.');
+      }
+    }, 30_000);
     pc.addEventListener('connectionstatechange', () => {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         this.failOutgoingImage('The direct connection could not be made.');
@@ -548,6 +582,14 @@ export class RtcManager {
           event.channel.binaryType = 'arraybuffer';
           event.channel.addEventListener('message', (message) => this.receiveImageChunk(incoming, message));
         });
+        peer.addEventListener('connectionstatechange', () => {
+          if (
+            (peer.connectionState === 'failed' || peer.connectionState === 'closed') &&
+            this.incomingImages.get(incoming.transferId) === incoming
+          ) {
+            this.failIncomingImage(incoming, 'The direct connection could not be made.');
+          }
+        });
         this.wireIce(peer, incoming.sender, incoming.channelId, incoming.transferId);
         await peer.setRemoteDescription(data.sdp);
         const answer = await peer.createAnswer();
@@ -568,6 +610,18 @@ export class RtcManager {
         peer.addEventListener('track', (event) => {
           incomingAudio.remoteStream = event.streams[0] ?? null;
           this.startIncomingAudio(incomingAudio);
+        });
+        peer.addEventListener('connectionstatechange', () => {
+          if (
+            (peer.connectionState === 'failed' || peer.connectionState === 'closed') &&
+            this.incomingAudio.get(incomingAudio.transferId) === incomingAudio
+          ) {
+            closePeer(incomingAudio.pc);
+            for (const track of incomingAudio.stream?.getTracks() ?? []) track.stop();
+            this.connections.release(`audio:in:${incomingAudio.transferId}`);
+            this.incomingAudio.delete(incomingAudio.transferId);
+            this.setAudio(null);
+          }
         });
         if (incomingAudio.stream) {
           for (const track of incomingAudio.stream.getTracks()) peer.addTrack(track, incomingAudio.stream);
@@ -706,6 +760,14 @@ export class RtcManager {
       outgoing.remoteStream = event.streams[0] ?? null;
       this.startOutgoingAudio(outgoing);
     });
+    pc.addEventListener('connectionstatechange', () => {
+      if (
+        (pc.connectionState === 'failed' || pc.connectionState === 'closed') &&
+        this.outgoingAudio?.transferId === outgoing.transferId
+      ) {
+        this.closeAudio(false);
+      }
+    });
     this.wireIce(pc, outgoing.target, outgoing.channelId, outgoing.transferId);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -726,6 +788,7 @@ export class RtcManager {
       remoteStream: outgoing.remoteStream,
       error: null,
     });
+    window.clearTimeout(outgoing.timer);
     outgoing.timer = window.setTimeout(() => this.endAudio(), AUDIO_LIMIT_MS);
     outgoing.ticker = window.setInterval(() => this.publishAudio(), 250);
   }
@@ -742,6 +805,7 @@ export class RtcManager {
       remoteStream: incoming.remoteStream,
       error: null,
     });
+    window.clearTimeout(incoming.timer);
     incoming.timer = window.setTimeout(() => this.endAudio(), AUDIO_LIMIT_MS);
     incoming.ticker = window.setInterval(() => this.publishAudio(), 250);
   }

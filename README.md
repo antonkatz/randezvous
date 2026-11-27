@@ -9,8 +9,6 @@ A permissionless, peer-to-peer rendezvous board.
 - Images and one-minute voice travel directly between browsers over WebRTC.
 - The seed is a headless WebRTC peer. It can replay `PING`/`GOING` and relay `SIGNAL` over WebRTC, but has no human identity and cannot receive images or audio.
 
-> **Transport status:** the canonical spec now requires `PING`, `GOING`, and `SIGNAL` to travel exclusively over WebRTC data channels, with peer-assisted signalling. The current reference build still uses the seed WebSocket as an application relay for those messages. That is a known non-compliance and the next required refactor. Images and audio are already direct WebRTC.
-
 The canonical specification is [`docs/SPEC.md`](docs/SPEC.md). Deferred features are in [`docs/FUTURE_SPEC.md`](docs/FUTURE_SPEC.md). The old spec is reference only in [`docs/SPEC_v0.md`](docs/SPEC_v0.md). Archived legacy code lives in [`archive/`](archive/README.md).
 
 ## Run locally
@@ -37,7 +35,7 @@ npm run dev          # Vite + seed peer
 npm run dev:web      # UI only
 npm run dev:seed     # seed peer only
 npm run build        # typecheck, app build, server build
-npm start            # serve dist/ + WebSocket relay on :8787
+npm start            # serve dist/ + headless WebRTC seed on :8787
 npm test             # unit tests
 npm run test:e2e     # build + Playwright end-to-end tests
 ```
@@ -52,31 +50,27 @@ PLAYWRIGHT_CHROMIUM_PATH=/usr/bin/chromium npm run test:e2e
 
 ## How it works
 
-Target transport:
-
 ```text
 Browser A ◄════ WebRTC data channel: PING / GOING / SIGNAL ════► Browser B
-     │                                                              │
-     └──────── bootstrap SDP/ICE through the seed, first connection only ────────┘
+     ▲                                                                ▲
+     └──────────── WebRTC mesh ── headless seed peer ─────────────────┘
 ```
 
-Current reference transport:
+The seed only carries the bootstrap SDP/ICE exchange over WebSocket. The first
+WebRTC data channel is then used for application messages and for
+peer-assisted signalling; connected peers relay `SIGNAL` for other peers.
 
-```text
-Browser A ── signed PING / GOING / SIGNAL over WebSocket ──► seed peer ──► Browser B
-Browser A ◄════════════ direct WebRTC image/audio ════════════► Browser B
-```
-
-1. Each browser creates a persistent P-256 keypair in IndexedDB.
-2. The human ID is the first 88 bits of `SHA-256(public key)`. It renders as 8 words and 11 emoji.
-3. Every message is canonicalised, signed, and carries the author's public key.
-4. `PING` announces presence every 3 minutes; a human stays online for 5 minutes after the last valid `PING`.
-5. `GOING` announces a rendezvous channel and a time. The same channel can have many humans and many times.
-6. The landing page shows the full online human list and live channels. A channel screen groups humans by `HH:mm`.
-7. `T + 3` removes the announcement from the channel. The human remains online and reachable.
-8. Images and voice are requested only inside a channel and only between humans who have verified each other.
-9. An image offer shows the sender and a numeric size in MB only. The recipient must accept before any bytes move.
-10. Audio is pairwise, lasts one minute, can be restarted, and never records or uploads.
+1. Each mask creates a persistent P-256 keypair in IndexedDB.
+2. A browser can hold several masks, but exactly one is active. The active mask is the only identity that sends `PING`, signs new `GOING` and `SIGNAL`, or holds media sessions.
+3. The human ID is the first 88 bits of `SHA-256(public key)`. It renders as 8 words and 11 emoji.
+4. Every message is canonicalised, signed, and carries the author's public key.
+5. `PING` announces presence every 3 minutes; a human stays online for 5 minutes after the last valid `PING`.
+6. `GOING` announces a rendezvous channel and a time. The same channel can have many humans and many times.
+7. The landing page shows the full online human list and live channels. A channel screen groups humans by `HH:mm`.
+8. `T + 3` removes the announcement from the channel. The human remains online and reachable.
+9. Images and voice are requested only inside a channel and only between humans who have verified each other.
+10. An image offer shows the sender and a numeric size in MB only. The recipient must accept before any bytes move.
+11. Audio is pairwise, lasts one minute, can be restarted, and never records or uploads.
 
 ## Verification
 
@@ -105,9 +99,9 @@ Only verified humans can open a channel connection. Unverified humans remain vis
 
 The seed is a long-running, in-memory, headless WebRTC peer. It stores no media and has no human identity. A new browser connects to the same-origin `/signal` endpoint by default to bootstrap a WebRTC connection.
 
-The target design is that the seed behaves like any other peer over WebRTC: it can replay unexpired `PING`/`GOING` messages and forward `SIGNAL`. It cannot accept images or audio because it is headless. `PING`, `GOING`, and `SIGNAL` still travel only over WebRTC data channels; WebSocket/HTTPS is only for bootstrap discovery and the first SDP/ICE exchange.
+The seed behaves like any other peer over WebRTC: it caches and replays unexpired `PING`/`GOING` and forwards `SIGNAL`. It cannot accept images or audio because it is headless. `PING`, `GOING`, and `SIGNAL` travel only over WebRTC data channels; WebSocket is used only for bootstrap discovery and the first SDP/ICE exchange. The seed uses a signed challenge to bind each data channel to the human identity it claims.
 
-The current reference build still relays `PING`, `GOING`, and `SIGNAL` over WebSocket. This is a known non-compliance with FR-0 and is documented in [`docs/IMPLEMENTATION_DECISIONS.md`](docs/IMPLEMENTATION_DECISIONS.md). `?seed=off` starts the app offline with cached state.
+`?seed=off` starts the app offline with cached state. Seedless first contact remains out of scope.
 
 The production seed host is `randezvous.instanthero.ca`.
 
@@ -131,15 +125,15 @@ Environment:
 
 ## Limitations
 
-- **FR-0 is not yet met.** The current reference build still sends `PING`, `GOING`, and `SIGNAL` over the seed WebSocket. The required refactor is to move them to WebRTC data channels and add peer-assisted signalling.
-- The WebRTC relay mesh and 20% peer rotation are not implemented. The 100 live connection cap currently applies to direct WebRTC media connections.
 - No TURN is configured; some NAT pairs will not connect.
 - No universal reachability is promised.
-- The app stores identity, verification, pins, and recent signed messages locally. Images are not kept after dismissal.
-- Clearing site data creates a new identity. There is no recovery or multi-device sync.
+- Seedless first contact requires an existing signalling path. A cached peer registry helps reconnect, but a browser cannot receive inbound sockets on its own.
+- The app stores masks, verification, the peer registry, pins, and recent signed messages locally. Images are not kept after dismissal.
+- Clearing site data removes every mask. There is no recovery or multi-device sync.
 - Auto-banning peers that send future `PING` timestamps is deferred; invalid messages are rejected.
 
 ## Third-party notices
 
 - BIP-39 English word list (MIT) — 2048-word identifier and verification vocabulary.
+- werift (MIT) — headless WebRTC peer used by the seed server.
 - Instrument Serif and DM Sans (SIL Open Font License) — see `public/fonts/`.

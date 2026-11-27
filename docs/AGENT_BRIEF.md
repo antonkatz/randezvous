@@ -9,11 +9,13 @@ This file is the compact handoff from the specification conversation. It is cont
 
 ## Implementation status (27 Nov 2026)
 
-- The new RDZ app, seed relay, protocol, UI, and automated tests are implemented.
+- The new RDZ app, WebRTC mesh, headless WebRTC seed, multi-mask UI/store, protocol, and automated tests are implemented.
 - `npm test` and `npm run test:e2e` pass.
+- `PING`, `GOING`, and `SIGNAL` travel only over WebRTC data channels. WebSocket is bootstrap-only.
+- Peer-assisted signalling, direct peer links, replay, dedup, the shared 100-connection budget, and 20% peer rotation are implemented.
+- Multiple masks are implemented with one active identity, per-mask verification, and a mask switcher.
 - `README.md` describes the new app.
-- `docs/SPEC.md` now includes the multi-mask identity story and FR-19; the current implementation still stores a single mask and needs the multi-mask store/switcher.
-- Remaining reference-build deviations from the ideal transport spec are listed in `docs/IMPLEMENTATION_DECISIONS.md`: WebSocket metadata relay, no 100-peer mesh/rotation, no seedless first contact, and a non-WebRTC seed bootstrap.
+- Remaining deviations: no TURN, no universal reachability, seedless first contact is out of scope, and the peer registry only helps when a signalling path exists.
 
 ## Mission
 
@@ -31,8 +33,8 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - The new RDZ implementation is in `src/rdz/`, `src/ui/`, `src/main.ts`, and `server/index.ts`.
 - The old implementation is archived under `archive/legacy/`.
 - `README.md` describes the new app.
-- `docs/SPEC.md` now includes the multi-mask identity story and FR-19; the current implementation still stores a single mask and needs the multi-mask store/switcher.
-- **The current reference transport violates FR-0:** it still sends `PING`/`GOING`/`SIGNAL` over WebSocket. The required next refactor is a WebRTC data-channel mesh with peer-assisted signalling. Images and audio are already direct WebRTC. Seedless first contact is explicitly out of scope.
+- `docs/SPEC.md` includes the multi-mask identity story and FR-19, and the implementation now follows it.
+- `PING`/`GOING`/`SIGNAL` move only over WebRTC data channels. The seed is a headless WebRTC peer; WebSocket is bootstrap-only. Seedless first contact is explicitly out of scope.
 
 ## Non-negotiable product behavior
 
@@ -198,7 +200,7 @@ These are decisions the spec does not fully answer. Implement them, keep them in
 9. **Image limits:** one image per offer; 25 MiB maximum; reject non-image MIME types and oversized files before offering.
 10. **Audio UI:** progress bar only, gentle pink, no numeric countdown. End button and mute button always visible.
 11. **Dedup cache TTL:** `PING` 10 minutes; `GOING` until scheduled + 3 minutes + 5-minute margin; `SIGNAL` 2 minutes.
-12. **Seed implementation:** prefer a maintained Node WebRTC library. If that is unreliable, run the seed as a headless browser peer. Keep the HTTPS bootstrap handshake minimal.
+12. **Seed implementation:** implemented with the maintained `werift` Node WebRTC library. The WebSocket carries only the bootstrap SDP/ICE exchange and a signed data-channel identity challenge.
 13. **Peer registry persistence:** IndexedDB, pruned when peers have been unreachable for 24 hours.
 14. **Connection retries:** exponential backoff with jitter; do not retry an unverified channel `SIGNAL`.
 15. **Tests:** Vitest for unit/integration, Playwright for E2E. Use fake timers for presence, `T + 3`, and relay expiry. Use multiple browser contexts for WebRTC.

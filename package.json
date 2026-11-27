@@ -10,7 +10,7 @@
     "dev:seed": "tsx watch server/index.ts",
     "build": "npm run typecheck && npm run build:app && npm run build:server",
     "build:app": "vite build",
-    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist-server/index.js --external:ws --sourcemap",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=dist-server/index.js --external:ws --external:werift --sourcemap",
     "start": "node dist-server/index.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
@@ -28,6 +28,7 @@
     "node": "24.x"
   },
   "dependencies": {
+    "werift": "^0.29.0",
     "ws": "^8.23.0"
   },
   "devDependencies": {

@@ -677,6 +677,53 @@ h2 {
   letter-spacing: 0.02em;
 }
 
+.mask-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mask-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+}
+
+.mask-row.is-active {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.mask-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mask-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mask-emoji {
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.mask-active {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .received-image {
   width: 100%;
   max-height: 58svh;
