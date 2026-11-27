@@ -303,7 +303,7 @@ h2 {
 
 .channel-card {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(54px, 9em) minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   width: 100%;
@@ -321,9 +321,9 @@ h2 {
 .channel-emoji {
   font-size: 1.05rem;
   letter-spacing: 0.08em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .channel-copy,
@@ -374,6 +374,10 @@ h2 {
 
 .human-row.is-verified {
   background: linear-gradient(90deg, rgba(63, 107, 80, 0.04), transparent);
+}
+
+.human-row.is-self {
+  background: linear-gradient(90deg, rgba(52, 38, 134, 0.07), transparent);
 }
 
 .human-main {

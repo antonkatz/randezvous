@@ -41,7 +41,11 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 ### Landing page and channels
 
 - Landing page shows the full list of humans currently online and the rendezvous channels.
-- No `send photo` or `open voice` on the landing page.
+- Rendezvous cards show a full distinguishing emoji prefix: minimum 3, maximum 11, computed against every known rendezvous before filtering and never clipped.
+- The active mask appears in the landing online list and is marked as me.
+- The active mask is never listed inside a rendezvous channel, even when it announced a `GOING` there.
+- No `send photo` or `open voice` on the landing page, including on your own row.
+- You cannot send a photo or open voice with yourself.
 - Actions exist only inside a specific rendezvous channel screen.
 - A channel screen lists humans grouped by announced `HH:mm`, ascending, with subtle separators.
 - A human may appear multiple times if they announced multiple times.

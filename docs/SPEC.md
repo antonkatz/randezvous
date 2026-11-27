@@ -55,6 +55,7 @@ As anyone on the board, I want to see every human currently online, so that I kn
 **Acceptance criteria**
 
 - The online list is derived from unexpired `PING` messages.
+- The list includes the active mask, marked as me. It is not treated as another human.
 - There is no cap or allowlist on the number of online humans.
 - Presence is best effort and limited to the connected peer graph.
 - Verified humans are shown before unverified humans.
@@ -193,6 +194,35 @@ As a person with more than one online identity, I want my browser to hold severa
 - Clearing site data removes all masks. The next visit creates a new default mask.
 - Pinned channels and local channel labels are browser-level UI preferences. They remain visible across masks and are not part of a mask's identity.
 - Switching masks never rewrites, retracts, or reassigns a `GOING` announcement already signed by another mask. Existing announcements remain valid until `T + 3`.
+
+### US-14 — I can see myself online
+
+As an active mask, I want to see myself in the list of humans currently online, so that I can confirm which identity this browser is presenting.
+
+**Acceptance criteria**
+
+- The landing page's online-human list includes the active mask.
+- The active mask is marked as me, so it is not mistaken for another human.
+- The active mask is shown as online while it is active, including when no other peer is reachable.
+- Opening my own entry opens the mask switcher.
+- The active mask is not listed in any rendezvous channel's participant list, even when it has a `GOING` announcement there.
+- I cannot send a photo or open voice with myself.
+- After switching masks, the new active mask appears in the landing list and the previous local mask is no longer shown as online.
+- Filtering hides my entry when it does not match, like any other human row.
+
+### US-15 — I can tell every rendezvous apart at a glance
+
+As someone scanning the landing page, I want each rendezvous emoji string to be long enough to be unique, so that I can distinguish all known rendezvous without opening them.
+
+**Acceptance criteria**
+
+- Each rendezvous card on the landing page shows an emoji prefix of at least 3 emoji.
+- The prefix extends one emoji at a time until it differs from every other known rendezvous.
+- The comparison set is every known rendezvous on the landing page, including pinned rendezvous with no live announcement and rendezvous hidden by the current filter.
+- Filtering the landing page never shortens or lengthens a displayed prefix.
+- The prefix never exceeds the full 11-emoji canonical rendezvous ID. An 88-bit ID has exactly 11 emoji of 8 bits each, so 11 emoji always distinguish two different IDs.
+- The rendered prefix is never visually truncated with an ellipsis or clipped by the layout.
+- Extending the displayed prefix does not change the canonical rendezvous ID.
 
 ## Functional Requirements
 
@@ -336,6 +366,7 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 - A rendezvous's full word sequence identifies it.
 - The board filter and human search match either representation.
 - An identifier is displayed at the shortest length that is unambiguous in the current view.
+- On the landing page, a rendezvous emoji prefix uses a minimum of 3 emoji and is extended against every known rendezvous, including pinned-only and filtered-out rendezvous. It never exceeds the 11-emoji canonical ID.
 - On collision, the displayed emoji or word string is extended until the entries differ.
 - Extending the display does not change the underlying identity.
 - The full sequence is used for verification, never the shortened display.
@@ -478,6 +509,10 @@ During a one-minute audio conversation, a gentle pink progress bar shows the rem
 ### VS-10 — Mask switcher
 
 The identity chip opens a mask switcher. It lists every stored mask by its emoji and words, marks exactly one as active, and offers create, switch, and remove actions. Switching shows a brief connecting state and ends any active image or audio session. At no point are two masks shown as active.
+
+### VS-11 — Landing rendezvous emoji prefixes
+
+Every rendezvous card on the landing page shows its full distinguishing emoji prefix, never a clipped or ellipsized fragment. The prefix starts at 3 emoji and grows only when another known rendezvous shares it. The maximum is the canonical 11 emoji.
 
 ---
 

@@ -212,6 +212,7 @@ export class RdzApp {
       onPeers: (peers) => {
         if (!current()) return;
         for (const peer of peers) {
+          if (this.isLocalMask(peer.humanId)) continue;
           this.mesh?.considerPeer(peer.humanId, peer.publicKey);
           void savePeerRegistryEntry({ ...peer, lastSeen: Date.now() });
         }
@@ -293,7 +294,7 @@ export class RdzApp {
     this.seen.set(id, expiresAt);
 
     this.upsertHuman(envelope);
-    if (envelope.author !== this.identity.humanId) {
+    if (envelope.author !== this.identity.humanId && !this.isLocalMask(envelope.author)) {
       this.mesh?.considerPeer(envelope.author, envelope.publicKey);
       void savePeerRegistryEntry({
         humanId: envelope.author,
@@ -355,7 +356,16 @@ export class RdzApp {
   }
 
   private sendPing(): void {
-    void this.buildAndSend({ kind: 'PING' });
+    void this.buildAndSend({ kind: 'PING' }).then((envelope) => {
+      if (!envelope) return;
+      const self = this.humans.get(this.identity.humanId);
+      if (self) {
+        self.publicKey = this.identity.publicKey;
+        self.lastSeen = Date.now();
+        self.verified = true;
+      }
+      this.scheduleRender();
+    });
   }
 
   private async buildAndSend(payload: Parameters<typeof createEnvelope>[1]): Promise<Envelope | null> {
@@ -817,7 +827,14 @@ export class RdzApp {
 
   private async considerKnownPeers(): Promise<void> {
     const peers = await loadPeerRegistry();
-    for (const peer of peers) this.mesh?.considerPeer(peer.humanId, peer.publicKey);
+    for (const peer of peers) {
+      if (this.isLocalMask(peer.humanId)) continue;
+      this.mesh?.considerPeer(peer.humanId, peer.publicKey);
+    }
+  }
+
+  private isLocalMask(humanId: string): boolean {
+    return this.masks.some((mask) => mask.humanId === humanId);
   }
 
   private refreshVerifiedFlags(): void {
@@ -923,17 +940,16 @@ export class RdzApp {
   private renderLanding(): string {
     const humans = sortHumans(
       [...this.humans.values()].filter(
-        (human) => human.id !== this.identity.humanId && (isOnline(human, this.now) || human.verified),
+        (human) =>
+          human.id === this.identity.humanId || isOnline(human, this.now) || human.verified,
       ),
       this.now,
     );
-    const channels = filterChannels(
-      buildChannels([...this.announcements.values()], this.pins, this.now),
-      this.query,
-    );
+    const allChannels = buildChannels([...this.announcements.values()], this.pins, this.now);
+    const channels = filterChannels(allChannels, this.query);
     const visibleHumans = filterHumans(humans, this.query);
     const humanIds = visibleHumans.map((human) => human.id);
-    const channelIds = channels.map((channel) => channel.id);
+    const channelIds = allChannels.map((channel) => channel.id);
     return `
       <main class="landing">
         <section class="hero">
@@ -973,7 +989,7 @@ export class RdzApp {
 
   private renderChannelCard(channel: ChannelView, ids: readonly string[]): string {
     const words = formatWords(uniqueWordDisplay(ids, channel.id));
-    const emoji = formatEmoji(uniqueEmojiDisplay(ids, channel.id));
+    const emoji = formatEmoji(uniqueEmojiDisplay(ids, channel.id, 3));
     const next = channel.nextAt ? `${formatTime(channel.nextAt)}${formatDay(channel.nextAt, this.now) ? ` · ${formatDay(channel.nextAt, this.now)}` : ''}` : 'pinned';
     return `
       <button class="channel-card" data-action="open-channel" data-id="${escapeAttr(channel.id)}" type="button">
@@ -990,20 +1006,23 @@ export class RdzApp {
   private renderHumanRow(human: Human, channel: boolean, ids?: readonly string[]): string {
     const words = formatWords(ids ? uniqueWordDisplay(ids, human.id) : shortWords(human.words));
     const emoji = formatEmoji(ids ? uniqueEmojiDisplay(ids, human.id) : shortEmoji(human.emoji));
-    const online = isOnline(human, this.now);
+    const isSelf = human.id === this.identity.humanId;
+    const online = isSelf || isOnline(human, this.now);
     return `
-      <div class="human-row ${human.verified ? 'is-verified' : ''}">
-        <button class="human-main" data-action="open-human" data-id="${escapeAttr(human.id)}" type="button">
+      <div class="human-row ${human.verified ? 'is-verified' : ''} ${isSelf ? 'is-self' : ''}">
+        <button class="human-main" data-action="${isSelf ? 'identity' : 'open-human'}" data-id="${escapeAttr(human.id)}" type="button">
           <span class="human-emoji">${escapeHtml(emoji)}</span>
           <span class="human-copy">
             <strong>${escapeHtml(words)}</strong>
-            <span>${human.verified ? 'verified' : 'not verified'}</span>
+            <span>${isSelf ? 'me · active mask' : human.verified ? 'verified' : 'not verified'}</span>
           </span>
           <span class="presence ${online ? 'online' : ''}">${online ? 'here now' : 'away'}</span>
         </button>
         ${
           channel
-            ? `<span class="row-actions">
+            ? isSelf
+              ? '<span class="row-actions"><span class="mask-active">me</span></span>'
+              : `<span class="row-actions">
                 ${
                   online && human.verified
                     ? `<button class="small" data-action="send-photo" data-id="${escapeAttr(human.id)}" type="button">send photo</button>
@@ -1024,7 +1043,9 @@ export class RdzApp {
     const entries = sortAnnouncements(
       dedupeAnnouncements(
         activeAnnouncements(
-          [...this.announcements.values()].filter((entry) => entry.channelId === channelId),
+          [...this.announcements.values()].filter(
+            (entry) => entry.channelId === channelId && entry.author !== this.identity.humanId,
+          ),
           this.now,
         ),
       ),
@@ -1088,7 +1109,7 @@ export class RdzApp {
                     `,
                   )
                   .join('')
-              : '<p class="empty">No one has announced a time here yet.</p>'
+              : '<p class="empty">No one else has announced a time here yet.</p>'
           }
         </section>
         ${

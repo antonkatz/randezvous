@@ -61,12 +61,12 @@ WebRTC data channel is then used for application messages and for
 peer-assisted signalling; connected peers relay `SIGNAL` for other peers.
 
 1. Each mask creates a persistent P-256 keypair in IndexedDB.
-2. A browser can hold several masks, but exactly one is active. The active mask is the only identity that sends `PING`, signs new `GOING` and `SIGNAL`, or holds media sessions.
+2. A browser can hold several masks, but exactly one is active. The active mask is the only identity that sends `PING`, signs new `GOING` and `SIGNAL`, or holds media sessions. It appears in the landing page's online list marked as me, but is not listed inside a rendezvous channel.
 3. The human ID is the first 88 bits of `SHA-256(public key)`. It renders as 8 words and 11 emoji.
 4. Every message is canonicalised, signed, and carries the author's public key.
 5. `PING` announces presence every 3 minutes; a human stays online for 5 minutes after the last valid `PING`.
 6. `GOING` announces a rendezvous channel and a time. The same channel can have many humans and many times.
-7. The landing page shows the full online human list and live channels. A channel screen groups humans by `HH:mm`.
+7. The landing page shows the full online human list and live channels. Channel cards show a distinguishing emoji prefix of 3–11 emoji. A channel screen groups humans by `HH:mm`.
 8. `T + 3` removes the announcement from the channel. The human remains online and reachable.
 9. Images and voice are requested only inside a channel and only between humans who have verified each other.
 10. An image offer shows the sender and a numeric size in MB only. The recipient must accept before any bytes move.

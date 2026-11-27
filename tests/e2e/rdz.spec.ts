@@ -214,19 +214,52 @@ test('verification and pinned circles survive a reload', async ({ browser }) => 
 
 test('a GOING announcement leaves the channel three minutes after its time', async ({ browser }) => {
   const time = futureTime();
+  const base = Date.now();
   const aContext = await browser.newContext();
   const aPage = await aContext.newPage();
-  await aPage.clock.install({ time: Date.now() });
+  await aPage.clock.install({ time: base });
+  await aPage.clock.pauseAt(base);
   await aPage.goto('/');
+  await aPage.waitForTimeout(1_000);
+  await aPage.clock.fastForward(1_000);
   await expect(aPage.locator('.live')).toHaveText('live');
+
+  const bContext = await browser.newContext();
+  const bPage = await bContext.newPage();
+  await bPage.clock.install({ time: base });
+  await bPage.clock.pauseAt(base);
+  await bPage.goto('/');
+  await bPage.waitForTimeout(1_000);
+  await bPage.clock.fastForward(1_000);
+  await expect(bPage.locator('.live')).toHaveText('live');
+
   const channel = await createChannel(aPage, time);
-  await expect(aPage.locator('.time-group')).toHaveCount(1);
+  await expect
+    .poll(async () => {
+      await bPage.clock.fastForward(250);
+      return bPage.locator('.channel-card').count();
+    })
+    .toBeGreaterThan(0);
+  await openChannel(bPage, channel);
+  // Put A's clock ahead so strict no-future validation accepts B's later
+  // messages while B still accepts A's earlier GOING.
+  await aPage.clock.fastForward(10_000);
+  await announce(bPage, time);
+  await expect
+    .poll(async () => {
+      await aPage.clock.fastForward(250);
+      return aPage.locator('.time-group').count();
+    })
+    .toBe(1);
 
   await aPage.clock.fastForward(3 * 60 * 60 * 1000 + 4 * 60 * 1000);
+  await aPage.getByRole('button', { name: 'set a time' }).click();
+  await aPage.getByRole('button', { name: 'cancel' }).click();
   await expect(aPage.locator('.time-group')).toHaveCount(0);
-  await expect(aPage.getByText('No one has announced a time here yet.')).toBeVisible();
+  await expect(aPage.getByText('No one else has announced a time here yet.')).toBeVisible();
 
   await aContext.close();
+  await bContext.close();
 });
 
 test('a recipient can hold multiple image offers at once', async ({ browser }, testInfo) => {
@@ -403,4 +436,55 @@ test('verification is scoped to the active mask', async ({ browser }) => {
 
   await a.context.close();
   await b.context.close();
+});
+
+test('I see my active mask in the online list', async ({ browser }) => {
+  const a = await openPage(browser);
+  const first = await identityWords(a.page);
+  const selfRow = humanRow(a.page, first);
+
+  await expect(selfRow).toBeVisible();
+  await expect(selfRow).toContainText('me · active mask');
+  await expect(selfRow).toContainText('here now');
+  await expect(selfRow.getByRole('button', { name: 'send photo' })).toHaveCount(0);
+
+  await selfRow.locator('.human-main').click();
+  await expect(a.page.getByRole('heading', { name: 'Masks' })).toBeVisible();
+  await a.page.getByRole('button', { name: 'new mask' }).click();
+  await expect.poll(async () => identityWords(a.page)).not.toBe(first);
+  const second = await identityWords(a.page);
+  await a.page.locator('.modal-actions [data-action="close-modal"]').click();
+
+  await expect(humanRow(a.page, second)).toContainText('me · active mask');
+  await expect(a.page.locator('.human-row').filter({ hasText: first })).toHaveCount(0);
+
+  await createChannel(a.page, futureTime());
+  await expect(a.page.locator('.time-group')).toHaveCount(0);
+  await expect(a.page.locator('.human-row')).toHaveCount(0);
+
+  await a.context.close();
+});
+
+test('landing rendezvous emoji prefixes are complete and unique', async ({ browser }) => {
+  const a = await openPage(browser);
+  for (let index = 0; index < 3; index += 1) {
+    await createChannel(a.page, futureTime());
+    await a.page.getByRole('button', { name: /landing/ }).click();
+  }
+
+  const values = (await a.page.locator('.channel-card .channel-emoji').allInnerTexts()).map(
+    (value) => value.trim(),
+  );
+  expect(values.length).toBeGreaterThanOrEqual(3);
+  expect(new Set(values).size).toBe(values.length);
+
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  for (const value of values) {
+    expect(value).not.toContain('…');
+    const length = [...segmenter.segment(value)].length;
+    expect(length).toBeGreaterThanOrEqual(3);
+    expect(length).toBeLessThanOrEqual(11);
+  }
+
+  await a.context.close();
 });

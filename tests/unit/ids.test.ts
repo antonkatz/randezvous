@@ -67,6 +67,30 @@ describe('identifier encoding', () => {
     }
   });
 
+  it('extends landing emoji prefixes from a three-emoji minimum to at most eleven', () => {
+    const self = randomRendezvousId();
+    const emoji = idToEmoji(self);
+    const fourEmoji = [
+      ...emoji.slice(0, 3),
+      ...EMOJI_ALPHABET.filter((symbol) => !emoji.includes(symbol)).slice(0, 8),
+    ];
+    const fourEmojiId = emojiToId(fourEmoji);
+    expect(fourEmojiId).not.toBeNull();
+    if (fourEmojiId) {
+      expect(uniqueEmojiDisplay([self, fourEmojiId], self, 3)).toHaveLength(4);
+    }
+
+    const elevenEmoji = [
+      ...emoji.slice(0, 10),
+      ...EMOJI_ALPHABET.filter((symbol) => symbol !== emoji[10]).slice(0, 1),
+    ];
+    const elevenEmojiId = emojiToId(elevenEmoji);
+    expect(elevenEmojiId).not.toBeNull();
+    if (elevenEmojiId) {
+      expect(uniqueEmojiDisplay([self, elevenEmojiId], self, 3)).toHaveLength(11);
+    }
+  });
+
   it('rejects malformed word and emoji sequences', () => {
     expect(wordsToId(['abandon'])).toBeNull();
     expect(emojiToId(['😀'])).toBeNull();
