@@ -49,6 +49,8 @@ Decisions made where `docs/SPEC.md` is silent or incomplete. Append new entries;
 
 ## 2026-11-27 — FR-0 made primary
 
-36. **WebRTC-exclusive application messages are now the primary transport invariant.** `PING`, `GOING`, and `SIGNAL` must travel only over WebRTC data channels. WebSocket/HTTPS is bootstrap-only: discovery and the first SDP/ICE exchange. The seed must not receive, cache, replay, or forward application messages.
+36. **WebRTC-exclusive application messages are now the primary transport invariant.** `PING`, `GOING`, and `SIGNAL` must travel only over WebRTC data channels. WebSocket/HTTPS is bootstrap-only: discovery and the first SDP/ICE exchange. The seed is a headless WebRTC peer: it may receive, cache, replay, and forward application messages only over WebRTC data channels, and it never accepts media.
 37. **Peer-assisted signalling is mandatory.** Connected peers relay `SIGNAL` and peer introductions over WebRTC data channels. New peers use existing peers as introducers wherever possible.
 38. **Current build non-compliance.** The committed reference build still relays `PING`, `GOING`, and `SIGNAL` over the seed WebSocket. This must be refactored before the transport can be called complete. The 100 live connection cap and direct WebRTC media path remain useful pieces of that refactor.
+
+39. **Seed peer correction (27 Nov 2026).** The seed is a real headless WebRTC peer, not bootstrap-only. It may replay unexpired `PING`/`GOING` and forward `SIGNAL` over WebRTC data channels. It has no human identity and cannot receive images or audio. It still must never carry application messages over WebSocket or HTTP.

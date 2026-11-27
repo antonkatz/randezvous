@@ -111,13 +111,14 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 
 - Default seed: `randezvous.instanthero.ca`.
 - The seed is optional. Everything must work with zero configured seeds if at least one known peer exists.
-- The seed is a long-running, in-memory-only peer.
+- The seed is a long-running, in-memory-only headless WebRTC peer.
 - It is not human: no human ID, no human `PING`, never in the human list.
-- It relays and replays valid `PING`, `GOING`, and `SIGNAL` freely.
+- It may receive, cache, replay, and forward `PING`, `GOING`, and `SIGNAL` only over WebRTC data channels.
 - It never accepts, stores, or relays images or audio.
 - It has no durable state.
 - It follows the same signature, dedup, expiry, and relay rules.
-- The first connection to the seed may use one HTTPS SDP/ICE exchange, then WebRTC. This is bootstrap only, not a server API.
+- The first connection to the seed may use one HTTPS/WebSocket SDP/ICE exchange, then WebRTC. Bootstrap messages are not application messages.
+- When connected over WebRTC, the seed counts as one live peer connection.
 
 ### Connection authorization and SIGNAL
 

@@ -7,7 +7,7 @@ A permissionless, peer-to-peer rendezvous board.
 - Presence is announced with signed `PING` messages.
 - A rendezvous is just people announcing `GOING` to a channel at a time.
 - Images and one-minute voice travel directly between browsers over WebRTC.
-- The seed is bootstrap-only. Application messages are meant to travel over WebRTC data channels.
+- The seed is a headless WebRTC peer. It can replay `PING`/`GOING` and relay `SIGNAL` over WebRTC, but has no human identity and cannot receive images or audio.
 
 > **Transport status:** the canonical spec now requires `PING`, `GOING`, and `SIGNAL` to travel exclusively over WebRTC data channels, with peer-assisted signalling. The current reference build still uses the seed WebSocket as an application relay for those messages. That is a known non-compliance and the next required refactor. Images and audio are already direct WebRTC.
 
@@ -103,9 +103,9 @@ Only verified humans can open a channel connection. Unverified humans remain vis
 
 ## Seed peer
 
-The seed is a bootstrap peer. It stores no media and has no human identity. A new browser connects to the same-origin `/signal` endpoint by default.
+The seed is a long-running, in-memory, headless WebRTC peer. It stores no media and has no human identity. A new browser connects to the same-origin `/signal` endpoint by default to bootstrap a WebRTC connection.
 
-The target design uses the seed only to discover peers and carry the first SDP/ICE exchange. `PING`, `GOING`, and `SIGNAL` then travel over WebRTC data channels, with peers relaying signalling for other peers.
+The target design is that the seed behaves like any other peer over WebRTC: it can replay unexpired `PING`/`GOING` messages and forward `SIGNAL`. It cannot accept images or audio because it is headless. `PING`, `GOING`, and `SIGNAL` still travel only over WebRTC data channels; WebSocket/HTTPS is only for bootstrap discovery and the first SDP/ICE exchange.
 
 The current reference build still relays `PING`, `GOING`, and `SIGNAL` over WebSocket. This is a known non-compliance with FR-0 and is documented in [`docs/IMPLEMENTATION_DECISIONS.md`](docs/IMPLEMENTATION_DECISIONS.md). `?seed=off` starts the app offline with cached state.
 

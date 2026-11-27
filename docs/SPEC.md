@@ -203,7 +203,8 @@ This is the primary transport invariant, ahead of every other functional require
 - `PING`, `GOING`, and `SIGNAL` are application messages. They MUST travel only over WebRTC data channels between peers.
 - No `PING`, `GOING`, or `SIGNAL` may be sent, received, cached, replayed, or forwarded over WebSocket, HTTP, or any other non-WebRTC transport.
 - WebSocket or HTTPS may be used only for bootstrap discovery and the SDP/ICE exchange required to establish the first WebRTC data channel. Bootstrap messages are not `PING`, `GOING`, or `SIGNAL`, and must not carry application content.
-- The seed peer is not an application-message relay. It must not receive, store, replay, or forward `PING`, `GOING`, or `SIGNAL`.
+- The seed peer is a real headless WebRTC peer. It may receive, cache, replay, and forward `PING`, `GOING`, and `SIGNAL` only over WebRTC data channels.
+- The seed cannot be an image or audio endpoint. It never accepts, stores, or relays photographs or voice memos.
 - Peer-assisted signalling is a key design principle. Connected peers forward `SIGNAL` envelopes for other peers over WebRTC data channels. A new peer uses an existing peer as its introducer wherever possible.
 - Flood-once relay, deduplication, replay to new peers, and expiry all happen over the WebRTC mesh.
 - If no WebRTC data channel exists, a client must not fall back to a non-WebRTC transport for application messages. It reports the peer as unreachable.
@@ -214,18 +215,19 @@ This is the primary transport invariant, ahead of every other functional require
 
 The 24/7 RDZ peer is optional. No core function may depend on it. Presence, rendezvous discovery, message relay and replay, verification, and photo or voice handoff must all continue with zero configured seed peers, provided a browser has at least one known peer. The seed may be removed, offline, or absent from configuration without stopping the rest of the network.
 
-### FR-2 — The seed peer is bootstrap-only
+### FR-2 — The seed peer is a headless WebRTC peer
 
 - The default seed peer is `randezvous.instanthero.ca`. A brand-new browser with no cached peers connects there first.
 - The seed address is deployment configuration, not a protocol constant. A client may have no seed (FR-1) or a different one.
-- The 24/7 peer is a long-running, in-memory-only bootstrap process.
+- The 24/7 peer is a long-running, in-memory-only WebRTC peer.
 - It is not a human. It has no human ID, sends no human `PING`, and never appears in the human list.
-- It may help peers discover each other and may carry bootstrap SDP/ICE envelopes needed to establish the first WebRTC data channel.
-- It must not receive, cache, replay, or forward `PING`, `GOING`, or `SIGNAL`. It is not an application-message relay.
-- It never accepts, stores, or relays photographs or voice memos.
-- It has no durable state. A restart loses its bootstrap state.
+- It is otherwise a real peer. Over WebRTC, it may receive, cache, replay, and forward `PING`, `GOING`, and `SIGNAL`.
+- It may replay every valid, unexpired `PING` and `GOING` it holds to a newly connected peer.
+- It may act as an introducer and relay `SIGNAL` envelopes between peers over WebRTC.
+- It cannot be an image or audio endpoint. It never accepts, stores, or relays photographs or voice memos.
+- Bootstrap discovery and the first SDP/ICE exchange may use WebSocket or HTTPS. All application messages use WebRTC.
+- It has no durable state. A restart loses its in-memory message set.
 - It may be disconnected after the first mesh connection. Existing peers continue without it.
-- Bootstrap envelopes are separate from application messages and must not carry application content.
 
 ### FR-3 — Transport
 
@@ -287,7 +289,7 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 - On a new authenticated WebRTC peer connection, a peer replays all valid messages it holds, then continues live relay.
 - Both sides replay to each other. Duplicates are absorbed by deduplication.
 - Expired messages are purged and never replayed.
-- The seed peer never caches or replays application messages.
+- The seed peer may also cache and replay `PING` and `GOING`, but only over WebRTC data channels. It never replays them over WebSocket or HTTP.
 - Photographs and voice memos are never cached or replayed by the relay layer.
 
 ### FR-8 — Announcement expiry and channel lifetime
@@ -305,6 +307,7 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 
 - A browser maintains at most 100 simultaneous WebRTC peer connections.
 - The cap applies only to live connections. It does not limit how many humans the browser knows about.
+- The seed, when connected over WebRTC, counts as one live peer connection.
 - Verified peers are prioritized for retention but still count toward the 100 live connections.
 - Every 5 minutes, 20% of the non-priority connections are replaced with random new peers when more peers are available.
 - Random candidates are drawn from the browser's internal peer registry, which is built from peers it learns about from other peers.
@@ -413,8 +416,8 @@ The specification does not promise that every peer can reach every other peer. N
 - A channel connection completes only when both humans have verified each other locally.
 - A `SIGNAL` from an unverified human is ignored.
 - Connected peers forward `SIGNAL` for other peers over WebRTC data channels. This is peer-assisted signalling.
-- Bootstrap SDP/ICE exchanges used to create the first WebRTC data channel are separate bootstrap messages, not `SIGNAL`, and may be carried by the seed.
-- The seed never forwards `SIGNAL`.
+- Bootstrap SDP/ICE exchanges used to create the first WebRTC data channel are separate bootstrap messages, not `SIGNAL`, and may be carried by the seed over WebSocket or HTTPS.
+- The seed is a headless WebRTC peer. It may forward `SIGNAL` over WebRTC data channels like any other peer, but it never forwards `SIGNAL` over WebSocket and never accepts media.
 - Peers forward `SIGNAL` flood-once, preserving the original signature.
 - Relays never modify or re-sign a `SIGNAL` envelope.
 - `SIGNAL` envelopes are short-lived. Stale envelopes are discarded.
