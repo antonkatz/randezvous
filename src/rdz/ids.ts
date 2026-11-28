@@ -1,7 +1,7 @@
 import { asBufferSource, base64UrlToBytes, bytesToBase64Url } from './bytes';
 import { EMOJI_ALPHABET, emojiForByte } from './emoji';
 import { WORDLIST } from './words';
-import type { HumanId, RendezvousId } from './types';
+import type { BeingId, RendezvousId } from './types';
 
 export const ID_BYTES = 11;
 export const WORD_COUNT = 8;
@@ -9,7 +9,7 @@ export const EMOJI_COUNT = 11;
 export const DEFAULT_SHORT_WORDS = 4;
 export const DEFAULT_SHORT_EMOJI = 6;
 
-export async function humanIdFromPublicKey(publicKeyBase64Url: string): Promise<HumanId> {
+export async function beingIdFromPublicKey(publicKeyBase64Url: string): Promise<BeingId> {
   const digest = await crypto.subtle.digest('SHA-256', asBufferSource(base64UrlToBytes(publicKeyBase64Url)));
   return bytesToBase64Url(new Uint8Array(digest).slice(0, ID_BYTES));
 }

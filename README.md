@@ -5,10 +5,10 @@ A permissionless, peer-to-peer rendezvous board.
 - No accounts.
 - No stored media.
 - Presence is announced with signed `PING` messages.
-- A rendezvous is just people announcing `GOING` to a channel at a time.
+- A rendezvous is just beings announcing `GOING` to a channel at a time.
 - Images and one-minute voice travel directly between browsers over WebRTC.
 - Local audio cues distinguish incoming media requests, voice start, and voice end.
-- The seed is a headless WebRTC peer. It can replay `PING`/`GOING` and relay `SIGNAL` over WebRTC, but has no human identity and cannot receive images or audio.
+- The seed is a headless WebRTC peer. It can replay `PING`/`GOING` and relay `SIGNAL` over WebRTC, but has no being identity and cannot receive images or audio.
 
 The canonical specification is [`docs/SPEC.md`](docs/SPEC.md). Deferred features are in [`docs/FUTURE_SPEC.md`](docs/FUTURE_SPEC.md). The old spec is reference only in [`docs/SPEC_v0.md`](docs/SPEC_v0.md). Archived legacy code lives in [`archive/`](archive/README.md).
 
@@ -55,7 +55,7 @@ Phones require a secure context for Web Crypto and WebRTC. Open the same HTTPS U
 
 For local phone testing, expose the Vite port through an HTTPS tunnel and open the tunnel URL on both the phone and the desktop. Both devices then use the same same-origin seed. Alternatively use the production TLS deployment.
 
-If both devices are online but a photo or voice request does not arrive, verify **both directions**. Each side only accepts media requests from a human it has marked as verified.
+If both devices are online but a photo or voice request does not arrive, verify **both directions**. Each side only accepts media requests from a being it has marked as verified.
 
 ## How it works
 
@@ -71,13 +71,13 @@ peer-assisted signalling; connected peers relay `SIGNAL` for other peers.
 
 1. Each mask creates a persistent P-256 keypair in IndexedDB.
 2. A browser can hold several masks, but exactly one is active. The active mask is the only identity that sends `PING`, signs new `GOING` and `SIGNAL`, or holds media sessions. It appears in the landing page's online list marked as me, but is not listed inside a rendezvous channel.
-3. The human ID is the first 88 bits of `SHA-256(public key)`. It renders as 8 words and 11 emoji.
+3. The being ID is the first 88 bits of `SHA-256(public key)`. It renders as 8 words and 11 emoji.
 4. Every message is canonicalised, signed, and carries the author's public key.
-5. `PING` announces presence every 3 minutes; a human stays online for 5 minutes after the last valid `PING`.
-6. `GOING` announces a rendezvous channel and a time. The same channel can have many humans and many times.
-7. The landing page shows the full online human list and live channels. Channel cards show a distinguishing emoji prefix of 3–11 emoji. A channel screen groups humans by `HH:mm`.
-8. `T + 3` removes the announcement from the channel. The human remains online and reachable.
-9. Images and voice are requested only inside a channel and only between humans who have verified each other.
+5. `PING` announces presence every 3 minutes; a being stays online for 5 minutes after the last valid `PING`.
+6. `GOING` announces a rendezvous channel and a time. The same channel can have many beings and many times.
+7. The landing page shows the full online being list and live channels. Channel cards show a distinguishing emoji prefix of 3–11 emoji. A channel screen groups beings by `HH:mm`.
+8. `T + 3` removes the announcement from the channel. The being remains online and reachable.
+9. Images and voice are requested only inside a channel and only between beings who have verified each other.
 10. An image offer shows the sender and a numeric size in MB only. The recipient must accept before any bytes move.
 11. Audio is pairwise, lasts one minute, can be restarted, and never records or uploads.
 
@@ -89,9 +89,15 @@ The full page is a session-only, 250-event log with direction filters. Collapsed
 
 ## Verification
 
-Each human has eight words derived from their public key. Compare those words out loud or through another app, then mark the human verified. There is no pairwise code. Verification is local and persists in IndexedDB.
+Each being has eight words derived from their public key. Compare those words out loud or through another app, then mark the being verified. There is no pairwise code. Verification is local and persists in IndexedDB.
 
-Only verified humans can open a channel connection. Unverified humans remain visible for discovery and verification. Media requests only appear when both humans have verified each other.
+Only verified beings can open a channel connection. Unverified beings remain visible for discovery and verification. Media requests only appear when both beings have verified each other.
+
+## Signalling privacy
+
+The **verified only** switch beneath the landing network traffic feed limits direct WebRTC mesh links and `SIGNAL` traffic to beings verified by the active mask. It is also available in the mask switcher, where the privacy card explains the policy. Enabling it closes existing unverified direct links; verifying a being makes that being eligible immediately. Turning it off restores the permissionless mesh.
+
+The preference is off by default and persists separately for each mask. The headless seed remains available for bootstrap, and public `PING`/`GOING` discovery stays open, so unverified beings remain visible and can still be verified.
 
 ## Images
 
@@ -113,9 +119,9 @@ Only verified humans can open a channel connection. Unverified humans remain vis
 
 ## Seed peer
 
-The seed is a long-running, in-memory, headless WebRTC peer. It stores no media and has no human identity. A new browser connects to the same-origin `/signal` endpoint by default to bootstrap a WebRTC connection.
+The seed is a long-running, in-memory, headless WebRTC peer. It stores no media and has no being identity. A new browser connects to the same-origin `/signal` endpoint by default to bootstrap a WebRTC connection.
 
-The seed behaves like any other peer over WebRTC: it caches and replays unexpired `PING`/`GOING` and forwards `SIGNAL`. It cannot accept images or audio because it is headless. `PING`, `GOING`, and `SIGNAL` travel only over WebRTC data channels; WebSocket is used only for bootstrap discovery and the first SDP/ICE exchange. The seed uses a signed challenge to bind each data channel to the human identity it claims.
+The seed behaves like any other peer over WebRTC: it caches and replays unexpired `PING`/`GOING` and forwards `SIGNAL`. It cannot accept images or audio because it is headless. `PING`, `GOING`, and `SIGNAL` travel only over WebRTC data channels; WebSocket is used only for bootstrap discovery and the first SDP/ICE exchange. The seed uses a signed challenge to bind each data channel to the being identity it claims.
 
 `?seed=off` starts the app offline with cached state. Seedless first contact remains out of scope.
 

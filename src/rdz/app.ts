@@ -32,7 +32,7 @@ import {
   activeAnnouncements,
   buildChannels,
   filterChannels,
-  filterHumans,
+  filterBeings,
   formatDay,
   formatTime,
   goingCount,
@@ -43,7 +43,7 @@ import {
   nextAnnouncementTimes,
   parseTimeInput as parseTime,
   sortAnnouncements,
-  sortHumans,
+  sortBeings,
 } from './state';
 import { TrafficLog, type TrafficEvent, type TrafficFilter } from './traffic';
 import {
@@ -68,7 +68,7 @@ import type {
   ChannelView,
   Envelope,
   GoingAnnouncement,
-  Human,
+  Being,
   ImageTransferProgress,
   IncomingAudioRequest,
   IncomingImageOffer,
@@ -84,7 +84,7 @@ const ORBIT_DURATION_MS = 26_000;
 type Modal =
   | { type: 'set-time'; channelId: string | null }
   | { type: 'pin'; channelId: string }
-  | { type: 'human'; humanId: string }
+  | { type: 'being'; humanId: string }
   | { type: 'identity' }
   | { type: 'send-photo'; humanId: string; channelId: string }
   | null;
@@ -92,9 +92,21 @@ type Modal =
 interface ImageViewer {
   transferId: string;
   url: string;
+  blob: Blob;
   label: string;
   size: number;
   filename: string;
+  bitmap: ImageBitmap | null;
+  bitmapGeneration: number;
+  decodeQueued: boolean;
+  resizing: boolean;
+  resizeFrame: number;
+  observedViewport: HTMLDivElement | null;
+  resizeObserver: ResizeObserver | null;
+  scrollLocked: boolean;
+  scrollX: number;
+  scrollY: number;
+  previousOverflow: string;
 }
 
 export class RdzApp {
@@ -102,7 +114,7 @@ export class RdzApp {
   private identity!: MaskRecord;
   private verifications = new Map<string, VerificationRecord>();
   private pins: PinRecord[] = [];
-  private humans = new Map<string, Human>();
+  private beings = new Map<string, Being>();
   private announcements = new Map<string, GoingAnnouncement>();
   private goingEnvelopes = new Map<string, Envelope>();
   private seen = new Map<string, number>();
@@ -114,7 +126,7 @@ export class RdzApp {
   private signalChain: Promise<void> = Promise.resolve();
   private now = Date.now();
   private query = '';
-  private landingTab: 'humans' | 'rendezvous' = 'humans';
+  private landingTab: 'beings' | 'rendezvous' = 'beings';
   private activeChannelId: string | null = null;
   private readonly traffic = new TrafficLog();
   private trafficOpen = false;
@@ -139,8 +151,10 @@ export class RdzApp {
   private toastTimer = 0;
   private lastImage: File | null = null;
   private pendingSend: { humanId: string; channelId: string } | null = null;
+  private signalExplainerOpen = false;
   private fileInput!: HTMLInputElement;
   private readonly orbitStartedAt = Date.now();
+  private readonly imageViewerMedia = window.matchMedia('(pointer: fine)');
 
   async start(): Promise<void> {
     const maskState = await loadMaskState();
@@ -148,7 +162,7 @@ export class RdzApp {
     this.identity = this.masks.find((mask) => mask.id === maskState.activeMaskId) ?? this.masks[0]!;
     this.verifications = await loadVerifications(this.identity.id);
     this.pins = await loadPins();
-    this.addSelfHuman();
+    this.addSelfBeing();
     this.rtc = this.createRtc();
     this.mesh = this.createMesh();
 
@@ -176,6 +190,8 @@ export class RdzApp {
         this.tick();
       }
     });
+    this.imageViewerMedia.addEventListener('change', () => this.syncImageViewer());
+    window.addEventListener('resize', () => this.syncImageViewer());
     this.bind();
     this.render();
     this.sendPing();
@@ -225,6 +241,7 @@ export class RdzApp {
       budget: this.budget,
       bootstrapUrl: resolveBootstrapUrl(),
       isVerified: (humanId) => this.isVerified(humanId),
+      verifiedOnlySignalling: () => this.identity.verifiedOnlySignalling,
       isBusy: (humanId) => this.rtc.busyPeers().has(humanId),
       onEnvelope: (value) => {
         if (current()) void this.handleMeshEnvelope(value);
@@ -248,8 +265,8 @@ export class RdzApp {
     });
   }
 
-  private addSelfHuman(): void {
-    this.humans.set(this.identity.humanId, {
+  private addSelfBeing(): void {
+    this.beings.set(this.identity.humanId, {
       id: this.identity.humanId,
       publicKey: this.identity.publicKey,
       words: idToWords(this.identity.humanId),
@@ -326,7 +343,7 @@ export class RdzApp {
     if (prior && prior > Date.now()) return;
     this.seen.set(id, expiresAt);
 
-    const humanChanged = this.upsertHuman(envelope);
+    const beingChanged = this.upsertBeing(envelope);
     if (envelope.author !== this.identity.humanId && !this.isLocalMask(envelope.author)) {
       this.mesh?.considerPeer(envelope.author, envelope.publicKey);
       void savePeerRegistryEntry({
@@ -356,11 +373,11 @@ export class RdzApp {
       await this.rtc.handleSignal(envelope);
       return;
     }
-    if (humanChanged) this.scheduleRender();
+    if (beingChanged) this.scheduleRender();
   }
 
-  private upsertHuman(envelope: Envelope): boolean {
-    const existing = this.humans.get(envelope.author);
+  private upsertBeing(envelope: Envelope): boolean {
+    const existing = this.beings.get(envelope.author);
     const verification = this.verifications.get(envelope.author);
     const otherLocalMask = this.masks.some(
       (mask) => mask.id !== this.identity.id && mask.humanId === envelope.author,
@@ -369,7 +386,7 @@ export class RdzApp {
       !otherLocalMask &&
       (envelope.author === this.identity.humanId ||
         Boolean(verification?.verifiedAt && verification.publicKey === envelope.publicKey));
-    const next: Human = {
+    const next: Being = {
       id: envelope.author,
       publicKey: envelope.publicKey,
       words: idToWords(envelope.author),
@@ -377,7 +394,7 @@ export class RdzApp {
       lastSeen: otherLocalMask ? 0 : Math.max(existing?.lastSeen ?? 0, envelope.createdAt),
       verified,
     };
-    this.humans.set(envelope.author, next);
+    this.beings.set(envelope.author, next);
     return !existing || existing.verified !== next.verified || !isOnline(existing);
   }
 
@@ -392,7 +409,7 @@ export class RdzApp {
   private sendPing(): void {
     void this.buildAndSend({ kind: 'PING' }).then((envelope) => {
       if (!envelope) return;
-      const self = this.humans.get(this.identity.humanId);
+      const self = this.beings.get(this.identity.humanId);
       if (self) {
         self.publicKey = this.identity.publicKey;
         self.lastSeen = Date.now();
@@ -438,8 +455,8 @@ export class RdzApp {
   private isVerified(humanId: string): boolean {
     if (humanId === this.identity.humanId) return true;
     const record = this.verifications.get(humanId);
-    const human = this.humans.get(humanId);
-    return Boolean(record?.verifiedAt && human?.publicKey === record.publicKey);
+    const being = this.beings.get(humanId);
+    return Boolean(record?.verifiedAt && being?.publicKey === record.publicKey);
   }
 
   private canAcceptChannel(humanId: string, channelId: string): boolean {
@@ -473,8 +490,8 @@ export class RdzApp {
   }
 
   private timeSensitiveState(): string {
-    const online = [...this.humans.values()]
-      .map((human) => `${human.id}:${isOnline(human, this.now) ? 1 : 0}`)
+    const online = [...this.beings.values()]
+      .map((being) => `${being.id}:${isOnline(being, this.now) ? 1 : 0}`)
       .sort()
       .join(',');
     const active = activeAnnouncements([...this.announcements.values()], this.now)
@@ -485,11 +502,11 @@ export class RdzApp {
   }
 
   private handleImageOffer(offer: IncomingImageOffer): void {
-    const human = this.humans.get(offer.sender);
+    const being = this.beings.get(offer.sender);
     this.incomingImages.set(offer.transferId, {
       ...offer,
-      senderWords: human?.words ?? idToWords(offer.sender),
-      senderEmoji: human?.emoji ?? idToEmoji(offer.sender),
+      senderWords: being?.words ?? idToWords(offer.sender),
+      senderEmoji: being?.emoji ?? idToEmoji(offer.sender),
       verified: this.isVerified(offer.sender),
     });
     this.chime.play('request');
@@ -520,14 +537,26 @@ export class RdzApp {
   private handleImageComplete(transferId: string, blob: Blob, mime: string): void {
     this.incomingImages.delete(transferId);
     this.imageProgress.delete(transferId);
-    if (this.imageViewer) URL.revokeObjectURL(this.imageViewer.url);
+    this.closeImageViewer();
     const url = URL.createObjectURL(blob);
     this.imageViewer = {
       transferId,
       url,
+      blob,
       label: 'image',
       size: blob.size,
       filename: safeImageFilename(mime),
+      bitmap: null,
+      bitmapGeneration: 0,
+      decodeQueued: false,
+      resizing: false,
+      resizeFrame: 0,
+      observedViewport: null,
+      resizeObserver: null,
+      scrollLocked: false,
+      scrollX: 0,
+      scrollY: 0,
+      previousOverflow: '',
     };
     this.scheduleRender();
   }
@@ -541,11 +570,11 @@ export class RdzApp {
   }
 
   private handleAudioRequest(request: IncomingAudioRequest): void {
-    const human = this.humans.get(request.sender);
+    const being = this.beings.get(request.sender);
     this.incomingAudio.set(request.transferId, {
       ...request,
-      senderWords: human?.words ?? idToWords(request.sender),
-      senderEmoji: human?.emoji ?? idToEmoji(request.sender),
+      senderWords: being?.words ?? idToWords(request.sender),
+      senderEmoji: being?.emoji ?? idToEmoji(request.sender),
       verified: this.isVerified(request.sender),
     });
     this.chime.play('request');
@@ -644,13 +673,12 @@ export class RdzApp {
     }
     if (action === 'back') {
       this.activeChannelId = null;
-      if (this.imageViewer) URL.revokeObjectURL(this.imageViewer.url);
-      this.imageViewer = null;
+      this.closeImageViewer();
       this.render();
       return;
     }
     if (action === 'landing-tab') {
-      this.landingTab = id === 'rendezvous' ? 'rendezvous' : 'humans';
+      this.landingTab = id === 'rendezvous' ? 'rendezvous' : 'beings';
       this.render();
       document
         .querySelector<HTMLElement>(`.landing-tab[data-id="${this.landingTab}"]`)
@@ -681,13 +709,22 @@ export class RdzApp {
       this.render();
       return;
     }
-    if (action === 'open-human') {
-      this.modal = { type: 'human', humanId: id };
+    if (action === 'open-being') {
+      this.modal = { type: 'being', humanId: id };
       this.render();
       return;
     }
     if (action === 'identity') {
       this.modal = { type: 'identity' };
+      this.render();
+      return;
+    }
+    if (action === 'toggle-signal-policy') {
+      await this.toggleVerifiedOnlySignalling();
+      return;
+    }
+    if (action === 'toggle-signal-explainer') {
+      this.signalExplainerOpen = !this.signalExplainerOpen;
       this.render();
       return;
     }
@@ -708,30 +745,32 @@ export class RdzApp {
       this.render();
       return;
     }
-    if (action === 'verify-human') {
-      const human = this.humans.get(id);
-      if (!human) return;
-      await setVerification(this.identity.id, id, human.publicKey, true);
+    if (action === 'verify-being') {
+      const being = this.beings.get(id);
+      if (!being) return;
+      await setVerification(this.identity.id, id, being.publicKey, true);
       this.verifications = await loadVerifications(this.identity.id);
-      human.verified = true;
-      this.showToast('Human verified.');
+      being.verified = true;
+      this.mesh?.refreshSignallingPolicy();
+      this.showToast('Being verified.');
       this.modal = null;
       this.render();
       return;
     }
-    if (action === 'unverify-human') {
-      const human = this.humans.get(id);
-      if (!human) return;
-      await setVerification(this.identity.id, id, human.publicKey, false);
+    if (action === 'unverify-being') {
+      const being = this.beings.get(id);
+      if (!being) return;
+      await setVerification(this.identity.id, id, being.publicKey, false);
       this.verifications = await loadVerifications(this.identity.id);
-      human.verified = false;
+      being.verified = false;
+      this.mesh?.refreshSignallingPolicy();
       this.render();
       return;
     }
     if (action === 'send-photo') {
-      const human = this.humans.get(id);
-      if (!human || !this.isVerified(id)) {
-        this.showToast('Verify this human before sending.');
+      const being = this.beings.get(id);
+      if (!being || !this.isVerified(id)) {
+        this.showToast('Verify this being before sending.');
         return;
       }
       if (this.rtc.isSendingImage) {
@@ -759,7 +798,7 @@ export class RdzApp {
     }
     if (action === 'open-voice') {
       if (!this.isVerified(id)) {
-        this.showToast('Verify this human before opening voice.');
+        this.showToast('Verify this being before opening voice.');
         return;
       }
       if (this.audioSession) {
@@ -824,8 +863,7 @@ export class RdzApp {
       return;
     }
     if (action === 'dismiss-image') {
-      if (this.imageViewer) URL.revokeObjectURL(this.imageViewer.url);
-      this.imageViewer = null;
+      this.closeImageViewer();
       this.render();
     }
   }
@@ -882,6 +920,20 @@ export class RdzApp {
     }
   }
 
+  private async toggleVerifiedOnlySignalling(): Promise<void> {
+    const enabled = !this.identity.verifiedOnlySignalling;
+    const identity = { ...this.identity, verifiedOnlySignalling: enabled };
+    await saveMask(identity);
+    this.identity = identity;
+    this.masks = this.masks.map((mask) => (mask.id === identity.id ? identity : mask));
+    this.mesh?.refreshSignallingPolicy();
+    this.showToast(
+      enabled
+        ? 'Verified-only signalling on. Public presence stays open.'
+        : 'Verified-only signalling off. Unverified mesh peers are allowed again.',
+    );
+  }
+
   private async createMask(): Promise<void> {
     const mask = await createMaskRecord();
     await saveMask(mask);
@@ -902,7 +954,7 @@ export class RdzApp {
     this.teardownForMaskSwitch();
     this.restartRuntime();
     this.refreshVerifiedFlags();
-    this.addSelfHuman();
+    this.addSelfBeing();
     this.showToast('Mask active. Reconnecting.');
     this.render();
   }
@@ -910,10 +962,10 @@ export class RdzApp {
   private async removeMask(maskId: string): Promise<void> {
     const mask = this.masks.find((entry) => entry.id === maskId);
     if (!mask) return;
-    const human = this.humans.get(mask.humanId);
-    if (human) {
-      human.lastSeen = 0;
-      human.verified = false;
+    const being = this.beings.get(mask.humanId);
+    if (being) {
+      being.lastSeen = 0;
+      being.verified = false;
     }
     const wasActive = this.identity.id === maskId;
     await removeMaskRecord(maskId);
@@ -941,8 +993,7 @@ export class RdzApp {
     this.imageProgress.clear();
     if (this.audioSession?.phase === 'live') this.chime.play('voice-end');
     this.audioSession = null;
-    if (this.imageViewer) URL.revokeObjectURL(this.imageViewer.url);
-    this.imageViewer = null;
+    this.closeImageViewer();
     this.lastImage = null;
     this.pendingSend = null;
     if (this.remoteAudio) {
@@ -977,18 +1028,18 @@ export class RdzApp {
   }
 
   private refreshVerifiedFlags(): void {
-    for (const human of this.humans.values()) {
-      const record = this.verifications.get(human.id);
-      human.verified =
-        human.id === this.identity.humanId ||
-        Boolean(record?.verifiedAt && record.publicKey === human.publicKey);
+    for (const being of this.beings.values()) {
+      const record = this.verifications.get(being.id);
+      being.verified =
+        being.id === this.identity.humanId ||
+        Boolean(record?.verifiedAt && record.publicKey === being.publicKey);
     }
     for (const mask of this.masks) {
       if (mask.humanId === this.identity.humanId) continue;
-      const human = this.humans.get(mask.humanId);
-      if (human) {
-        human.lastSeen = 0;
-        human.verified = false;
+      const being = this.beings.get(mask.humanId);
+      if (being) {
+        being.lastSeen = 0;
+        being.verified = false;
       }
     }
   }
@@ -1070,9 +1121,10 @@ export class RdzApp {
       this.patchRegion('filter', this.renderFilterRow());
       this.patchRegion('landing-tabs', this.renderLandingTabs());
       this.patchRegion('channels-panel', this.renderChannelsPanel());
-      this.patchRegion('humans-panel', this.renderHumansPanel());
+      this.patchRegion('beings-panel', this.renderBeingsPanel());
       this.patchRegion('traffic-stream-label', this.renderTrafficStreamLabel());
       this.patchRegion('traffic-stream-rows', this.renderTrafficStreamRows());
+      this.patchRegion('traffic-signalling', this.renderTrafficSignalling());
     }
     root.querySelector<HTMLElement>('.columns')?.setAttribute('data-tab', this.landingTab);
     this.patchRegion('dock', this.renderDock());
@@ -1083,6 +1135,7 @@ export class RdzApp {
       this.toast ? `<div class="toast" role="status">${escapeHtml(this.toast)}</div>` : '',
     );
     this.lastRenderedClock = this.timeSensitiveState();
+    this.syncImageViewer();
   }
 
   private patchRegion(name: string, html: string): void {
@@ -1154,6 +1207,45 @@ export class RdzApp {
     `;
   }
 
+  private renderSignalToggle(id: string): string {
+    const enabled = this.identity.verifiedOnlySignalling;
+    return `
+      <button
+        class="signal-toggle${enabled ? ' is-on' : ''}"
+        data-action="toggle-signal-policy"
+        data-id="${escapeAttr(id)}"
+        type="button"
+        role="switch"
+        aria-checked="${enabled}"
+        aria-label="Rely only on verified beings for signalling"
+        title="${enabled ? 'Direct mesh signalling is limited to verified beings' : 'Allow direct mesh signalling with any being'}"
+      >
+        <span class="signal-toggle-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M12 3 19 6v5c0 4.4-2.9 7.7-7 10-4.1-2.3-7-5.6-7-10V6z"></path>
+            <path d="m9 12 2 2 4-4"></path>
+          </svg>
+        </span>
+        <span class="signal-toggle-label">verified only</span>
+        <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+      </button>
+    `;
+  }
+
+  private renderTrafficSignalling(): string {
+    return `
+      ${this.renderSignalToggle('traffic')}
+      <p class="signal-policy-note">
+        We encourage you to keep this on to help the network stay connected
+        (<button class="inline-link" data-action="toggle-signal-explainer" type="button" aria-expanded="${this.signalExplainerOpen}" aria-controls="signal-policy-explainer">read why?</button>),
+        but we understand if you turn it off.
+      </p>
+      <div class="signal-explainer" id="signal-policy-explainer" role="note"${this.signalExplainerOpen ? '' : ' hidden'}>
+        Verified-only mode keeps your direct signalling circle focused on beings you trust and avoids connection churn from unknown peers. It can reduce the number of available routes, so turning it off is a reasonable choice when broader reachability matters more. Public presence stays open either way.
+      </div>
+    `;
+  }
+
   private renderLandingShell(): string {
     // The shell survives live updates, so the orbit only needs a phase offset
     // when the landing is rebuilt after leaving a channel.
@@ -1162,10 +1254,13 @@ export class RdzApp {
       <main class="landing">
         <section class="hero">
           <div class="orbit" aria-hidden="true" style="--orbit-delay: ${orbitDelay}"></div>
-          <button class="traffic-stream" data-action="open-traffic" type="button" aria-label="Open network traffic">
-            <span class="traffic-stream-label" data-region="traffic-stream-label"></span>
-            <span class="traffic-stream-rows" data-region="traffic-stream-rows"></span>
-          </button>
+          <div class="traffic-widget">
+            <button class="traffic-stream" data-action="open-traffic" type="button" aria-label="Open network traffic">
+              <span class="traffic-stream-label" data-region="traffic-stream-label"></span>
+              <span class="traffic-stream-rows" data-region="traffic-stream-rows"></span>
+            </button>
+            <div class="traffic-signalling" data-region="traffic-signalling"></div>
+          </div>
           <div class="hero-content">
             <h1>The Internet is Here</h1>
             <button class="primary" data-action="new-rendezvous" type="button">Set a rendezvous</button>
@@ -1174,7 +1269,7 @@ export class RdzApp {
         <div class="filter-row" data-region="filter"></div>
         <div class="landing-tabs" data-region="landing-tabs" role="group" aria-label="Landing view"></div>
         <div class="columns" data-tab="${this.landingTab}">
-          <section class="panel panel-humans" data-region="humans-panel"></section>
+          <section class="panel panel-beings" data-region="beings-panel"></section>
           <section class="panel panel-channels" data-region="channels-panel"></section>
         </div>
       </main>
@@ -1203,14 +1298,14 @@ export class RdzApp {
           <circle cx="10.5" cy="10.5" r="6.25"></circle>
           <path d="m15.2 15.2 4.3 4.3"></path>
         </svg>
-        <input id="filter" class="filter" type="search" placeholder="filter humans or channels by words or emoji" value="${escapeAttr(this.query)}" />
+        <input id="filter" class="filter" type="search" placeholder="filter beings or channels by words or emoji" value="${escapeAttr(this.query)}" />
       </div>
     `;
   }
 
   private renderLandingTabs(): string {
     const tabs = [
-      { id: 'humans', label: 'Humans' },
+      { id: 'beings', label: 'Beings' },
       { id: 'rendezvous', label: 'Rendezvous' },
     ] as const;
     return tabs
@@ -1404,22 +1499,22 @@ export class RdzApp {
     `;
   }
 
-  private renderHumansPanel(): string {
-    const humans = sortHumans(
-      [...this.humans.values()].filter(
-        (human) =>
-          human.id === this.identity.humanId || isOnline(human, this.now) || human.verified,
+  private renderBeingsPanel(): string {
+    const beings = sortBeings(
+      [...this.beings.values()].filter(
+        (being) =>
+          being.id === this.identity.humanId || isOnline(being, this.now) || being.verified,
       ),
       this.now,
     );
-    const visibleHumans = filterHumans(humans, this.query);
-    const humanIds = visibleHumans.map((human) => human.id);
+    const visibleBeings = filterBeings(beings, this.query);
+    const beingIds = visibleBeings.map((being) => being.id);
     return `
-      <div class="panel-head"><h2>Humans</h2><span>${visibleHumans.length}</span></div>
-      <div class="list humans">
+      <div class="panel-head"><h2>Beings</h2><span>${visibleBeings.length}</span></div>
+      <div class="list beings">
         ${
-          visibleHumans.length
-            ? visibleHumans.map((human) => this.renderHumanRow(human, false, humanIds)).join('')
+          visibleBeings.length
+            ? visibleBeings.map((being) => this.renderBeingRow(being, false, beingIds)).join('')
             : '<p class="empty">Nobody else is visible yet.</p>'
         }
       </div>
@@ -1447,18 +1542,18 @@ export class RdzApp {
     `;
   }
 
-  private renderHumanRow(human: Human, channel: boolean, ids?: readonly string[]): string {
-    const words = formatWords(ids ? uniqueWordDisplay(ids, human.id) : shortWords(human.words));
-    const emoji = formatEmoji(ids ? uniqueEmojiDisplay(ids, human.id) : shortEmoji(human.emoji));
-    const isSelf = human.id === this.identity.humanId;
-    const online = isSelf || isOnline(human, this.now);
+  private renderBeingRow(being: Being, channel: boolean, ids?: readonly string[]): string {
+    const words = formatWords(ids ? uniqueWordDisplay(ids, being.id) : shortWords(being.words));
+    const emoji = formatEmoji(ids ? uniqueEmojiDisplay(ids, being.id) : shortEmoji(being.emoji));
+    const isSelf = being.id === this.identity.humanId;
+    const online = isSelf || isOnline(being, this.now);
     return `
-      <div class="human-row ${human.verified ? 'is-verified' : ''} ${isSelf ? 'is-self' : ''}">
-        <button class="human-main" data-action="${isSelf ? 'identity' : 'open-human'}" data-id="${escapeAttr(human.id)}" type="button">
-          <span class="human-emoji">${escapeHtml(emoji)}</span>
-          <span class="human-copy">
+      <div class="being-row ${being.verified ? 'is-verified' : ''} ${isSelf ? 'is-self' : ''}">
+        <button class="being-main" data-action="${isSelf ? 'identity' : 'open-being'}" data-id="${escapeAttr(being.id)}" type="button">
+          <span class="being-emoji">${escapeHtml(emoji)}</span>
+          <span class="being-copy">
             <strong>${escapeHtml(words)}</strong>
-            <span>${isSelf ? 'me · active mask' : verifiedLabel(human.verified)}</span>
+            <span>${isSelf ? 'me · active mask' : verifiedLabel(being.verified)}</span>
           </span>
           <span class="presence ${online ? 'online' : ''}">${online ? 'here now' : 'away'}</span>
         </button>
@@ -1468,10 +1563,10 @@ export class RdzApp {
               ? '<span class="row-actions"><span class="mask-active">me</span></span>'
               : `<span class="row-actions">
                 ${
-                  online && human.verified
-                    ? `<button class="small" data-action="send-photo" data-id="${escapeAttr(human.id)}" type="button">send photo</button>
-                       <button class="small ghost" data-action="open-voice" data-id="${escapeAttr(human.id)}" type="button">open voice</button>`
-                    : `<button class="small ghost" data-action="open-human" data-id="${escapeAttr(human.id)}" type="button">${human.verified ? 'offline' : 'verify'}</button>`
+                  online && being.verified
+                    ? `<button class="small" data-action="send-photo" data-id="${escapeAttr(being.id)}" type="button">send photo</button>
+                       <button class="small ghost" data-action="open-voice" data-id="${escapeAttr(being.id)}" type="button">open voice</button>`
+                    : `<button class="small ghost" data-action="open-being" data-id="${escapeAttr(being.id)}" type="button">${being.verified ? 'offline' : 'verify'}</button>`
                 }
               </span>`
             : ''
@@ -1493,7 +1588,7 @@ export class RdzApp {
           this.now,
         ),
       ),
-      this.humans,
+      this.beings,
     );
     const ownEntries = sortAnnouncements(
       dedupeAnnouncements(
@@ -1505,7 +1600,7 @@ export class RdzApp {
           this.now,
         ),
       ),
-      this.humans,
+      this.beings,
     );
     const hasTimes = entries.length > 0 || ownEntries.length > 0;
     const groups = groupAnnouncementsByMinute(entries);
@@ -1551,9 +1646,9 @@ export class RdzApp {
                 <div class="time-separator"><span>${escapeHtml(formatTime(minute))}${formatDay(minute, this.now) ? ` · ${escapeHtml(formatDay(minute, this.now))}` : ''}</span></div>
                 ${rows
                   .map((row) => {
-                    const human = this.humans.get(row.author);
-                    if (!human) return '';
-                    return this.renderHumanRow(human, true, authorIds);
+                    const being = this.beings.get(row.author);
+                    if (!being) return '';
+                    return this.renderBeingRow(being, true, authorIds);
                   })
                   .join('')}
               </div>
@@ -1675,8 +1770,8 @@ export class RdzApp {
     return `
       <section class="audio-panel panel">
         <div class="panel-head"><h2>voice · one minute</h2><span>${session.phase}</span></div>
-        <div class="audio-human">
-          <span class="human-emoji">${escapeHtml(emoji)}</span>
+        <div class="audio-being">
+          <span class="being-emoji">${escapeHtml(emoji)}</span>
           <strong>${escapeHtml(words)}</strong>
         </div>
         <div class="pink-bar"><span style="width:${(remaining / 60_000) * 100}%"></span></div>
@@ -1734,21 +1829,21 @@ export class RdzApp {
         `,
       );
     }
-    if (this.modal.type === 'human') {
-      const human = this.humans.get(this.modal.humanId);
-      if (!human) return '';
+    if (this.modal.type === 'being') {
+      const being = this.beings.get(this.modal.humanId);
+      if (!being) return '';
       return this.modalShell(
-        human.verified ? '✓ Verified human' : 'Verify this human',
+        being.verified ? '✓ Verified being' : 'Verify this being',
         `
-          <div class="identity-words full">${escapeHtml(formatEmoji(human.emoji))}</div>
-          <div class="identity-words full mono">${escapeHtml(formatWords(human.words))}</div>
+          <div class="identity-words full">${escapeHtml(formatEmoji(being.emoji))}</div>
+          <div class="identity-words full mono">${escapeHtml(formatWords(being.words))}</div>
           <p class="modal-copy">Compare these eight words out loud or through another app. Do not compare them over the same channel that delivered the introduction.</p>
-          <p class="presence ${isOnline(human, this.now) ? 'online' : ''}">${isOnline(human, this.now) ? 'here now' : 'away'}</p>
+          <p class="presence ${isOnline(being, this.now) ? 'online' : ''}">${isOnline(being, this.now) ? 'here now' : 'away'}</p>
           <div class="modal-actions">
             ${
-              human.verified
-                ? `<button class="small" data-action="unverify-human" data-id="${escapeAttr(human.id)}" type="button">unverify</button>`
-                : `<button class="primary" data-action="verify-human" data-id="${escapeAttr(human.id)}" type="button">mark as verified</button>`
+              being.verified
+                ? `<button class="small" data-action="unverify-being" data-id="${escapeAttr(being.id)}" type="button">unverify</button>`
+                : `<button class="primary" data-action="verify-being" data-id="${escapeAttr(being.id)}" type="button">mark as verified</button>`
             }
             <button class="small ghost" data-action="close-modal" type="button">close</button>
           </div>
@@ -1760,6 +1855,14 @@ export class RdzApp {
         'Masks',
         `
           <p class="modal-copy">One mask is active at a time. Switching closes media and reconnects as the chosen identity.</p>
+          <section class="signal-policy${this.identity.verifiedOnlySignalling ? ' is-on' : ''}" aria-labelledby="signal-policy-title">
+            <div class="signal-policy-copy">
+              <p class="eyebrow">signalling privacy</p>
+              <h3 id="signal-policy-title">Verified beings only</h3>
+              <p>Limit direct mesh links and SIGNAL traffic to beings verified by this mask. Public presence and rendezvous discovery stay open.</p>
+            </div>
+            ${this.renderSignalToggle('identity')}
+          </section>
           <div class="mask-list">
             ${this.masks
               .map((mask) => {
@@ -1796,7 +1899,7 @@ export class RdzApp {
       return this.modalShell(
         'Send an image',
         `
-          <p class="modal-copy">One image at a time. Both humans must have verified each other. The recipient must accept before any bytes move.</p>
+          <p class="modal-copy">One image at a time. Both beings must have verified each other. The recipient must accept before any bytes move.</p>
           <div class="modal-actions">
             <button class="primary" data-action="choose-photo" data-id="${escapeAttr(this.modal.humanId)}" type="button">choose image</button>
             ${this.lastImage ? `<button class="small" data-action="reuse-photo" data-id="${escapeAttr(this.modal.humanId)}" type="button">reuse last image</button>` : ''}
@@ -1809,18 +1912,176 @@ export class RdzApp {
   }
 
   private renderImage(): string {
-    if (!this.imageViewer) return '';
-    return this.modalShell(
-      this.imageViewer.label,
-      `
-        <img class="received-image" src="${escapeAttr(this.imageViewer.url)}" alt="received image" />
-        <p class="modal-copy">${formatBytes(this.imageViewer.size)} · save it now; dismissing removes the in-app copy.</p>
-        <div class="modal-actions">
-          <a class="primary" href="${escapeAttr(this.imageViewer.url)}" download="${escapeAttr(this.imageViewer.filename)}">save to device</a>
-          <button class="small ghost" data-action="dismiss-image" type="button">dismiss</button>
+    const viewer = this.imageViewer;
+    if (!viewer) return '';
+    const imageUrl = viewer.url;
+    return `
+      <div class="image-viewer-backdrop${this.desktopImageViewer() ? ' desktop' : ''}">
+        <div class="modal image-viewer" role="dialog" aria-modal="true" aria-label="${escapeAttr(viewer.label)}">
+          <div class="modal-head"><h2>${escapeHtml(viewer.label)}</h2><button class="icon-button" data-action="dismiss-image" type="button" aria-label="close">×</button></div>
+          <div class="received-image-viewport" data-region="received-image">
+            <img class="received-image" src="${escapeAttr(imageUrl)}" alt="received image" draggable="false" />
+          </div>
+          <p class="modal-copy">${formatBytes(viewer.size)} · save it now; dismissing removes the in-app copy.</p>
+          <div class="modal-actions">
+            <a class="primary" href="${escapeAttr(viewer.url)}" download="${escapeAttr(viewer.filename)}">save to device</a>
+            <button class="small ghost" data-action="dismiss-image" type="button">dismiss</button>
+          </div>
         </div>
-      `,
+      </div>
+    `;
+  }
+
+  private desktopImageViewer(): boolean {
+    return (
+      window.innerWidth > 820 &&
+      this.imageViewerMedia.matches &&
+      typeof window.createImageBitmap === 'function'
     );
+  }
+
+  private syncImageViewer(): void {
+    const viewer = this.imageViewer;
+    const viewport = document.querySelector<HTMLDivElement>(
+      '#app [data-region="image"] .received-image-viewport',
+    );
+    const desktop = Boolean(
+      viewport && this.desktopImageViewer() && window.innerWidth > 820,
+    );
+    const backdrop = document.querySelector<HTMLElement>(
+      '#app [data-region="image"] .image-viewer-backdrop',
+    );
+    backdrop?.classList.toggle('desktop', desktop);
+    if (!viewer || !viewport || !desktop) {
+      this.stopImageViewerResize();
+      if (viewer?.bitmap) {
+        viewer.bitmapGeneration += 1;
+        viewer.bitmap.close();
+        viewer.bitmap = null;
+        viewport?.querySelector<HTMLImageElement>('.received-image')?.setAttribute('src', viewer.url);
+      }
+      return;
+    }
+    this.lockImageViewerScroll();
+    if (viewer.observedViewport !== viewport) {
+      this.stopImageViewerResize();
+      viewer.observedViewport = viewport;
+      viewer.resizeObserver = new ResizeObserver(() => this.scheduleImageViewerDecode());
+      viewer.resizeObserver.observe(viewport);
+    }
+    this.scheduleImageViewerDecode();
+  }
+
+  private stopImageViewerResize(): void {
+    const viewer = this.imageViewer;
+    if (!viewer) return;
+    viewer.resizeObserver?.disconnect();
+    viewer.resizeObserver = null;
+    viewer.observedViewport = null;
+    if (viewer.resizeFrame) {
+      window.cancelAnimationFrame(viewer.resizeFrame);
+      viewer.resizeFrame = 0;
+    }
+  }
+
+  private scheduleImageViewerDecode(): void {
+    const viewer = this.imageViewer;
+    if (!viewer || viewer.decodeQueued || viewer.resizing) return;
+    viewer.decodeQueued = true;
+    viewer.resizeFrame = window.requestAnimationFrame(() => {
+      viewer.resizeFrame = 0;
+      viewer.decodeQueued = false;
+      void this.resizeImageViewer();
+    });
+  }
+
+  private async resizeImageViewer(): Promise<void> {
+    const viewer = this.imageViewer;
+    const viewport = viewer?.observedViewport;
+    if (!viewer || !viewport || !viewport.isConnected || viewer.resizing) return;
+    const width = viewport.clientWidth;
+    const height = viewport.clientHeight;
+    if (width <= 0 || height <= 0) return;
+    viewer.resizing = true;
+    const generation = ++viewer.bitmapGeneration;
+    try {
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      let scale = (Math.max(width, height) * pixelRatio) / 1024;
+      let bitmap: ImageBitmap | null = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (generation !== viewer.bitmapGeneration || this.imageViewer !== viewer) return;
+        try {
+          bitmap = await this.decodeImage(viewer.blob, scale);
+          break;
+        } catch (error) {
+          console.warn('Received image decode failed.', error);
+          if (scale <= 1) break;
+          // Very large or resource-constrained images may reject a decode even
+          // at a reduced size. Retry smaller before using the original URL.
+          scale /= 2;
+        }
+      }
+      if (generation !== viewer.bitmapGeneration || this.imageViewer !== viewer) {
+        bitmap?.close();
+        return;
+      }
+      const previous = viewer.bitmap;
+      viewer.bitmap = bitmap;
+      const image = viewport.querySelector<HTMLImageElement>('.received-image');
+      if (image && bitmap) {
+        const source = URL.createObjectURL(bitmap as unknown as Blob);
+        image.src = source;
+        if (image.complete && image.naturalWidth > 0) URL.revokeObjectURL(source);
+        else {
+          image.addEventListener(
+            'load',
+            () => URL.revokeObjectURL(source),
+            { once: true },
+          );
+        }
+      }
+      previous?.close();
+      // The viewport can grow while decoding; settle at its final measured size.
+      if (viewport.clientWidth !== width || viewport.clientHeight !== height) {
+        this.scheduleImageViewerDecode();
+      }
+    } finally {
+      if (this.imageViewer === viewer) viewer.resizing = false;
+    }
+  }
+
+  private lockImageViewerScroll(): void {
+    const viewer = this.imageViewer;
+    if (!viewer || viewer.scrollLocked) return;
+    const root = document.documentElement;
+    viewer.scrollLocked = true;
+    viewer.scrollX = window.scrollX;
+    viewer.scrollY = window.scrollY;
+    viewer.previousOverflow = root.style.overflow;
+    root.style.overflow = 'hidden';
+  }
+
+  private closeImageViewer(): void {
+    const viewer = this.imageViewer;
+    if (!viewer) return;
+    this.imageViewer = null;
+    viewer.bitmapGeneration += 1;
+    this.stopImageViewerResize();
+    viewer.bitmap?.close();
+    URL.revokeObjectURL(viewer.url);
+    if (viewer.scrollLocked) {
+      document.documentElement.style.overflow = viewer.previousOverflow;
+      window.scrollTo(viewer.scrollX, viewer.scrollY);
+    }
+  }
+
+  private async decodeImage(blob: Blob, scale: number): Promise<ImageBitmap> {
+    const source = await blob.arrayBuffer();
+    return window.createImageBitmap(new Blob([source], { type: blob.type }), {
+      resizeWidth: Math.max(1, Math.round(1024 * scale)),
+      resizeHeight: Math.max(1, Math.round(1024 * scale)),
+      resizeQuality: 'high',
+    });
   }
 
   private modalShell(title: string, body: string): string {

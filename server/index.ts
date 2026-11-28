@@ -13,7 +13,7 @@ import {
   verifyEnvelope,
   verifyText,
 } from '../src/rdz/crypto';
-import { humanIdFromPublicKey } from '../src/rdz/ids';
+import { beingIdFromPublicKey } from '../src/rdz/ids';
 import { envelopeTransportKey, meshHelloBody } from '../src/rdz/mesh-control';
 import type { Envelope } from '../src/rdz/types';
 
@@ -206,7 +206,7 @@ async function handleMeshHello(session: Session, value: unknown): Promise<void> 
     return;
   }
   try {
-    const derived = await humanIdFromPublicKey(record.publicKey);
+    const derived = await beingIdFromPublicKey(record.publicKey);
     if (derived !== record.humanId) return;
     const valid = await verifyText(
       record.publicKey,

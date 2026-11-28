@@ -16,7 +16,7 @@ import { randomRendezvousId } from '../../src/rdz/ids';
 import type { Envelope, GoingPayload } from '../../src/rdz/types';
 
 describe('identity and signed envelopes', () => {
-  it('derives a stable human id from the public key', async () => {
+  it('derives a stable being id from the public key', async () => {
     const identity = await createIdentity();
     expect(base64UrlToBytes(identity.humanId)).toHaveLength(11);
     expect(identity.publicKey.length).toBeGreaterThan(40);

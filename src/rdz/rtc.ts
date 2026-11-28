@@ -3,7 +3,7 @@ import { randomTransferId } from './ids';
 import type {
   AudioSession,
   Envelope,
-  HumanId,
+  BeingId,
   ImageTransferProgress,
   IncomingAudioRequest,
   IncomingImageOffer,
@@ -51,14 +51,14 @@ const CLOSE_REASON_GRACE_MS = 1_500;
 
 interface RtcDeps {
   sendSignal: (
-    target: HumanId,
+    target: BeingId,
     channelId: RendezvousId,
     signal: SignalKind,
     transferId: string,
     data?: unknown,
   ) => void;
-  isVerified: (humanId: HumanId) => boolean;
-  canAcceptChannel: (humanId: HumanId, channelId: RendezvousId) => boolean;
+  isVerified: (humanId: BeingId) => boolean;
+  canAcceptChannel: (humanId: BeingId, channelId: RendezvousId) => boolean;
   onImageOffer: (offer: IncomingImageOffer) => void;
   onImageProgress: (progress: ImageTransferProgress) => void;
   onImageComplete: (transferId: string, blob: Blob, mime: string) => void;
@@ -81,7 +81,7 @@ interface NegotiatedPeer {
 
 interface OutgoingImage extends NegotiatedPeer {
   transferId: string;
-  target: HumanId;
+  target: BeingId;
   channelId: RendezvousId;
   file: File;
   channel: RTCDataChannel | null;
@@ -94,7 +94,7 @@ interface OutgoingImage extends NegotiatedPeer {
 
 interface IncomingImage extends NegotiatedPeer {
   transferId: string;
-  sender: HumanId;
+  sender: BeingId;
   channelId: RendezvousId;
   offer: IncomingImageOffer;
   channel: RTCDataChannel | null;
@@ -114,7 +114,7 @@ interface IncomingImage extends NegotiatedPeer {
 
 interface OutgoingAudio extends NegotiatedPeer {
   transferId: string;
-  target: HumanId;
+  target: BeingId;
   channelId: RendezvousId;
   stream: MediaStream | null;
   timer: number;
@@ -127,7 +127,7 @@ interface OutgoingAudio extends NegotiatedPeer {
 
 interface IncomingAudio extends NegotiatedPeer {
   transferId: string;
-  sender: HumanId;
+  sender: BeingId;
   channelId: RendezvousId;
   stream: MediaStream | null;
   accepted: boolean;
@@ -168,9 +168,9 @@ export class RtcManager {
     return this.connections.size;
   }
 
-  /** Humans with an active or pending photo or voice session. */
-  busyPeers(): Set<HumanId> {
-    const peers = new Set<HumanId>();
+  /** Beings with an active or pending photo or voice session. */
+  busyPeers(): Set<BeingId> {
+    const peers = new Set<BeingId>();
     if (this.outgoingImage) peers.add(this.outgoingImage.target);
     for (const transfer of this.incomingImages.values()) peers.add(transfer.sender);
     if (this.outgoingAudio) peers.add(this.outgoingAudio.target);
@@ -272,7 +272,7 @@ export class RtcManager {
     this.dropIncomingImage(transferId);
   }
 
-  sendImage(target: HumanId, channelId: RendezvousId, file: File): void {
+  sendImage(target: BeingId, channelId: RendezvousId, file: File): void {
     if (this.outgoingImage) throw new Error('Only one image can be sent at a time.');
     if (!ALLOWED_IMAGE_TYPES.has(file.type)) throw new Error('Only PNG, JPEG, WebP, GIF, or AVIF images are allowed.');
     if (file.size <= 0) throw new Error('That image is empty.');
@@ -313,7 +313,7 @@ export class RtcManager {
     return this.outgoingImage !== null;
   }
 
-  async requestAudio(target: HumanId, channelId: RendezvousId): Promise<void> {
+  async requestAudio(target: BeingId, channelId: RendezvousId): Promise<void> {
     if (this.outgoingAudio) return;
     const transferId = randomTransferId();
     this.outgoingAudio = {
@@ -1433,7 +1433,7 @@ export class RtcManager {
 
   private wireIce(
     pc: RTCPeerConnection,
-    target: HumanId,
+    target: BeingId,
     channelId: RendezvousId,
     transferId: string,
   ): void {

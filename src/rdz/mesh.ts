@@ -14,7 +14,7 @@ import { randomTransferId } from './ids';
 import type { TrafficPeer, TrafficReport } from './traffic';
 import type {
   Envelope,
-  HumanId,
+  BeingId,
   MaskRecord,
   MeshPeerInfo,
   SignalKind,
@@ -26,8 +26,9 @@ export type MeshStatus = 'connecting' | 'online' | 'offline';
 interface MeshOptions {
   budget: ConnectionBudget;
   bootstrapUrl: string;
-  isVerified: (humanId: HumanId) => boolean;
-  isBusy: (humanId: HumanId) => boolean;
+  isVerified: (humanId: BeingId) => boolean;
+  verifiedOnlySignalling: () => boolean;
+  isBusy: (humanId: BeingId) => boolean;
   onEnvelope: (value: unknown) => void;
   onStatus: (status: MeshStatus) => void;
   onPeers: (peers: MeshPeerInfo[]) => void;
@@ -38,7 +39,7 @@ type PeerState = 'connecting' | 'open' | 'closed';
 
 interface MeshPeer {
   key: string;
-  humanId: HumanId | null;
+  humanId: BeingId | null;
   isSeed: boolean;
   outbound: boolean;
   attemptId: string;
@@ -78,11 +79,11 @@ export class MeshManager {
   private bootstrapCandidates: RTCIceCandidateInit[] = [];
   private bootstrapRemoteReady = false;
   private readonly peers = new Map<string, MeshPeer>();
-  private readonly registry = new Map<HumanId, MeshPeerInfo>();
+  private readonly registry = new Map<BeingId, MeshPeerInfo>();
   private readonly cache = new Map<string, CachedEnvelope>();
   private readonly seen = new Map<string, number>();
   private readonly inFlight = new Set<string>();
-  private readonly failedAt = new Map<HumanId, number>();
+  private readonly failedAt = new Map<BeingId, number>();
   private readonly outbox: Envelope[] = [];
   private readonly retryTimers = new Set<number>();
   private signalChain: Promise<void> = Promise.resolve();
@@ -130,6 +131,26 @@ export class MeshManager {
     return [...this.peers.values()].filter((peer) => peer.state !== 'closed').length;
   }
 
+  /**
+   * Reconcile live links after the active mask's privacy preference changes.
+   * Enabling verified-only signalling closes unverified direct links; disabling
+   * it makes the known registry eligible for connection again.
+   */
+  refreshSignallingPolicy(): void {
+    for (const peer of [...this.peers.values()]) {
+      if (!peer.isSeed && peer.humanId && !this.canSignalTo(peer.humanId)) {
+        this.closePeer(peer, true, false);
+      }
+    }
+    for (const beingId of this.registry.keys()) {
+      if (this.canSignalTo(beingId)) this.considerPeer(beingId);
+    }
+  }
+
+  private canSignalTo(beingId: BeingId): boolean {
+    return !this.options.verifiedOnlySignalling() || this.options.isVerified(beingId);
+  }
+
   get openPeerCount(): number {
     return [...this.peers.values()].filter((peer) => peer.state === 'open').length;
   }
@@ -145,20 +166,21 @@ export class MeshManager {
   }
 
   /**
-   * Ask the mesh to open a direct WebRTC link to a known human. A new peer
+   * Ask the mesh to open a direct WebRTC link to a known being. A new peer
    * uses an existing peer as introducer; if no link exists the offer waits in
    * the outbox for the first WebRTC channel.
    */
-  considerPeer(humanId: HumanId, publicKey = ''): void {
+  considerPeer(humanId: BeingId, publicKey = ''): void {
     if (this.stopped || humanId === this.identity.humanId) return;
     if (publicKey) this.registry.set(humanId, { humanId, publicKey });
     else if (!this.registry.has(humanId)) this.registry.set(humanId, { humanId, publicKey });
+    if (!this.canSignalTo(humanId)) return;
     if (this.peers.has(humanId)) return;
     const failed = this.failedAt.get(humanId);
     if (failed && Date.now() - failed < RETRY_AFTER_MS) return;
     const timer = window.setTimeout(() => {
       this.retryTimers.delete(timer);
-      if (this.stopped || this.peers.has(humanId)) return;
+      if (this.stopped || this.peers.has(humanId) || !this.canSignalTo(humanId)) return;
       void this.connectTo(humanId);
     }, 350 + Math.floor(Math.random() * 900));
     this.retryTimers.add(timer);
@@ -175,6 +197,7 @@ export class MeshManager {
   }
 
   private async rememberAndPublish(envelope: Envelope): Promise<void> {
+    if (envelope.payload.kind === 'SIGNAL' && !this.canSignalTo(envelope.payload.target)) return;
     await this.rememberAsync(envelope);
     let destinations = 0;
     if (this.openPeers().length === 0) {
@@ -346,8 +369,8 @@ export class MeshManager {
     this.bootstrapCandidates = [];
   }
 
-  private async connectTo(humanId: HumanId): Promise<void> {
-    if (this.peers.has(humanId)) return;
+  private async connectTo(humanId: BeingId): Promise<void> {
+    if (!this.canSignalTo(humanId) || this.peers.has(humanId)) return;
     if (!this.options.budget.tryAcquire(`mesh:${humanId}`)) return;
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     const attemptId = randomTransferId();
@@ -389,7 +412,7 @@ export class MeshManager {
     }
   }
 
-  private wirePeerConnection(peer: MeshPeer, target: HumanId): void {
+  private wirePeerConnection(peer: MeshPeer, target: BeingId): void {
     peer.pc.addEventListener('icecandidate', (event) => {
       if (!event.candidate || peer.state === 'closed') return;
       const candidate = event.candidate.toJSON();
@@ -438,6 +461,7 @@ export class MeshManager {
   }
 
   private async handlePeerMessage(peer: MeshPeer, data: unknown): Promise<void> {
+    if (!peer.isSeed && peer.humanId && !this.canSignalTo(peer.humanId)) return;
     if (typeof data !== 'string') return;
     let parsed: unknown;
     try {
@@ -504,6 +528,12 @@ export class MeshManager {
     if (envelope.type === 'PING' && !isValidPing(envelope)) return;
     if (envelope.type === 'GOING' && !isValidGoing(envelope)) return;
     if (envelope.type === 'SIGNAL' && Date.now() - envelope.createdAt > SIGNAL_TTL_MS) return;
+    if (
+      envelope.payload.kind === 'SIGNAL' &&
+      (!this.canSignalTo(envelope.author) || !this.canSignalTo(envelope.payload.target))
+    ) {
+      return;
+    }
 
     const id = await envelopeId(envelope);
     const expiresAt = expiryFor(envelope);
@@ -548,6 +578,7 @@ export class MeshManager {
 
   private async handleMeshSignal(envelope: Envelope, payload: SignalPayload): Promise<void> {
     const author = envelope.author;
+    if (!this.canSignalTo(author)) return;
     const data = payload.data as { sdp?: unknown; candidate?: unknown } | undefined;
     if (payload.signal === 'mesh-offer' && isDescription(data?.sdp)) {
       const existing = this.peers.get(author);
@@ -631,13 +662,15 @@ export class MeshManager {
   }
 
   private sendMeshSignal(
-    target: HumanId,
+    target: BeingId,
     signal: SignalKind,
     transferId: string,
     data?: unknown,
   ): void {
+    if (!this.canSignalTo(target)) return;
     this.signalChain = this.signalChain
       .then(async () => {
+        if (!this.canSignalTo(target)) return;
         const envelope = await createEnvelope(this.identity, {
           kind: 'SIGNAL',
           target,
@@ -651,7 +684,7 @@ export class MeshManager {
       .catch(() => undefined);
   }
 
-  private flushLocalCandidates(peer: MeshPeer, target: HumanId): void {
+  private flushLocalCandidates(peer: MeshPeer, target: BeingId): void {
     const candidates = peer.localCandidates;
     peer.localCandidates = [];
     for (const candidate of candidates) {
@@ -680,7 +713,8 @@ export class MeshManager {
     const now = Date.now();
     for (const envelope of this.outbox) {
       if (expiryFor(envelope) <= now) continue;
-      if (envelope.type !== 'SIGNAL') continue;
+      if (envelope.payload.kind !== 'SIGNAL') continue;
+      if (!this.canSignalTo(envelope.payload.target)) continue;
       this.sendTo(peer, envelope);
     }
   }
@@ -695,6 +729,7 @@ export class MeshManager {
   }
 
   private sendTo(peer: MeshPeer, envelope: Envelope): boolean {
+    if (!peer.isSeed && peer.humanId && !this.canSignalTo(peer.humanId)) return false;
     const channel = peer.channel;
     if (!channel || channel.readyState !== 'open') return false;
     try {
@@ -758,6 +793,7 @@ export class MeshManager {
     const candidates = [...this.registry.keys()].filter(
       (humanId) =>
         humanId !== this.identity.humanId &&
+        this.canSignalTo(humanId) &&
         !this.peers.has(humanId) &&
         !this.recentlyFailed(humanId),
     );
@@ -782,7 +818,7 @@ export class MeshManager {
     for (const humanId of candidates.slice(0, count)) void this.connectTo(humanId);
   }
 
-  private recentlyFailed(humanId: HumanId): boolean {
+  private recentlyFailed(humanId: BeingId): boolean {
     const failed = this.failedAt.get(humanId);
     return Boolean(failed && Date.now() - failed < RETRY_AFTER_MS);
   }

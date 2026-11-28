@@ -1,7 +1,7 @@
 export const MAX_LIVE_PEER_CONNECTIONS = 100;
 
 /**
- * Tracks live peer connections, not known humans. The budget is per browser.
+ * Tracks live peer connections, not known beings. The budget is per browser.
  * A failed acquire means the UI must refuse the new transfer rather than
  * silently exceeding the cap.
  */

@@ -1,5 +1,5 @@
 import { asBufferSource, base64UrlToBytes, bytesToBase64Url, canonicalJson, utf8 } from './bytes';
-import { humanIdFromPublicKey, isCanonicalId } from './ids';
+import { beingIdFromPublicKey, isCanonicalId } from './ids';
 import type { Envelope, EnvelopePayload, StoredIdentity } from './types';
 
 const ECDSA = { name: 'ECDSA', namedCurve: 'P-256' } as const;
@@ -12,8 +12,8 @@ export async function createIdentity(): Promise<StoredIdentity> {
   );
   const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
   const privateKey = await crypto.subtle.importKey('jwk', privateJwk, ECDSA, false, ['sign']);
-  const humanId = await humanIdFromPublicKey(publicKey);
-  return { privateKey, publicKey, humanId };
+  const beingId = await beingIdFromPublicKey(publicKey);
+  return { privateKey, publicKey, humanId: beingId };
 }
 
 export async function sha256Base64Url(value: Uint8Array | string): Promise<string> {
@@ -112,7 +112,7 @@ export async function verifyEnvelope(value: unknown): Promise<Envelope | null> {
       return null;
     }
   }
-  const derived = await humanIdFromPublicKey(candidate.publicKey);
+  const derived = await beingIdFromPublicKey(candidate.publicKey);
   if (derived !== candidate.author) return null;
   const body: EnvelopeBody<EnvelopePayload> = {
     v: 1,

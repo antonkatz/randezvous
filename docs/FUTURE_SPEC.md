@@ -12,11 +12,11 @@ An optional voice note, recorded in the browser and attached to a photograph, ev
 
 ## Possession inventory
 
-The owner of a photograph eventually sees which humans received a copy through Rendezvous, based on signed possession claims and releases, with honest confirmed / last-confirmed / deleted states. Deferred.
+The owner of a photograph eventually sees which beings received a copy through Rendezvous, based on signed possession claims and releases, with honest confirmed / last-confirmed / deleted states. Deferred.
 
 ## Other deferred items from current discussion
 
-- Per-message-type sharing scopes, for example sharing `GOING` only with humans I am connected to.
+- Per-message-type sharing scopes, for example sharing `GOING` only with beings I am connected to.
 - Shareable links.
 - Local automatic banning of peers that send invalid `PING` messages. Bans are not gossiped or network-wide.
 - Richer circle behavior beyond pinning a rendezvous ID.

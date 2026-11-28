@@ -7,18 +7,18 @@ import {
   buildChannels,
   dedupeAnnouncements,
   filterChannels,
-  filterHumans,
+  filterBeings,
   goingCount,
   groupAnnouncementsByMinute,
   isOnline,
   nextAnnouncementTimes,
   parseTimeInput,
   sortAnnouncements,
-  sortHumans,
+  sortBeings,
 } from '../../src/rdz/state';
-import type { GoingAnnouncement, Human } from '../../src/rdz/types';
+import type { GoingAnnouncement, Being } from '../../src/rdz/types';
 
-function human(verified = false, lastSeen = Date.now()): Human {
+function being(verified = false, lastSeen = Date.now()): Being {
   const id = randomRendezvousId();
   return {
     id,
@@ -31,7 +31,7 @@ function human(verified = false, lastSeen = Date.now()): Human {
 }
 
 function announcement(
-  author: Human,
+  author: Being,
   channelId: string,
   scheduledAt: number,
   createdAt = Date.now(),
@@ -49,16 +49,16 @@ function announcement(
 describe('presence and ordering', () => {
   it('expires presence after five minutes', () => {
     const now = Date.now();
-    expect(isOnline(human(false, now - 60_000), now)).toBe(true);
-    expect(isOnline(human(false, now - 6 * 60_000), now)).toBe(false);
+    expect(isOnline(being(false, now - 60_000), now)).toBe(true);
+    expect(isOnline(being(false, now - 6 * 60_000), now)).toBe(false);
   });
 
-  it('sorts verified humans first, then online', () => {
+  it('sorts verified beings first, then online', () => {
     const now = Date.now();
-    const verified = human(true, now);
-    const online = human(false, now);
-    const offline = human(false, now - 10 * 60_000);
-    expect(sortHumans([offline, online, verified], now).map((entry) => entry.id)).toEqual([
+    const verified = being(true, now);
+    const online = being(false, now);
+    const offline = being(false, now - 10 * 60_000);
+    expect(sortBeings([offline, online, verified], now).map((entry) => entry.id)).toEqual([
       verified.id,
       online.id,
       offline.id,
@@ -67,8 +67,8 @@ describe('presence and ordering', () => {
 
   it('sorts announcements by time, then verified', () => {
     const now = Date.now();
-    const verified = human(true, now);
-    const unverified = human(false, now);
+    const verified = being(true, now);
+    const unverified = being(false, now);
     const early = announcement(verified, 'channel', now);
     const late = announcement(unverified, 'channel', now + 60_000);
     expect(sortAnnouncements([late, early], new Map([
@@ -82,7 +82,7 @@ describe('channels and expiry', () => {
   const now = Date.now();
 
   it('removes an announcement three minutes after its scheduled time', () => {
-    const author = human(true, now);
+    const author = being(true, now);
     const entry = announcement(author, 'channel', now);
     expect(activeAnnouncements([entry], now)).toHaveLength(1);
     expect(activeAnnouncements([entry], now + ANNOUNCEMENT_GRACE_MS)).toHaveLength(1);
@@ -95,16 +95,16 @@ describe('channels and expiry', () => {
     expect(channels[0]?.pinnedLabel).toBe('Sunday');
   });
 
-  it('deduplicates the same human, channel, and minute', () => {
-    const author = human(true, now);
+  it('deduplicates the same being, channel, and minute', () => {
+    const author = being(true, now);
     const first = announcement(author, 'channel', now, now - 10);
     const second = announcement(author, 'channel', now, now);
     expect(dedupeAnnouncements([first, second])).toEqual([second]);
   });
 
-  it('counts each human once even with multiple announced times', () => {
-    const author = human(true, now);
-    const other = human(false, now);
+  it('counts each being once even with multiple announced times', () => {
+    const author = being(true, now);
+    const other = being(false, now);
     expect(
       goingCount([
         announcement(author, 'channel', now),
@@ -115,7 +115,7 @@ describe('channels and expiry', () => {
   });
 
   it('lists the next two distinct upcoming times in order', () => {
-    const author = human(true, now);
+    const author = being(true, now);
     const base = Math.floor(now / 60_000) * 60_000;
     const entries = [
       announcement(author, 'channel', base + 120_000),
@@ -128,7 +128,7 @@ describe('channels and expiry', () => {
   });
 
   it('groups announcements by local minute', () => {
-    const author = human(true, now);
+    const author = being(true, now);
     const minute = Math.floor(now / 60_000) * 60_000 + 5_000;
     const first = announcement(author, 'channel', minute);
     const second = announcement(author, 'channel', minute + 30_000);
@@ -139,11 +139,11 @@ describe('channels and expiry', () => {
 });
 
 describe('search and time input', () => {
-  it('filters humans by words and emoji', () => {
-    const entry = human(false);
-    expect(filterHumans([entry], entry.words[0] ?? '')).toHaveLength(1);
-    expect(filterHumans([entry], entry.emoji[0] ?? '')).toHaveLength(1);
-    expect(filterHumans([entry], 'zzzz-not-here')).toHaveLength(0);
+  it('filters beings by words and emoji', () => {
+    const entry = being(false);
+    expect(filterBeings([entry], entry.words[0] ?? '')).toHaveLength(1);
+    expect(filterBeings([entry], entry.emoji[0] ?? '')).toHaveLength(1);
+    expect(filterBeings([entry], 'zzzz-not-here')).toHaveLength(0);
   });
 
   it('filters channels by pinned label', () => {

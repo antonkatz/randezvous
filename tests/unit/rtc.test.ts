@@ -738,7 +738,7 @@ describe('audio permission timing', () => {
     expect(rtc.busyPeers().has(peer.humanId)).toBe(false);
   });
 
-  it('tells the remaining human when the other one ends a pending request', async () => {
+  it('tells the remaining being when the other one ends a pending request', async () => {
     const { rtc, identity, peer, signals, states, notices } = await audioManager();
     await rtc.requestAudio(peer.humanId, 'channel');
     const request = signals.find((entry) => entry.signal === 'audio-request');

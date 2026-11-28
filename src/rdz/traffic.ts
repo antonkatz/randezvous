@@ -1,7 +1,7 @@
-import type { Envelope, EnvelopeType, HumanId, SignalKind } from './types';
+import type { Envelope, EnvelopeType, BeingId, SignalKind } from './types';
 
 export type TrafficDirection = 'coming' | 'going' | 'relaying';
-export type TrafficPeer = HumanId | 'seed' | null;
+export type TrafficPeer = BeingId | 'seed' | null;
 export type TrafficPeerRole = 'from' | 'to' | null;
 export type TrafficFilter = TrafficDirection | 'all';
 
@@ -20,7 +20,7 @@ export interface TrafficEvent {
   at: number;
   direction: TrafficDirection;
   type: EnvelopeType;
-  author: HumanId;
+  author: BeingId;
   createdAt: number;
   bytes: number;
   peer: TrafficPeer;
@@ -28,7 +28,7 @@ export interface TrafficEvent {
   destinations: number;
   replayed: boolean;
   signal: SignalKind | null;
-  target: HumanId | null;
+  target: BeingId | null;
   channelId: string | null;
   scheduledAt: number | null;
 }

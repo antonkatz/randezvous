@@ -3,12 +3,12 @@ import { formatEmoji, formatWords, idToEmoji, idToWords, isCanonicalId } from '.
 import type {
   ChannelView,
   GoingAnnouncement,
-  Human,
+  Being,
   PinRecord,
 } from './types';
 
-export function isOnline(human: Human, now = Date.now()): boolean {
-  return human.lastSeen + PRESENCE_MS > now;
+export function isOnline(being: Being, now = Date.now()): boolean {
+  return being.lastSeen + PRESENCE_MS > now;
 }
 
 export function activeAnnouncements(
@@ -18,36 +18,36 @@ export function activeAnnouncements(
   return announcements.filter((entry) => entry.scheduledAt + ANNOUNCEMENT_GRACE_MS >= now);
 }
 
-export function humanLabel(human: Pick<Human, 'id'>, full = false): string {
-  const words = idToWords(human.id);
+export function beingLabel(being: Pick<Being, 'id'>, full = false): string {
+  const words = idToWords(being.id);
   return full ? formatWords(words) : formatWords(words.slice(0, 4));
 }
 
-export function humanEmojiLabel(human: Pick<Human, 'id'>, full = false): string {
-  const emoji = idToEmoji(human.id);
+export function beingEmojiLabel(being: Pick<Being, 'id'>, full = false): string {
+  const emoji = idToEmoji(being.id);
   return formatEmoji(full ? emoji : emoji.slice(0, 6));
 }
 
-export function sortHumans(humans: readonly Human[], now = Date.now()): Human[] {
-  return [...humans].sort((left, right) => {
+export function sortBeings(beings: readonly Being[], now = Date.now()): Being[] {
+  return [...beings].sort((left, right) => {
     const leftOnline = isOnline(left, now) ? 0 : 1;
     const rightOnline = isOnline(right, now) ? 0 : 1;
     if (left.verified !== right.verified) return left.verified ? -1 : 1;
     if (leftOnline !== rightOnline) return leftOnline - rightOnline;
-    return humanLabel(left).localeCompare(humanLabel(right));
+    return beingLabel(left).localeCompare(beingLabel(right));
   });
 }
 
 export function sortAnnouncements(
   announcements: readonly GoingAnnouncement[],
-  humans: ReadonlyMap<string, Human>,
+  beings: ReadonlyMap<string, Being>,
 ): GoingAnnouncement[] {
   return [...announcements].sort((left, right) => {
     if (left.scheduledAt !== right.scheduledAt) return left.scheduledAt - right.scheduledAt;
-    const leftHuman = humans.get(left.author);
-    const rightHuman = humans.get(right.author);
-    if (leftHuman?.verified !== rightHuman?.verified) return leftHuman?.verified ? -1 : 1;
-    return humanLabel({ id: left.author }).localeCompare(humanLabel({ id: right.author }));
+    const leftBeing = beings.get(left.author);
+    const rightBeing = beings.get(right.author);
+    if (leftBeing?.verified !== rightBeing?.verified) return leftBeing?.verified ? -1 : 1;
+    return beingLabel({ id: left.author }).localeCompare(beingLabel({ id: right.author }));
   });
 }
 
@@ -129,12 +129,12 @@ export function buildChannels(
   });
 }
 
-export function filterHumans(humans: readonly Human[], query: string): Human[] {
+export function filterBeings(beings: readonly Being[], query: string): Being[] {
   const normalized = query.trim().toLowerCase();
-  if (!normalized) return [...humans];
-  return humans.filter((human) => {
-    const words = formatWords(idToWords(human.id)).toLowerCase();
-    const emoji = formatEmoji(idToEmoji(human.id));
+  if (!normalized) return [...beings];
+  return beings.filter((being) => {
+    const words = formatWords(idToWords(being.id)).toLowerCase();
+    const emoji = formatEmoji(idToEmoji(being.id));
     return words.includes(normalized) || emoji.includes(query.trim());
   });
 }
@@ -196,10 +196,10 @@ export function parseTimeInput(value: string, now = Date.now()): number | null {
 }
 
 export function isVerified(
-  humanId: string,
+  beingId: string,
   verifications: ReadonlyMap<string, { verifiedAt: number | null }>,
 ): boolean {
-  return Boolean(verifications.get(humanId)?.verifiedAt);
+  return Boolean(verifications.get(beingId)?.verifiedAt);
 }
 
 export const AUDIO_LIMIT_MS = 60_000;
@@ -209,6 +209,6 @@ export function audioRemaining(startedAt: number | null, now = Date.now()): numb
   return Math.max(0, AUDIO_LIMIT_MS - (now - startedAt));
 }
 
-export function humanDisplay(human: Human): string {
-  return `${humanEmojiLabel(human)} ${humanLabel(human)}`;
+export function beingDisplay(being: Being): string {
+  return `${beingEmojiLabel(being)} ${beingLabel(being)}`;
 }

@@ -104,6 +104,7 @@ export async function createMaskRecord(): Promise<MaskRecord> {
     ...identity,
     id: `mask-${randomTransferId()}`,
     createdAt: Date.now(),
+    verifiedOnlySignalling: false,
   };
 }
 
@@ -121,6 +122,17 @@ export async function loadMaskState(): Promise<MaskState> {
     db.transaction(MASK_STORE, 'readonly').objectStore(MASK_STORE).getAll(),
   )) as MaskRecord[];
   masks.sort((left, right) => left.createdAt - right.createdAt);
+
+  // The preference lives on the mask, so each identity keeps its own privacy
+  // policy. Older mask records predate the switch and default to the existing
+  // permissionless mesh behaviour without a schema migration.
+  if (masks.some((mask) => typeof mask.verifiedOnlySignalling !== 'boolean')) {
+    masks = masks.map((mask) => ({
+      ...mask,
+      verifiedOnlySignalling: mask.verifiedOnlySignalling ?? false,
+    }));
+    for (const mask of masks) await saveMask(mask);
+  }
 
   if (masks.length === 0) {
     masks = [await migrateLegacyIdentity()];
@@ -154,6 +166,7 @@ async function migrateLegacyIdentity(): Promise<MaskRecord> {
       publicKey: legacy.publicKey,
       humanId: legacy.humanId,
       createdAt: Date.now(),
+      verifiedOnlySignalling: false,
     };
     await saveMask(mask);
     await writeMeta('activeMaskId', mask.id);

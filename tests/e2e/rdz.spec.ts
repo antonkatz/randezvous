@@ -8,6 +8,11 @@ const PNG = Buffer.from(
   'base64',
 );
 
+const LANDSCAPE_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAgAAAAEACAIAAABK8lkwAAADn0lEQVR4nO3VQQEAEADAQCQURxxRxfDYXYL9Ns++A4Ce9TsAgD8MACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiDAAgygAAogwAIMoAAKIMACDKAACiHj8fA2hw3SSwAAAAAElFTkSuQmCC',
+  'base64',
+);
+
 function futureTime(): string {
   const date = new Date(Date.now() + 2 * 60 * 60 * 1000);
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -58,8 +63,8 @@ async function announce(page: Page, time: string): Promise<void> {
   await expect(page.locator('.time-group').first()).toBeVisible();
 }
 
-function humanRow(page: Page, shortWords: string) {
-  return page.locator('.human-row').filter({ hasText: shortWords }).first();
+function beingRow(page: Page, shortWords: string) {
+  return page.locator('.being-row').filter({ hasText: shortWords }).first();
 }
 
 async function orbitProgress(page: Page): Promise<number> {
@@ -70,8 +75,8 @@ async function orbitProgress(page: Page): Promise<number> {
 }
 
 async function verify(page: Page, shortWords: string): Promise<void> {
-  const row = humanRow(page, shortWords);
-  await row.locator('.human-main').click();
+  const row = beingRow(page, shortWords);
+  await row.locator('.being-main').click();
   await page.getByRole('button', { name: 'mark as verified' }).click();
   await expect(page.locator('.modal')).toHaveCount(0);
 }
@@ -93,10 +98,10 @@ async function setupPair(browser: Browser, phoneFirst = false): Promise<{
   const channel = await createChannel(a.page, time);
   await openChannel(b.page, channel);
   await announce(b.page, time);
-  await expect(humanRow(a.page, bWords)).toBeVisible();
+  await expect(beingRow(a.page, bWords)).toBeVisible();
   await verify(a.page, bWords);
   await verify(b.page, aWords);
-  await expect(humanRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toBeVisible();
+  await expect(beingRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toBeVisible();
   return { a, b, aWords, bWords, channel };
 }
 
@@ -175,6 +180,76 @@ test('the version stamp is faded in the top right corner', async ({ browser }) =
   await a.context.close();
 });
 
+test('verified-only signalling is styled, keyboard accessible, persistent, and mask-local', async ({ browser }) => {
+  const a = await openPage(browser, '?seed=off');
+  const first = await identityWords(a.page);
+  const toggle = a.page.locator('.traffic-signalling .signal-toggle');
+  const track = toggle.locator('.switch-track');
+  const thumb = toggle.locator('.switch-thumb');
+
+  await expect(toggle).toHaveAttribute('role', 'switch');
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(toggle).toHaveAttribute('aria-label', 'Rely only on verified beings for signalling');
+  await expect(track).toHaveCSS('border-radius', '999px');
+  await expect(toggle).toHaveCSS('min-height', '36px');
+  await expect(toggle).toHaveCSS('border-top-width', '0px');
+  await expect(toggle).toHaveCSS('box-shadow', 'none');
+  await expect(a.page.locator('.topbar .signal-toggle')).toHaveCount(0);
+  await expect(a.page.locator('.signal-policy-note')).toContainText(
+    'We encourage you to keep this on to help the network stay connected',
+  );
+  await expect(a.page.locator('.signal-policy-note')).toContainText(
+    'but we understand if you turn it off.',
+  );
+  const why = a.page.getByRole('button', { name: 'read why?' });
+  await expect(why).toHaveAttribute('aria-expanded', 'false');
+  await why.click();
+  await expect(why).toHaveAttribute('aria-expanded', 'true');
+  await expect(a.page.locator('.signal-explainer')).toBeVisible();
+  await expect(a.page.locator('.signal-explainer')).toContainText('broader reachability');
+  await why.click();
+  await expect(why).toHaveAttribute('aria-expanded', 'false');
+  await expect(a.page.locator('.signal-explainer')).toBeHidden();
+  const offTransform = await thumb.evaluate((node) => getComputedStyle(node).transform);
+
+  await toggle.focus();
+  await a.page.keyboard.press('Space');
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await expect(toggle).toHaveClass(/is-on/);
+  await expect(a.page.getByRole('status')).toContainText('Verified-only signalling on.');
+  const onTransform = await thumb.evaluate((node) => getComputedStyle(node).transform);
+  expect(onTransform).not.toBe(offTransform);
+
+  await a.page.locator('.identity-chip').click();
+  const modalToggle = a.page.locator('.modal .signal-toggle');
+  await expect(modalToggle).toHaveAttribute('aria-checked', 'true');
+  await expect(a.page.locator('.signal-policy')).toContainText('Public presence and rendezvous discovery stay open.');
+  await modalToggle.click();
+  await expect(modalToggle).toHaveAttribute('aria-checked', 'false');
+  await a.page.locator('.modal-actions [data-action="close-modal"]').click();
+
+  await a.page.reload();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await toggle.click();
+  await a.page.reload();
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+
+  await a.page.locator('.identity-chip').click();
+  await a.page.getByRole('button', { name: 'new mask' }).click();
+  await expect.poll(async () => identityWords(a.page)).not.toBe(first);
+  await expect(a.page.locator('.traffic-signalling .signal-toggle')).toHaveAttribute('aria-checked', 'false');
+
+  const firstRow = a.page
+    .locator('.mask-row')
+    .filter({ hasText: first.split(' ').slice(0, 4).join(' ') });
+  await firstRow.getByRole('button', { name: 'switch' }).click();
+  await expect.poll(async () => identityWords(a.page)).toBe(first);
+  await expect(a.page.locator('.traffic-signalling .signal-toggle')).toHaveAttribute('aria-checked', 'true');
+
+  expect(a.errors).toEqual([]);
+  await a.context.close();
+});
+
 test('presence, channel, verification, and the unverified gate', async ({ browser }) => {
   const time = futureTime();
   const a = await openPage(browser);
@@ -184,23 +259,23 @@ test('presence, channel, verification, and the unverified gate', async ({ browse
   const aWords = await identityWords(a.page);
   const bWords = await identityWords(b.page);
 
-  await expect(humanRow(a.page, bWords)).toBeVisible();
-  await expect(humanRow(b.page, aWords)).toBeVisible();
+  await expect(beingRow(a.page, bWords)).toBeVisible();
+  await expect(beingRow(b.page, aWords)).toBeVisible();
 
   const channel = await createChannel(a.page, time);
   await openChannel(b.page, channel);
   await announce(b.page, time);
 
-  await expect(humanRow(a.page, bWords)).toBeVisible();
-  await expect(humanRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toHaveCount(0);
-  await expect(humanRow(a.page, bWords).getByRole('button', { name: 'verify' })).toBeVisible();
+  await expect(beingRow(a.page, bWords)).toBeVisible();
+  await expect(beingRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toHaveCount(0);
+  await expect(beingRow(a.page, bWords).getByRole('button', { name: 'verify' })).toBeVisible();
 
   await verify(a.page, bWords);
   await verify(b.page, aWords);
 
-  await expect(humanRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toBeVisible();
-  await expect(humanRow(a.page, bWords).getByRole('button', { name: 'open voice' })).toBeVisible();
-  await expect(humanRow(a.page, bWords)).toContainText('✓ verified');
+  await expect(beingRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toBeVisible();
+  await expect(beingRow(a.page, bWords).getByRole('button', { name: 'open voice' })).toBeVisible();
+  await expect(beingRow(a.page, bWords)).toContainText('✓ verified');
 
   await a.context.close();
   await b.context.close();
@@ -210,9 +285,9 @@ test('image consent, direct transfer, save, dismiss, reuse, and decline', async 
   const { a, b, aWords, bWords } = await setupPair(browser);
   const file = testInfo.outputPath('one.png');
   writeFileSync(file, PNG);
-  const senderEmoji = (await humanRow(b.page, aWords).locator('.human-emoji').innerText()).trim();
+  const senderEmoji = (await beingRow(b.page, aWords).locator('.being-emoji').innerText()).trim();
 
-  await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
   await a.page.getByRole('button', { name: 'choose image' }).click();
   await a.page.locator('input[type=file]').setInputFiles(file);
 
@@ -227,7 +302,7 @@ test('image consent, direct transfer, save, dismiss, reuse, and decline', async 
   await b.page.getByRole('button', { name: 'dismiss' }).click();
   await expect(b.page.locator('img.received-image')).toHaveCount(0);
 
-  await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
   await expect(a.page.getByRole('button', { name: /reuse last image/ })).toBeVisible();
   await a.page.getByRole('button', { name: /reuse last image/ }).click();
   await expect(b.page.getByRole('button', { name: 'decline', exact: true })).toBeVisible();
@@ -246,7 +321,7 @@ test('a photo transfer can be cancelled by either side', async ({ browser }, tes
   writeFileSync(file, body);
 
   // Sender cancels while the offer is waiting.
-  await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
   await a.page.getByRole('button', { name: 'choose image' }).click();
   await a.page.locator('input[type=file]').setInputFiles(file);
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
@@ -266,7 +341,7 @@ test('a photo transfer can be cancelled by either side', async ({ browser }, tes
       originalSend.call(this, data);
     };
   });
-  await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
   await a.page.getByRole('button', { name: /reuse last image/ }).click();
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
   await b.page.getByRole('button', { name: 'accept', exact: true }).click();
@@ -281,6 +356,178 @@ test('a photo transfer can be cancelled by either side', async ({ browser }, tes
   await b.context.close();
 });
 
+test('a wide coarse-pointer screen keeps the scrollable received-photo dialog', async ({ browser }, testInfo) => {
+  const a = await openPage(browser);
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  const b = { context, page: await context.newPage(), errors: [] as string[] };
+  b.page.on('pageerror', (error) => b.errors.push(error.message));
+  b.page.on('console', (message) => {
+    if (message.type() === 'warning' || message.type() === 'error') console.log(message.text());
+  });
+  await b.page.goto('/');
+  await expectLive(a.page);
+  await expectLive(b.page);
+  expect(await b.page.evaluate(() => matchMedia('(pointer: fine)').matches)).toBe(false);
+  const aWords = await identityWords(a.page);
+  const bWords = await identityWords(b.page);
+  const time = futureTime();
+  const channel = await createChannel(a.page, time);
+  await openChannel(b.page, channel);
+  await announce(b.page, time);
+  await expect(beingRow(a.page, bWords)).toBeVisible();
+  await verify(a.page, bWords);
+  await verify(b.page, aWords);
+
+  const file = testInfo.outputPath('wide-touch.png');
+  writeFileSync(file, PNG);
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await a.page.getByRole('button', { name: 'choose image' }).click();
+  await a.page.locator('input[type=file]').setInputFiles(file);
+  await b.page.getByRole('button', { name: 'accept', exact: true }).click();
+  await expect(b.page.locator('img.received-image')).toBeVisible();
+  await expect(b.page.locator('.image-viewer-backdrop.desktop')).toHaveCount(0);
+  await expect(b.page.locator('.image-viewer .modal-actions')).toBeInViewport();
+  expect(
+    await b.page.evaluate(() => getComputedStyle(document.documentElement).overflow),
+  ).toBe('visible');
+  expect(b.errors).toEqual([]);
+
+  await a.context.close();
+  await b.context.close();
+});
+
+test('a received landscape photo fits every desktop viewport with its actions visible', async ({ browser }, testInfo) => {
+  const { a, b, aWords, bWords } = await setupPair(browser);
+  b.page.on('console', (message) => {
+    if (message.type() === 'warning' || message.type() === 'error') console.log(message.text());
+  });
+  expect(await b.page.evaluate(() => matchMedia('(pointer: fine)').matches)).toBe(true);
+  const file = testInfo.outputPath('desktop-landscape.png');
+  writeFileSync(file, LANDSCAPE_PNG);
+
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await a.page.getByRole('button', { name: 'choose image' }).click();
+  await a.page.locator('input[type=file]').setInputFiles(file);
+  await b.page.getByRole('button', { name: 'accept', exact: true }).click();
+  await expect(b.page.locator('img.received-image')).toBeVisible();
+  await expect(b.page.locator('.image-viewer-backdrop.desktop')).toBeVisible();
+  await expect
+    .poll(() =>
+      b.page.locator('.received-image').evaluate((image: HTMLImageElement) => image.naturalWidth),
+    )
+    .toBe(512);
+
+  await b.page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const scrollPosition = await b.page.evaluate(() => window.scrollY);
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1024, height: 600 },
+    { width: 821, height: 500 },
+    { width: 821, height: 320 },
+  ]) {
+    await b.page.setViewportSize(viewport);
+    await expect
+      .poll(() =>
+        b.page.locator('.received-image').evaluate((image: HTMLImageElement) => image.naturalWidth),
+      )
+      .toBe(512);
+
+    const layout = await b.page.evaluate(() => {
+      const image = document.querySelector<HTMLImageElement>('.received-image')!;
+      const viewport = document.querySelector<HTMLElement>('.received-image-viewport')!;
+      const dialog = document.querySelector<HTMLElement>('.image-viewer')!;
+      const masthead = document.querySelector<HTMLElement>('.masthead')!;
+      const imageBox = image.getBoundingClientRect();
+      const viewportBox = viewport.getBoundingClientRect();
+      const actions = [...dialog.querySelectorAll<HTMLElement>('.modal-actions a, .modal-actions button')].map(
+        (element) => {
+          const box = element.getBoundingClientRect();
+          return {
+            left: box.left,
+            top: box.top,
+            right: box.right,
+            bottom: box.bottom,
+          };
+        },
+      );
+      return {
+        rootOverflow: getComputedStyle(document.documentElement).overflow,
+        horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+        verticalOverflow: document.documentElement.scrollHeight > window.innerHeight + 1,
+        dialogOverflow: getComputedStyle(dialog).overflow,
+        dialogScroll: dialog.scrollHeight > dialog.clientHeight + 1,
+        viewportScroll: viewport.scrollHeight > viewport.clientHeight + 1,
+        mastheadBottom: masthead.getBoundingClientRect().bottom,
+        dialogTop: dialog.getBoundingClientRect().top,
+        dialogBottom: dialog.getBoundingClientRect().bottom,
+        image: {
+          width: imageBox.width,
+          height: imageBox.height,
+          left: imageBox.left,
+          right: imageBox.right,
+          top: imageBox.top,
+          bottom: imageBox.bottom,
+        },
+        viewport: {
+          width: viewportBox.width,
+          height: viewportBox.height,
+        },
+        actions,
+      };
+    });
+
+    expect(layout.verticalOverflow).toBe(false);
+    expect(layout.rootOverflow).toBe('hidden');
+    expect(layout.horizontalOverflow).toBe(false);
+    expect(layout.dialogOverflow).toBe('hidden');
+    expect(layout.dialogScroll).toBe(false);
+    expect(layout.viewportScroll).toBe(false);
+    expect(
+      await b.page.locator('.received-image').evaluate((image: HTMLImageElement) => getComputedStyle(image).objectFit),
+    ).toBe('contain');
+    expect(layout.dialogTop).toBeGreaterThanOrEqual(layout.mastheadBottom);
+    expect(layout.dialogBottom).toBeLessThanOrEqual(viewport.height);
+    expect(layout.image.width).toBeGreaterThan(0);
+    expect(layout.image.height).toBeGreaterThan(0);
+    expect(layout.image.width).toBeLessThanOrEqual(layout.viewport.width + 1);
+    expect(layout.image.height).toBeLessThanOrEqual(layout.viewport.height + 1);
+    expect(layout.image.left).toBeGreaterThanOrEqual(0);
+    expect(layout.image.right).toBeLessThanOrEqual(viewport.width);
+    expect(layout.image.top).toBeGreaterThanOrEqual(0);
+    expect(layout.image.bottom).toBeLessThanOrEqual(viewport.height);
+    for (const action of layout.actions) {
+      expect(action.left).toBeGreaterThanOrEqual(0);
+      expect(action.right).toBeLessThanOrEqual(viewport.width);
+      expect(action.top).toBeGreaterThanOrEqual(0);
+      expect(action.bottom).toBeLessThanOrEqual(viewport.height);
+    }
+    expect(await b.page.evaluate(() => window.scrollY)).toBe(scrollPosition);
+  }
+
+  await b.page.getByRole('button', { name: 'dismiss' }).click();
+  await expect(b.page.locator('img.received-image')).toHaveCount(0);
+  await expect.poll(() => b.page.evaluate(() => getComputedStyle(document.documentElement).overflow)).toBe('visible');
+  expect(await b.page.evaluate(() => window.scrollY)).toBe(scrollPosition);
+
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await a.page.getByRole('button', { name: /reuse last image/ }).click();
+  await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
+  await b.page.getByRole('button', { name: 'accept', exact: true }).click();
+  await expect(b.page.locator('img.received-image')).toBeVisible();
+  await b.page.locator('[data-action="back"]').evaluate((button: HTMLButtonElement) => button.click());
+  await expect(b.page.locator('img.received-image')).toHaveCount(0);
+  await expect.poll(() => b.page.evaluate(() => getComputedStyle(document.documentElement).overflow)).toBe('visible');
+  expect(a.errors).toEqual([]);
+  expect(b.errors).toEqual([]);
+
+  await a.context.close();
+  await b.context.close();
+});
+
 test('a photo travels from a phone-sized sender to a desktop', async ({ browser }, testInfo) => {
   const { a, b, bWords } = await setupPair(browser, true);
   const file = testInfo.outputPath('phone.png');
@@ -288,7 +535,7 @@ test('a photo travels from a phone-sized sender to a desktop', async ({ browser 
   PNG.copy(body);
   writeFileSync(file, body);
 
-  await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
   await a.page.getByRole('button', { name: 'choose image' }).click();
   await a.page.locator('input[type=file]').setInputFiles(file);
 
@@ -305,10 +552,10 @@ test('a photo travels from a phone-sized sender to a desktop', async ({ browser 
 
 test('one-minute audio request, consent, live panel, and end', async ({ browser }) => {
   const { a, b, aWords, bWords } = await setupPair(browser);
-  const aEmoji = (await humanRow(b.page, aWords).locator('.human-emoji').innerText()).trim();
-  const bEmoji = (await humanRow(a.page, bWords).locator('.human-emoji').innerText()).trim();
+  const aEmoji = (await beingRow(b.page, aWords).locator('.being-emoji').innerText()).trim();
+  const bEmoji = (await beingRow(a.page, bWords).locator('.being-emoji').innerText()).trim();
 
-  await humanRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
+  await beingRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
   await expect(b.page.locator('.offer .offer-emoji')).toContainText(aEmoji);
   await expect(b.page.locator('.offer')).toContainText('✓ verified');
@@ -316,8 +563,8 @@ test('one-minute audio request, consent, live panel, and end', async ({ browser 
 
   await expect(a.page.locator('.audio-panel')).toBeVisible();
   await expect(b.page.locator('.audio-panel')).toBeVisible();
-  await expect(a.page.locator('.audio-panel .human-emoji')).toHaveText(bEmoji);
-  await expect(b.page.locator('.audio-panel .human-emoji')).toHaveText(aEmoji);
+  await expect(a.page.locator('.audio-panel .being-emoji')).toHaveText(bEmoji);
+  await expect(b.page.locator('.audio-panel .being-emoji')).toHaveText(aEmoji);
   await expect(a.page.locator('.audio-panel')).toContainText('live');
   await expect(a.page.locator('.pink-bar')).toBeVisible();
   await expect(a.page.locator('.pink-bar')).not.toContainText(/\d/);
@@ -336,7 +583,7 @@ test('one-minute audio request, consent, live panel, and end', async ({ browser 
 test('declining a voice request tells the requester', async ({ browser }) => {
   const { a, b, bWords } = await setupPair(browser);
 
-  await humanRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
+  await beingRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
   await b.page.getByRole('button', { name: 'decline', exact: true }).click();
 
@@ -352,7 +599,7 @@ test('a phone clock ahead does not strand the voice call', async ({ browser }) =
   const { a, b, bWords } = await setupPair(browser);
   await b.page.clock.install({ time: Date.now() + 30_000 });
 
-  await humanRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
+  await beingRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
   await b.page.getByRole('button', { name: 'accept', exact: true }).click();
 
@@ -402,11 +649,11 @@ test('verification and pinned circles survive a reload', async ({ browser }) => 
   await a.page.locator('input[name=label]').fill('persisted circle');
   await a.page.getByRole('button', { name: 'pin', exact: true }).click();
   await a.page.getByRole('button', { name: /landing/ }).click();
-  await expect(humanRow(a.page, bWords)).toContainText('verified');
+  await expect(beingRow(a.page, bWords)).toContainText('verified');
 
   await a.page.reload();
   await expect(a.page.locator('.live')).toHaveText('live');
-  await expect(humanRow(a.page, bWords)).toContainText('verified');
+  await expect(beingRow(a.page, bWords)).toContainText('verified');
   await expect(a.page.locator('.dock-item')).toHaveCount(1);
 
   await a.context.close();
@@ -478,8 +725,8 @@ test('a recipient can hold multiple image offers at once', async ({ browser }, t
   await openChannel(c.page, channel);
   await announce(c.page, time);
 
-  await expect(humanRow(a.page, bWords)).toBeVisible();
-  await expect(humanRow(a.page, cWords)).toBeVisible();
+  await expect(beingRow(a.page, bWords)).toBeVisible();
+  await expect(beingRow(a.page, cWords)).toBeVisible();
   await verify(a.page, bWords);
   await verify(a.page, cWords);
   await verify(b.page, aWords);
@@ -489,11 +736,11 @@ test('a recipient can hold multiple image offers at once', async ({ browser }, t
   const file = testInfo.outputPath('one.png');
   writeFileSync(file, PNG);
 
-  await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
   await a.page.getByRole('button', { name: 'choose image' }).click();
   await a.page.locator('input[type=file]').setInputFiles(file);
 
-  await humanRow(c.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await beingRow(c.page, bWords).getByRole('button', { name: 'send photo' }).click();
   await c.page.getByRole('button', { name: 'choose image' }).click();
   await c.page.locator('input[type=file]').setInputFiles(file);
 
@@ -615,26 +862,26 @@ test('multiple masks: create, switch, persist, and remove', async ({ browser }) 
 
 test('verification is scoped to the active mask', async ({ browser }) => {
   const { a, b, aWords, bWords } = await setupPair(browser);
-  await expect(humanRow(a.page, bWords)).toContainText('verified');
+  await expect(beingRow(a.page, bWords)).toContainText('verified');
 
   await a.page.locator('.identity-chip').click();
   await a.page.getByRole('button', { name: 'new mask' }).click();
   await expect.poll(async () => identityWords(a.page)).not.toBe(aWords);
   const newWords = await identityWords(a.page);
 
-  await expect(humanRow(a.page, bWords)).toContainText('not verified');
-  await expect(humanRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toHaveCount(0);
+  await expect(beingRow(a.page, bWords)).toContainText('not verified');
+  await expect(beingRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toHaveCount(0);
   await expect(a.page.locator('.time-group')).toHaveCount(1);
   await b.page.getByRole('button', { name: /landing/ }).click();
-  await expect(humanRow(b.page, newWords)).toBeVisible();
+  await expect(beingRow(b.page, newWords)).toBeVisible();
 
   const firstRow = a.page
     .locator('.mask-row')
     .filter({ hasText: aWords.split(' ').slice(0, 4).join(' ') });
   await firstRow.getByRole('button', { name: 'switch' }).click();
   await expect.poll(async () => identityWords(a.page)).toBe(aWords);
-  await expect(humanRow(a.page, bWords)).toContainText('verified');
-  await expect(humanRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toBeVisible();
+  await expect(beingRow(a.page, bWords)).toContainText('verified');
+  await expect(beingRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toBeVisible();
 
   await a.context.close();
   await b.context.close();
@@ -643,27 +890,27 @@ test('verification is scoped to the active mask', async ({ browser }) => {
 test('I see my active mask in the online list', async ({ browser }) => {
   const a = await openPage(browser);
   const first = await identityWords(a.page);
-  const selfRow = humanRow(a.page, first);
+  const selfRow = beingRow(a.page, first);
 
   await expect(a.page.locator('.masthead-name')).toHaveText('rendezvous');
   await expect(a.page.locator('.masthead-stamp svg')).toBeVisible();
   await expect(a.page.locator('.masthead-link')).toHaveAttribute('href', 'https://instanthero.ca');
   await expect(a.page.locator('.masthead-link')).toHaveAttribute('target', '_blank');
-  const humanEmoji = (await selfRow.locator('.human-emoji').innerText()).trim();
+  const beingEmoji = (await selfRow.locator('.being-emoji').innerText()).trim();
   const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-  expect([...segmenter.segment(humanEmoji)].length).toBeGreaterThanOrEqual(6);
-  const humanEmojiStyle = await selfRow.locator('.human-emoji').evaluate((element) => {
+  expect([...segmenter.segment(beingEmoji)].length).toBeGreaterThanOrEqual(6);
+  const beingEmojiStyle = await selfRow.locator('.being-emoji').evaluate((element) => {
     const style = getComputedStyle(element);
     return { whiteSpace: style.whiteSpace, textOverflow: style.textOverflow };
   });
-  expect(humanEmojiStyle).toEqual({ whiteSpace: 'normal', textOverflow: 'clip' });
+  expect(beingEmojiStyle).toEqual({ whiteSpace: 'normal', textOverflow: 'clip' });
   await expect(selfRow).toBeVisible();
   await expect(selfRow).toContainText('me · active mask');
   await expect(selfRow).toContainText('here now');
   await expect(selfRow.getByRole('button', { name: 'send photo' })).toHaveCount(0);
   await expect(a.page.locator('.hero .orbit')).toBeVisible();
 
-  await selfRow.locator('.human-main').click();
+  await selfRow.locator('.being-main').click();
   await expect(a.page.getByRole('heading', { name: 'Masks' })).toBeVisible();
   const fullWords = a.page.locator('.identity-words.full.mono').first();
   const fullText = (await fullWords.innerText()).trim();
@@ -686,13 +933,13 @@ test('I see my active mask in the online list', async ({ browser }) => {
   const second = await identityWords(a.page);
   await a.page.locator('.modal-actions [data-action="close-modal"]').click();
 
-  await expect(humanRow(a.page, second)).toContainText('me · active mask');
-  await expect(a.page.locator('.human-row').filter({ hasText: first })).toHaveCount(0);
+  await expect(beingRow(a.page, second)).toContainText('me · active mask');
+  await expect(a.page.locator('.being-row').filter({ hasText: first })).toHaveCount(0);
 
   await createChannel(a.page, futureTime());
   await expect(a.page.locator('.own-announcements')).toContainText('You set this rendezvous for');
   await expect(a.page.locator('.time-group')).toHaveCount(0);
-  await expect(a.page.locator('.human-row')).toHaveCount(0);
+  await expect(a.page.locator('.being-row')).toHaveCount(0);
   await expect(a.page.locator('.orbit')).toHaveCount(0);
 
   await a.context.close();
@@ -705,6 +952,12 @@ test('the mask switcher shows the full words and emoji on a small screen', async
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
   await expect(page.locator('.live')).toHaveText(/live|off/);
+  await expect(page.locator('.traffic-signalling .signal-toggle')).toBeVisible();
+  expect(
+    await page
+      .locator('.traffic-widget')
+      .evaluate((widget) => widget.scrollWidth > widget.clientWidth + 1),
+  ).toBe(false);
   await page.locator('.identity-chip').click();
   await expect(page.getByRole('heading', { name: 'Masks' })).toBeVisible();
 
@@ -801,13 +1054,13 @@ test('the clock tick does not rebuild the landing', async ({ browser }) => {
   await context.close();
 });
 
-test('humans lead the landing and tabs switch lists on small screens', async ({ browser }) => {
+test('beings lead the landing and tabs switch lists on small screens', async ({ browser }) => {
   const desktop = await browser.newContext();
   const desktopPage = await desktop.newPage();
   await desktopPage.goto('/');
   await expect(desktopPage.locator('.live')).toHaveText(/live|off/);
 
-  const desktopHumans = await desktopPage.locator('[data-region="humans-panel"]').boundingBox();
+  const desktopHumans = await desktopPage.locator('[data-region="beings-panel"]').boundingBox();
   const desktopChannels = await desktopPage.locator('[data-region="channels-panel"]').boundingBox();
   expect(desktopHumans).not.toBeNull();
   expect(desktopChannels).not.toBeNull();
@@ -820,26 +1073,26 @@ test('humans lead the landing and tabs switch lists on small screens', async ({ 
   await page.goto('/');
   await expect(page.locator('.live')).toHaveText(/live|off/);
 
-  const humans = page.locator('[data-region="humans-panel"]');
+  const beings = page.locator('[data-region="beings-panel"]');
   const channels = page.locator('[data-region="channels-panel"]');
   await expect(page.locator('.landing-tabs')).toBeVisible();
-  await expect(humans).toBeVisible();
+  await expect(beings).toBeVisible();
   await expect(channels).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Humans', exact: true })).toHaveAttribute(
+  await expect(page.getByRole('button', { name: 'Beings', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
 
   await page.getByRole('button', { name: 'Rendezvous', exact: true }).click();
   await expect(channels).toBeVisible();
-  await expect(humans).toBeHidden();
+  await expect(beings).toBeHidden();
   await expect(page.getByRole('button', { name: 'Rendezvous', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
 
-  await page.getByRole('button', { name: 'Humans', exact: true }).click();
-  await expect(humans).toBeVisible();
+  await page.getByRole('button', { name: 'Beings', exact: true }).click();
+  await expect(beings).toBeVisible();
   await expect(channels).toBeHidden();
 
   await mobile.close();

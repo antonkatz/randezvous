@@ -35,12 +35,13 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - `README.md` describes the new app.
 - `docs/SPEC.md` includes the multi-mask identity story and FR-19, and the implementation now follows it.
 - `PING`/`GOING`/`SIGNAL` move only over WebRTC data channels. The seed is a headless WebRTC peer; WebSocket is bootstrap-only. Seedless first contact is explicitly out of scope.
+- The active product calls participants **Beings**. A mask-local, default-off **Verified beings only** switch restricts direct mesh signalling to locally verified beings while keeping public presence open.
 
 ## Non-negotiable product behavior
 
 ### Landing page and channels
 
-- Landing page shows the full list of humans currently online and the rendezvous channels. The large hero heading is **The Internet is Here**.
+- Landing page shows the full list of beings currently online and the rendezvous channels. The large hero heading is **The Internet is Here**.
 - The landing hero keeps the subtle elliptical orbit animation from the previous RDZ look: one slow dot, decorative only, absent from channel screens, and disabled for reduced motion.
 - The masthead reads `rendezvous ✳ by [InstantHero mark]` and links to `https://instanthero.ca` in a new tab. The three intersecting lines are the RDZ mark and also appear in the top-bar brand button.
 - The landing search field has a magnifying-glass icon.
@@ -50,33 +51,33 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - No `send photo` or `open voice` on the landing page, including on your own row.
 - You cannot send a photo or open voice with yourself.
 - Actions exist only inside a specific rendezvous channel screen.
-- A channel screen lists humans grouped by announced `HH:mm`, ascending, with subtle separators.
+- A channel screen lists beings grouped by announced `HH:mm`, ascending, with subtle separators.
 - My own announcement is confirmed in a dedicated "your rendezvous" line above the groups. It is not listed as another participant.
-- A human may appear multiple times if they announced multiple times.
+- A being may appear multiple times if they announced multiple times.
 - Each row shows online/offline state. Online rows offer `send photo` and `open voice`.
-- Verified humans sort before unverified humans.
-- Human rows show at least 6 distinguishing emoji, extended up to 11 and allowed to wrap; never a single ellipsized emoji.
-- `T + 3` removes only that `GOING` announcement from the channel board. The human remains in the global online list and any other channel.
+- Verified beings sort before unverified beings.
+- Being rows show at least 6 distinguishing emoji, extended up to 11 and allowed to wrap; never a single ellipsized emoji.
+- `T + 3` removes only that `GOING` announcement from the channel board. The being remains in the global online list and any other channel.
 - There is no `T + 5` end. The channel screen closes only when the user explicitly leaves it.
 
 ### Identity and IDs
 
 - Persistent P-256 keypair in IndexedDB; private key as a non-extractable `CryptoKey`.
 - Identity is origin/profile scoped. Clearing site data creates a new identity. No recovery, no multi-device sync.
-- Human ID = first 88 bits of `SHA-256(public key)`.
+- Being ID = first 88 bits of `SHA-256(public key)`.
 - Rendezvous ID = 88 random bits from a cryptographically secure generator.
 - 88 bits render as 8 words from a fixed 2048-word list and 11 emoji from a fixed 256-emoji set.
 - Both renderings encode the same canonical value.
 - Display the shortest unambiguous prefix. On collision, extend the display. Canonical identity never changes.
 - A short display is never used for verification. Verification uses the full 8 words / 11 emoji.
-- Verification is per-human. There is no pairwise code. Compare the human's full 8-word sequence out of band and mark them verified locally.
+- Verification is per-being. There is no pairwise code. Compare the being's full 8-word sequence out of band and mark them verified locally.
 - Verified state persists.
 
 ### Global presence
 
-- `PING [human id] [created-at] [signature]`.
+- `PING [being id] [created-at] [signature]`.
 - Sent every 3 minutes by default, best effort. Send promptly when the page becomes visible.
-- A valid `PING` marks the human online for 5 minutes from receipt.
+- A valid `PING` marks the being online for 5 minutes from receipt.
 - Presence expires locally after 5 minutes without a fresh `PING`.
 - Bounded time rule: a message may be up to one minute ahead of the receiver's clock. Farther-future messages are invalid. This tolerates ordinary network and phone/desktop clock skew.
 - `PING` uses flood-once relay.
@@ -87,12 +88,12 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - `GOING [rendezvous id] [scheduled time] [created-at] [signature]`.
 - Setting a rendezvous sends `GOING`; a guest may send `GOING` to announce attendance.
 - Anyone may send `GOING` for any rendezvous ID.
-- The same ID may have multiple scheduled times from different humans, or from the same human.
+- The same ID may have multiple scheduled times from different beings, or from the same being.
 - Scheduled time is coordination only. It does not gate images, audio, or connections.
 - `GOING` uses flood-once relay.
 - A `GOING` remains valid until its scheduled time plus 3 minutes.
 - Clients display every valid claim. There is no canonical time election.
-- Deduplicate display of the same human + rendezvous + minute.
+- Deduplicate display of the same being + rendezvous + minute.
 
 ### Relaying and replay
 
@@ -110,20 +111,21 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - Peer-assisted signalling: connected peers relay `SIGNAL` and peer introductions over WebRTC for other peers.
 - STUN: Google free STUN servers by default, or self-hosted.
 - TURN is optional; do not promise universal reachability.
-- A browser maintains at most 100 simultaneous WebRTC peer connections; known humans are not limited.
+- A browser maintains at most 100 simultaneous WebRTC peer connections; known beings are not limited.
 - Verified peers are prioritized for retention but count toward the 100 live connections.
 - Every 5 minutes, replace 20% of non-priority connections with random new peers when available.
 - Jitter refresh timers. Never drop a connection during an active image or audio session.
 - Random candidates come from the browser's internal peer registry, built from peers learned from other peers.
 - Persist the peer registry in IndexedDB.
 - The seed may be disconnected after the first mesh connection.
+- The default-off, mask-local **Verified beings only** preference blocks direct mesh links and `SIGNAL` traffic involving unverified beings. Enabling it closes existing unverified direct links; verification changes take effect immediately. The seed and public `PING`/`GOING` discovery remain available.
 
 ### Seed peer
 
 - Default seed: `randezvous.instanthero.ca`.
 - The seed is optional. Everything must work with zero configured seeds if at least one known peer exists.
 - The seed is a long-running, in-memory-only headless WebRTC peer.
-- It is not human: no human ID, no human `PING`, never in the human list.
+- It is not a being: no being ID, no being `PING`, never in the being list.
 - It may receive, cache, replay, and forward `PING`, `GOING`, and `SIGNAL` only over WebRTC data channels.
 - It never accepts, stores, or relays images or audio.
 - It has no durable state.
@@ -136,9 +138,9 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - `SIGNAL` carries WebRTC offer, answer, and ICE candidates.
 - `SIGNAL` is target-addressed, signed by its creator, short-lived, carried flood-once, and never re-signed.
 - `SIGNAL` is connection mechanics, not a user-visible message type.
-- A client accepts a channel `SIGNAL` only from a human it has verified locally.
+- A client accepts a channel `SIGNAL` only from a being it has verified locally.
 - The `SIGNAL` must name a channel the recipient is currently viewing or has an active `GOING` announcement in.
-- A connection completes only when both humans have verified each other locally.
+- A connection completes only when both beings have verified each other locally.
 - Unverified `SIGNAL` requests are ignored.
 - The seed bootstrap connection is exempt.
 - Unverified peers may still relay messages; that does not grant them channel access.
@@ -161,8 +163,8 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 
 ### Audio
 
-- Pairwise only. A request is made to one human at a time.
-- Only between humans who have verified each other locally.
+- Pairwise only. A request is made to one being at a time.
+- Only between beings who have verified each other locally.
 - Receiver must accept and grant microphone permission.
 - Each conversation lasts one minute.
 - Unlimited reconnections.
@@ -180,11 +182,11 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 
 ### Verification
 
-- Per-human 8-word sequence, derived from the public key.
+- Per-being 8-word sequence, derived from the public key.
 - Compare out of band. Mark verified locally.
 - No pairwise comparison code.
-- Verified humans sort first in online and time-grouped lists.
-- Offline verified humans remain visible with offline state.
+- Verified beings sort first in online and time-grouped lists.
+- Offline verified beings remain visible with offline state.
 
 ### Scope and archive
 
@@ -198,13 +200,13 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 
 These are decisions the spec does not fully answer. Implement them, keep them in `docs/IMPLEMENTATION_DECISIONS.md`, and revise only if they break the spec or tests.
 
-1. **Public-key distribution:** every signed envelope includes the author's public key. The human ID is derived from it. Receivers verify the signature, derive the ID, and cache the key. This avoids a separate key-discovery protocol.
+1. **Public-key distribution:** every signed envelope includes the author's public key. The being ID is derived from it. Receivers verify the signature, derive the ID, and cache the key. This avoids a separate key-discovery protocol.
 2. **Word list:** reuse the BIP-39 English 2048-word list already present in the repository. Remove any old pairwise-code usage.
 3. **Emoji list:** a fixed, versioned list of 256 common Unicode emoji with stable codepoints. Avoid skin tones, flags, and ZWJ sequences for rendering consistency.
 4. **Short display:** start at 4 words or 6 emoji; extend one symbol at a time until unique in the current view.
-5. **Search:** case-insensitive substring match over the word sequence; exact substring match over emoji; both human and rendezvous search use the same rule.
+5. **Search:** case-insensitive substring match over the word sequence; exact substring match over emoji; both being and rendezvous search use the same rule.
 6. **Time:** store Unix milliseconds UTC. Normalize seconds to `00`. Display `HH:mm` in the viewer's local timezone. Show a day marker only when not today.
-7. **GOING display grouping:** group by channel + local `HH:mm`; dedupe identical human + channel + minute. Keep the newest signed claim if duplicates conflict.
+7. **GOING display grouping:** group by channel + local `HH:mm`; dedupe identical being + channel + minute. Keep the newest signed claim if duplicates conflict.
 8. **Incoming offer order:** verified senders first, then unverified, then by receipt time ascending.
 9. **Image limits:** one image per offer; 25 MiB maximum; reject non-image MIME types and oversized files before offering.
 10. **Audio UI:** progress bar only, gentle pink, no numeric countdown. End button and mute button always visible.
@@ -226,7 +228,7 @@ Work in this order and keep the build green as often as practical:
    - Update imports so the app still builds after each move.
 
 2. **Core protocol and identity**
-   - P-256 identity, IndexedDB store, human ID derivation.
+   - P-256 identity, IndexedDB store, being ID derivation.
    - 88-bit IDs, word/emoji encoding, display disambiguation.
    - Signed envelope format, canonical encoding, dedup hash.
    - `PING`, `GOING`, `SIGNAL` types and validation.
@@ -239,7 +241,7 @@ Work in this order and keep the build green as often as practical:
    - Search/filter.
 
 4. **Seed peer**
-   - In-memory peer with no human identity and no media.
+   - In-memory peer with no being identity and no media.
    - Relay and replay `PING`, `GOING`, `SIGNAL`.
    - HTTPS bootstrap SDP/ICE exchange, then WebRTC.
    - Optional seed configuration and default seed address.
@@ -253,15 +255,15 @@ Work in this order and keep the build green as often as practical:
    - Google STUN; no TURN requirement; honest unreachability.
 
 6. **Verification and authorization**
-   - Per-human 8-word verification, local persistence.
+   - Per-being 8-word verification, local persistence.
    - Verified-first sorting.
    - Channel `SIGNAL` authorization: verified creator, recipient in channel or with active `GOING`, mutual verification.
    - Ignore unverified requests; seed exempt.
 
 7. **UI**
    - Reuse current visual language.
-   - Landing: online humans + channels; no actions.
-   - Channel: time-grouped humans, presence, `send photo`, `open voice`, incoming offer list, audio bar, verification.
+   - Landing: online beings + channels; no actions.
+   - Channel: time-grouped beings, presence, `send photo`, `open voice`, incoming offer list, audio bar, verification.
    - Image flow: file pick, reuse last, one outgoing at a time, receiver consent, size-only offer, display, save, dismiss deletes.
    - Audio flow: request, consent, one-minute pink bar, mute/end, unlimited restarts.
    - Circles: pinned IDs and local labels.

@@ -18,11 +18,11 @@ As anyone arriving at RDZ, I want to see every rendezvous that has been set, so 
 
 **Acceptance criteria**
 
-- The landing page lists every unexpired rendezvous channel and the full list of humans currently online.
+- The landing page lists every unexpired rendezvous channel and the full list of beings currently online.
 - Every rendezvous is public. There is no private or unlisted option.
 - Each rendezvous entry shows the rendezvous's emoji ID, its scheduled time as `HH:mm`, and its participants.
 - A rendezvous announcement disappears from its channel board at its scheduled time plus 3 minutes.
-- The human remains in the landing page's online list independently of that announcement.
+- The being remains in the landing page's online list independently of that announcement.
 - No account, invitation, or approval is required.
 
 ### US-2 — I can filter the board
@@ -49,32 +49,32 @@ As anyone, I want to set a rendezvous without creating an account, so that I can
 - The channel screen confirms the time I announced in a dedicated "your rendezvous" line. I am not listed as another participant.
 - No account, registration, or approval is involved.
 
-### US-4 — I see every human who is online
+### US-4 — I see every being who is online
 
-As anyone on the board, I want to see every human currently online, so that I know who is reachable.
+As anyone on the board, I want to see every being currently online, so that I know who is reachable.
 
 **Acceptance criteria**
 
 - The online list is derived from unexpired `PING` messages.
-- The list includes the active mask, marked as me. It is not treated as another human.
-- There is no cap or allowlist on the number of online humans.
+- The list includes the active mask, marked as me. It is not treated as another being.
+- There is no cap or allowlist on the number of online beings.
 - Presence is best effort and limited to the connected peer graph.
-- Verified humans are shown before unverified humans.
-- Verified humans remain visible when they are offline, marked as offline.
+- Verified beings are shown before unverified beings.
+- Verified beings remain visible when they are offline, marked as offline.
 - The landing page list is informational. `send photo` and `open voice` are not available there.
 - Those actions are available only inside a specific rendezvous channel screen.
-- An unverified human cannot open a channel connection to me. Unverified humans remain visible for discovery and verification.
+- An unverified being cannot open a channel connection to me. Unverified beings remain visible for discovery and verification.
 - No account is required.
 
-### US-5 — I can find and verify a human
+### US-5 — I can find and verify a being
 
-As anyone, I want to search humans who are online, select one, verify their identity, and save them as verified, so that I can recognize them later.
+As anyone, I want to search beings who are online, select one, verify their identity, and save them as verified, so that I can recognize them later.
 
 **Acceptance criteria**
 
-- I can search the online humans by word or emoji.
-- Selecting a human opens an optional verification step.
-- After verifying, I can save that human as verified locally.
+- I can search the online beings by word or emoji.
+- Selecting a being opens an optional verification step.
+- After verifying, I can save that being as verified locally.
 - Verified state persists in this browser with my identity.
 - Verification is optional and does not gate presence, rendezvous, or media.
 - The verification mechanism is listed under Open Questions.
@@ -87,30 +87,30 @@ As a rendezvous participant, I want to check whether another participant is who 
 
 - Inside a rendezvous, I can open an optional verification check for any participant.
 - The result is shown as verified or not verified.
-- Verification is local to my browser and persists for that human.
+- Verification is local to my browser and persists for that being.
 - Verification is never required to join, attend, or exchange media.
 
 ### US-7 — I choose who receives my photograph
 
-As a participant handing off a photograph, I want to choose exactly which humans in the rendezvous receive it, so that I stay in control of who gets a copy.
+As a participant handing off a photograph, I want to choose exactly which beings in the rendezvous receive it, so that I stay in control of who gets a copy.
 
 **Acceptance criteria**
 
 - During a photo handoff, the participants are listed individually.
-- By default, I must press send for each human explicitly.
-- No participant receives the photo without my explicit action for that human.
+- By default, I must press send for each being explicitly.
+- No participant receives the photo without my explicit action for that being.
 - Each handoff direction completes and is acknowledged independently.
 - A failure with one recipient does not block another recipient.
 
-### US-8 — I can keep my verified humans
+### US-8 — I can keep my verified beings
 
-As anyone, I want to see the humans I have verified even when they are offline, so that my trusted people do not disappear when they disconnect.
+As anyone, I want to see the beings I have verified even when they are offline, so that my trusted people do not disappear when they disconnect.
 
 **Acceptance criteria**
 
-- Verified humans are stored locally with my persistent identity.
-- A verified human who is offline remains visible with an offline state.
-- A verified human returns to the online list when a fresh `PING` arrives.
+- Verified beings are stored locally with my persistent identity.
+- A verified being who is offline remains visible with an offline state.
+- A verified being returns to the online list when a fresh `PING` arrives.
 - No account or central contact list is involved.
 
 ### US-9 — I can save a received photo before dismissing it
@@ -127,21 +127,21 @@ As a photo recipient, I want to save the photo while it is displayed, so that I 
 
 ### US-10 — I can offer an image to another participant
 
-As a participant, I want to choose an image and offer it to a specific human, so that only people who agree receive it.
+As a participant, I want to choose an image and offer it to a specific being, so that only people who agree receive it.
 
 **Acceptance criteria**
 
-- The send action is available only for a human I have verified.
+- The send action is available only for a being I have verified.
 - During an active rendezvous, the participants are listed individually with a send action.
-- Pressing send for one human lets me choose an image from my device or reuse the last image I sent.
-- Each press sends one image to that human only.
+- Pressing send for one being lets me choose an image from my device or reuse the last image I sent.
+- Each press sends one image to that being only.
 - My local filename is never transmitted. The offer contains only a numeric size in megabytes.
-- No image bytes are sent before that human accepts.
+- No image bytes are sent before that being accepts.
 - I can have only one outgoing image transfer in progress at a time.
 - The next send becomes available only after the current recipient accepts and the image is received, or the offer is declined, cancelled, or fails.
 - If an image offer is declined, cancelled, times out, or fails, I am told what happened instead of the transfer disappearing silently.
 - I can cancel my outgoing transfer while it is waiting, connecting, or transferring; the recipient is told why it stopped.
-- I may send again to the same human or to a different human; each send has its own image choice and its own consent.
+- I may send again to the same being or to a different being; each send has its own image choice and its own consent.
 - Each transfer completes and is acknowledged independently.
 - An accepted image is displayed in the browser.
 
@@ -155,7 +155,7 @@ As a recipient, I want to accept or decline an incoming image before any bytes a
 - The offer carries no filename, path, MIME type, preview, or other sender-supplied metadata.
 - No preview is shown. Accepting is at the user's own risk.
 - Multiple incoming offers can be pending at once. All are listed.
-- Offers from verified humans are listed before offers from unverified humans.
+- Offers from verified beings are listed before offers from unverified beings.
 - Each offer can be accepted or declined independently.
 - Accepting starts the transfer. Declining sends no image bytes.
 - After accepting, I can cancel the incoming transfer while it is connecting or transferring; the sender is told why it stopped.
@@ -170,7 +170,7 @@ As a participant, I want to request a live audio channel with another participan
 **Acceptance criteria**
 
 - An initiator can request an audio channel from one other participant. Audio is pairwise only.
-- The request is available only for a human I have verified.
+- The request is available only for a being I have verified.
 - The receiver must explicitly accept and grant microphone permission before any audio flows.
 - Each conversation lasts one minute.
 - The pair may start another conversation afterwards, with no limit on reconnections.
@@ -189,13 +189,13 @@ As a person with more than one online identity, I want my browser to hold severa
 
 **Acceptance criteria**
 
-- A browser can store multiple masks. Each mask is a distinct human identity with its own P-256 keypair, public key, emoji and word human ID, verification word set, and verification records.
+- A browser can store multiple masks. Each mask is a distinct being identity with its own P-256 keypair, public key, emoji and word being ID, verification word set, and verification records.
 - Exactly one mask is active at any time.
 - The active mask is the only identity that sends `PING`, signs new `GOING` and `SIGNAL` messages, appears online, and can send or receive images and audio.
 - Inactive masks are offline. They do not send `PING`, receive `SIGNAL`, hold live peer connections, or appear as the sender of new messages.
 - The identity surface lists every stored mask, marks the active one, and allows creating, switching, and removing a mask.
 - Switching masks ends any active image transfer or audio conversation, closes the active relay identity, reconnects as the new mask, and sends a fresh `PING`.
-- Verification words and verified-human state shown in the interface belong to the active mask. Verification records for inactive masks persist locally.
+- Verification words and verified-being state shown in the interface belong to the active mask. Verification records for inactive masks persist locally.
 - Existing single-mask data is migrated into the first mask.
 - Removing a mask deletes its private key and local verification state. Messages already signed by that mask remain valid and unchanged. There is no recovery.
 - Clearing site data removes all masks. The next visit creates a new default mask.
@@ -204,18 +204,18 @@ As a person with more than one online identity, I want my browser to hold severa
 
 ### US-14 — I can see myself online
 
-As an active mask, I want to see myself in the list of humans currently online, so that I can confirm which identity this browser is presenting.
+As an active mask, I want to see myself in the list of beings currently online, so that I can confirm which identity this browser is presenting.
 
 **Acceptance criteria**
 
-- The landing page's online-human list includes the active mask.
-- The active mask is marked as me, so it is not mistaken for another human.
+- The landing page's online-being list includes the active mask.
+- The active mask is marked as me, so it is not mistaken for another being.
 - The active mask is shown as online while it is active, including when no other peer is reachable.
 - Opening my own entry opens the mask switcher.
 - The active mask is not listed in any rendezvous channel's participant list, even when it has a `GOING` announcement there.
 - I cannot send a photo or open voice with myself.
 - After switching masks, the new active mask appears in the landing list and the previous local mask is no longer shown as online.
-- Filtering hides my entry when it does not match, like any other human row.
+- Filtering hides my entry when it does not match, like any other being row.
 
 ### US-15 — I can tell every rendezvous apart at a glance
 
@@ -246,6 +246,23 @@ As anyone using RDZ, I want a visible explanation whenever an action or a live s
 - Invalid, duplicate, malformed, or unauthorized inbound network traffic is ignored without a user-facing message. It is not a user action and must not produce error spam.
 - A notice never blocks the page and never interrupts an ongoing live session.
 
+### US-17 — I can rely only on verified beings for signalling
+
+As a being with a private mesh policy, I want a clear enable/disable switch that limits direct signalling to beings I have verified, so that I can choose a more restrictive connection policy without hiding public presence.
+
+**Acceptance criteria**
+
+- A switch labelled **Verified beings only** is available beneath the landing network traffic feed and in the mask switcher.
+- The switch has an explicit on/off state, works with a keyboard, and does not rely on colour alone.
+- The preference is stored separately for each mask and survives reloads.
+- The preference is off by default, preserving the permissionless mesh.
+- When enabled, the browser does not initiate direct mesh links to unverified beings, rejects their mesh offers, and neither sends nor accepts `SIGNAL` envelopes involving unverified beings.
+- Enabling the preference closes existing direct mesh links to unverified beings.
+- Verifying a being makes that being eligible for direct signalling immediately; unverifying a being removes eligibility immediately.
+- Disabling the preference restores direct mesh signalling with unverified beings.
+- The seed remains available as headless bootstrap infrastructure. Public `PING` and `GOING` discovery stays open, so unverified beings remain visible and can still be verified.
+- Channel and media connections continue to require mutual verification regardless of the switch.
+
 ## Functional Requirements
 
 ### FR-0 — WebRTC-exclusive application messages and peer-assisted signalling
@@ -260,7 +277,7 @@ This is the primary transport invariant, ahead of every other functional require
 - Peer-assisted signalling is a key design principle. Connected peers forward `SIGNAL` envelopes for other peers over WebRTC data channels. A new peer uses an existing peer as its introducer wherever possible.
 - Flood-once relay, deduplication, replay to new peers, and expiry all happen over the WebRTC mesh.
 - If no WebRTC data channel exists, a client must not fall back to a non-WebRTC transport for application messages. It reports the peer as unreachable.
-- The 100 live peer connection cap applies to the WebRTC mesh. It does not limit how many humans the browser knows about.
+- The 100 live peer connection cap applies to the WebRTC mesh. It does not limit how many beings the browser knows about.
 - The seed may be disconnected after the first mesh connection. Existing peers continue without it.
 
 ### FR-1 — The seed peer is optional
@@ -272,7 +289,7 @@ The 24/7 RDZ peer is optional. No core function may depend on it. Presence, rend
 - The default seed peer is `randezvous.instanthero.ca`. A brand-new browser with no cached peers connects there first.
 - The seed address is deployment configuration, not a protocol constant. A client may have no seed (FR-1) or a different one.
 - The 24/7 peer is a long-running, in-memory-only WebRTC peer.
-- It is not a human. It has no human ID, sends no human `PING`, and never appears in the human list.
+- It is not a being. It has no being ID, sends no being `PING`, and never appears in the being list.
 - It is otherwise a real peer. Over WebRTC, it may receive, cache, replay, and forward `PING`, `GOING`, and `SIGNAL`.
 - It may replay every valid, unexpired `PING` and `GOING` it holds to a newly connected peer.
 - It may act as an introducer and relay `SIGNAL` envelopes between peers over WebRTC.
@@ -295,23 +312,23 @@ The 24/7 RDZ peer is optional. No core function may depend on it. Presence, rend
 - The user-visible application message types are exactly `PING` and `GOING`.
 - `SIGNAL` is a peer connection-mechanics message, defined in FR-18. It is not user-visible.
 - Every peer message is cryptographically signed by its creator.
-- Every signed envelope carries the creator's public key. The human ID is derived from that key, so a receiver can verify the author without a separate key-discovery service.
+- Every signed envelope carries the creator's public key. The being ID is derived from that key, so a receiver can verify the author without a separate key-discovery service.
 - A message may carry a `created-at` up to one minute later than the receiver's current time, to tolerate ordinary network and device clock-skew effects. Messages dated farther in the future are invalid.
 - A rejected message must never leave a user action hanging. If clock skew prevents a request or session message from being accepted, the affected request or session times out with a visible message.
 - Relays preserve the original signature and never re-sign a message.
 - A message with an invalid signature is rejected.
-- Every human, rendezvous, and channel identifier in an envelope MUST be the canonical 15-character base64url encoding of an 88-bit value. Malformed identifiers are rejected before they can reach verification, caching, or rendering.
+- Every being, rendezvous, and channel identifier in an envelope MUST be the canonical 15-character base64url encoding of an 88-bit value. Malformed identifiers are rejected before they can reach verification, caching, or rendering.
 - Canonicalisation MUST include every own enumerable field, including a key named `__proto__`; no field may be silently omitted from the signed form.
 
 ### FR-5 — PING
 
 ```text
-PING [human id] [created-at] [signature]
+PING [being id] [created-at] [signature]
 ```
 
-- A human's system sends a `PING` every 3 minutes by default.
+- A being's system sends a `PING` every 3 minutes by default.
 - Delivery is best effort. A page that becomes visible sends a fresh `PING` promptly.
-- Receiving a valid `PING` marks that human online for 5 minutes.
+- Receiving a valid `PING` marks that being online for 5 minutes.
 - Presence expires locally after 5 minutes without a fresh `PING`.
 - `PING` uses flood-once relay.
 - A `PING` whose `created-at` is more than one minute later than the receiver's current time is invalid.
@@ -325,13 +342,13 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 
 - `GOING` announces a rendezvous time and the sender's attendance.
 - The scheduled time is coordination only. It does not gate sending images, opening audio, or connecting.
-- A human may appear multiple times on a rendezvous screen if they announced more than one time.
+- A being may appear multiple times on a rendezvous screen if they announced more than one time.
 - Setting a rendezvous always sends a `GOING` message.
 - Anyone may send `GOING` for any rendezvous ID.
 - Sending `GOING` as a guest is a courtesy announcement: it puts the guest on the board and lets others initiate a connection.
 - A guest who does not send `GOING` may still initiate a direct WebRTC connection to a participant learned from that participant's `GOING`. The guest is not listed as a participant on the board.
 - Either side that knows the other can initiate the WebRTC offer through relayed signalling. Mutual prior knowledge is not required.
-- Two humans may send `GOING` for the same ID with different scheduled times.
+- Two beings may send `GOING` for the same ID with different scheduled times.
 - `GOING` uses flood-once relay.
 - A `GOING` is valid until its scheduled time plus 3 minutes.
 - The scheduled time MUST be no more than one week after the envelope's signed `created-at`. A farther-future announcement is invalid and is never cached or replayed.
@@ -353,7 +370,7 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 - A `GOING` announcement is removed from its rendezvous channel board at its scheduled time plus 3 minutes.
 - Expiry is computed locally from the signed scheduled time.
 - Late-arriving `GOING` messages for an expired announcement are ignored.
-- The human remains on the landing page's global online list and in any other channel.
+- The being remains on the landing page's global online list and in any other channel.
 - No server decision or global deletion message is required.
 - The scheduled time is coordination only. It does not gate images, audio, or connections.
 - The rendezvous screen closes only when the user explicitly leaves it. There is no automatic timer close.
@@ -362,7 +379,7 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 ### FR-9 — Peer connections
 
 - A browser maintains at most 100 simultaneous WebRTC peer connections.
-- The cap applies only to live connections. It does not limit how many humans the browser knows about.
+- The cap applies only to live connections. It does not limit how many beings the browser knows about.
 - The seed, when connected over WebRTC, counts as one live peer connection.
 - Verified peers are prioritized for retention but still count toward the 100 live connections.
 - Every 5 minutes, 20% of the non-priority connections are replaced with random new peers when more peers are available.
@@ -375,29 +392,29 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 
 - Each mask creates a persistent P-256 keypair.
 - The private key is stored in IndexedDB as a non-extractable `CryptoKey`.
-- The public key, emoji human ID, verification state, and pinned keys are stored with that mask in IndexedDB.
+- The public key, emoji being ID, verification state, and pinned keys are stored with that mask in IndexedDB.
 - Masks are scoped to the browser profile and origin.
 - Clearing site data removes all masks. The next use creates a new default mask.
-- The human ID is derived from the public key.
+- The being ID is derived from the public key.
 
 ### FR-11 — Emoji and word identifiers
 
 - A canonical identifier is 88 bits.
-- A human ID is the first 88 bits of `SHA-256(public key)`.
+- A being ID is the first 88 bits of `SHA-256(public key)`.
 - A rendezvous ID is 88 bits from a cryptographically secure random generator.
 - The word representation is 8 words from a fixed 2048-word list, 11 bits per word.
 - The emoji representation is 11 emoji from a fixed 256-emoji set, 8 bits per emoji.
 - Both representations encode the same 88-bit value.
-- A human's full word sequence is their verification set.
+- A being's full word sequence is their verification set.
 - A rendezvous's full word sequence identifies it.
-- The board filter and human search match either representation.
+- The board filter and being search match either representation.
 - An identifier is displayed at the shortest length that is unambiguous in the current view.
 - On the landing page, a rendezvous emoji prefix uses a minimum of 3 emoji and is extended against every known rendezvous, including pinned-only and filtered-out rendezvous. It never exceeds the 11-emoji canonical ID.
-- Human rows use a minimum of 6 emoji and may wrap; they are never reduced to a single truncated emoji. The full 11-emoji sequence remains the canonical ID.
+- Being rows use a minimum of 6 emoji and may wrap; they are never reduced to a single truncated emoji. The full 11-emoji sequence remains the canonical ID.
 - On collision, the displayed emoji or word string is extended until the entries differ.
 - Extending the display does not change the underlying identity.
 - The full sequence is used for verification, never the shortened display.
-- A canonical rendezvous collision is resolved by generating a new identifier. A canonical human collision is computationally negligible.
+- A canonical rendezvous collision is resolved by generating a new identifier. A canonical being collision is computationally negligible.
 
 ### FR-12 — Time representation
 
@@ -409,10 +426,10 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 ### FR-13 — Verification
 
 - Verification is optional and local.
-- Every human has an 8-word verification sequence derived from their identity.
-- Verification compares that human's full 8-word sequence out of band.
+- Every being has an 8-word verification sequence derived from their identity.
+- Verification compares that being's full 8-word sequence out of band.
 - There is no pairwise comparison code.
-- A verified human is marked locally and the mark persists with the browser identity.
+- A verified being is marked locally and the mark persists with the browser identity.
 - Verification does not gate presence, attendance, or media transfer.
 
 ### FR-14 — No universal reachability
@@ -429,7 +446,7 @@ The specification does not promise that every peer can reach every other peer. N
 ### FR-16 — Image offers and receiver consent
 
 - Image transfer is pairwise and consensual.
-- A sender can offer an image only to a human they have verified.
+- A sender can offer an image only to a being they have verified.
 - Each send action targets one recipient and one image.
 - Pressing send for a participant opens image selection or reuses the last image sent.
 - A sender has at most one outgoing image transfer in flight at a time.
@@ -448,7 +465,7 @@ The specification does not promise that every peer can reach every other peer. N
 - The default maximum size is 25 MiB. A transfer that exceeds the actual byte limit is aborted.
 - An accepted transfer uses the authenticated WebRTC connection and is acknowledged per direction.
 - Image bytes use bounded chunks and receiver-controlled backpressure so a slow mobile uplink cannot overflow the direct connection.
-- A pending offer, an accepted connection, and an active transfer are all bounded. When one fails or times out, both humans are told what happened instead of seeing a permanently stuck transfer.
+- A pending offer, an accepted connection, and an active transfer are all bounded. When one fails or times out, both beings are told what happened instead of seeing a permanently stuck transfer.
 - An accepted image is displayed in the live rendezvous surface.
 - An accepted image can be saved through the browser while it is displayed. Dismissing it removes the in-app copy.
 - No wall or persistent in-app gallery is created.
@@ -456,7 +473,7 @@ The specification does not promise that every peer can reach every other peer. N
 ### FR-17 — One-minute audio channel
 
 - Audio is pairwise only.
-- An initiator can request a live audio channel only from a human they have verified.
+- An initiator can request a live audio channel only from a being they have verified.
 - No audio flows until the receiver accepts and grants microphone permission.
 - Each conversation lasts one minute.
 - The pair may start another conversation afterwards, with no limit on reconnections.
@@ -478,12 +495,12 @@ The specification does not promise that every peer can reach every other peer. N
 
 - `SIGNAL` carries WebRTC offers, answers, and ICE candidates between peers.
 - `SIGNAL` travels only inside WebRTC data channels. It is never sent over the seed WebSocket.
-- Every `SIGNAL` envelope is addressed to a target human ID.
+- Every `SIGNAL` envelope is addressed to a target being ID.
 - Every `SIGNAL` envelope is signed by its creator.
-- A client accepts a channel `SIGNAL` only when its creator is a human that client has verified locally.
+- A client accepts a channel `SIGNAL` only when its creator is a being that client has verified locally.
 - A verified `SIGNAL` is accepted only when it names a channel the recipient is currently viewing or has an active `GOING` announcement in.
-- A channel connection completes only when both humans have verified each other locally.
-- A `SIGNAL` from an unverified human is ignored.
+- A channel connection completes only when both beings have verified each other locally.
+- A `SIGNAL` from an unverified being is ignored.
 - Connected peers forward `SIGNAL` for other peers over WebRTC data channels. This is peer-assisted signalling.
 - Bootstrap SDP/ICE exchanges used to create the first WebRTC data channel are separate bootstrap messages, not `SIGNAL`, and may be carried by the seed over WebSocket or HTTPS.
 - The seed is a headless WebRTC peer. It may forward `SIGNAL` over WebRTC data channels like any other peer, but it never forwards `SIGNAL` over WebSocket and never accepts media.
@@ -491,12 +508,12 @@ The specification does not promise that every peer can reach every other peer. N
 - Relays never modify or re-sign a `SIGNAL` envelope.
 - `SIGNAL` envelopes are short-lived. Stale envelopes are discarded.
 - `SIGNAL` carries no image, audio, or file bytes.
-- `SIGNAL` is never displayed as a human or rendezvous message.
+- `SIGNAL` is never displayed as a being or rendezvous message.
 
 ### FR-19 — Multiple masks, one active identity
 
 - The identity store supports multiple masks per browser.
-- Each mask has its own P-256 keypair, public key, human ID, verification word sequence, verified-human records, and pinned peer keys.
+- Each mask has its own P-256 keypair, public key, being ID, verification word sequence, verified-being records, and pinned peer keys.
 - Exactly one mask is active for a browser profile and origin at any time.
 - Only the active mask sends `PING`, signs new `GOING` and `SIGNAL` messages, appears online, and can hold image or audio connections.
 - Inactive masks never send, receive, or hold live peer connections.
@@ -533,23 +550,33 @@ The specification does not promise that every peer can reach every other peer. N
 - The traffic view MUST remain local and in-memory. It clears on reload, never uploads, and never becomes a stored log.
 - Invalid, duplicate, expired, or unauthorized traffic remains silently discarded per FR-20.
 
+### FR-22 — Optional verified-only mesh signalling
+
+- Each mask stores a boolean `verifiedOnlySignalling` preference. Missing values in older mask records migrate to `false` without changing the IndexedDB schema.
+- The default permissionless mesh behaviour is unchanged when the preference is off.
+- When the preference is on, direct peer eligibility is `preference off OR being verified locally by the active mask`.
+- The policy applies to outbound and inbound mesh offers, direct-link retention, peer rotation, queued signals, `SIGNAL` publication, relay, and reception.
+- The seed is exempt because it is headless infrastructure, not a being.
+- `PING` and `GOING` remain permissionless and visible. The policy restricts direct signalling, not presence, discovery, attendance, or verification.
+- The policy is enforced locally and is not a global allowlist, account requirement, or protocol change.
+
 ## Visual User Stories
 
 ### VS-1 — The landing page
 
-As anyone landing on RDZ, I see the full list of humans currently online and the rendezvous channels. The hero says **The Internet is Here** in large type. Each channel shows its emoji ID and next `HH:mm` time.
+As anyone landing on RDZ, I see the full list of beings currently online and the rendezvous channels. The hero says **The Internet is Here** in large type. Each channel shows its emoji ID and next `HH:mm` time.
 
 ### VS-2 — Rendezvous times
 
-For a rendezvous channel, I see the humans grouped by the `HH:mm` time they announced, in ascending time order, with subtle separators between groups. My own announcement is confirmed above the groups in a dedicated "your rendezvous" line and is not counted as another participant. A human appears once for each time they announced. Each row shows whether that human is online. Online rows offer `send photo` and `open voice`. An announcement leaves this channel board at its scheduled time plus 3 minutes, while the human remains on the landing page's online list.
+For a rendezvous channel, I see the beings grouped by the `HH:mm` time they announced, in ascending time order, with subtle separators between groups. My own announcement is confirmed above the groups in a dedicated "your rendezvous" line and is not counted as another participant. A being appears once for each time they announced. Each row shows whether that being is online. Online rows offer `send photo` and `open voice`. An announcement leaves this channel board at its scheduled time plus 3 minutes, while the being remains on the landing page's online list.
 
-### VS-3 — Online humans
+### VS-3 — Online beings
 
-When I see all humans online, verified humans are shown first. Verified humans who are offline remain visible with an offline state. Every human row shows a distinguishing emoji prefix of at least 6 emoji, extended to 11 if needed, never collapsed to a single ellipsized emoji.
+When I see all beings online, verified beings are shown first. Verified beings who are offline remain visible with an offline state. Every being row shows a distinguishing emoji prefix of at least 6 emoji, extended to 11 if needed, never collapsed to a single ellipsized emoji.
 
 ### VS-4 — Emoji IDs
 
-Human and rendezvous IDs are rendered as emoji strings. When two visible IDs collide, the strings lengthen until they are distinguishable.
+Being and rendezvous IDs are rendered as emoji strings. When two visible IDs collide, the strings lengthen until they are distinguishable.
 
 ### VS-5 — Circles
 
@@ -590,6 +617,24 @@ The app shows a centered, low-contrast masthead reading `rendezvous ✳ by [Inst
 ### VS-14 — Failure notices
 
 Failures appear as a short, plain-language notice fixed at the bottom center of the screen. The notice is announced with `role="status"`, stays visible for at least four seconds, does not block interaction, and disappears on its own. Removing a failed or declined panel is always paired with a notice that explains why it went away.
+
+### VS-15 — Verified-only signalling switch
+
+A compact shield-and-track switch labelled **verified only** sits directly beneath the landing network traffic feed. The mask switcher repeats it in a quiet privacy card with the heading **Verified beings only** and a short explanation. The switch has no resting outer border or shadow. Its off state uses neutral paper and ink; its on state uses green ink, a filled green track, and a moved thumb. Keyboard focus is clearly outlined, the thumb motion is subtle, and reduced-motion preferences remove the transition. The shield, track, accessible name, and state remain visible on narrow screens. A small note beneath the switch encourages keeping it on for network connectivity, acknowledges that turning it off is valid, and offers an inline **read why?** disclosure that explains the trust-versus-reachability tradeoff without blocking the page.
+
+### VS-16 — Desktop received-photo surface
+
+As someone receiving a photograph on a desktop or other wide pointer screen, I want the photograph and its actions to fit my viewport together, so that I never have to scroll to see or use them.
+
+**Acceptance criteria**
+
+- This layout applies only when a received photograph is displayed and the viewport is wider than the existing narrow-screen breakpoint and has a fine pointer. A wide touchscreen keeps the narrow-screen behavior.
+- The backdrop fills the viewport. The dialog fits inside the space below the app masthead and above a bottom safe margin, with no document scrollbar and no scrollbar inside the viewer.
+- The dialog uses the available width and height for the photograph. The image scales to fit both dimensions at once, preserves its intrinsic aspect ratio, is never cropped, and never exceeds the available bounds.
+- The title, size/save reminder, **save to device**, and **dismiss** actions remain visible without scrolling at every desktop viewport size, including short windows.
+- While the photograph is open, document scrolling stays locked; leaving the photograph restores the previous scroll position.
+- Dismissing, leaving the channel, or switching masks closes the viewer, releases its object URL and decoded image bitmap, and restores scrolling.
+- Resizing the viewport or completing image decoding recomputes the fit, so the photograph and actions remain in view without user intervention.
 
 ---
 

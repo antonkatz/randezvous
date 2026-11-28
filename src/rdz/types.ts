@@ -1,8 +1,8 @@
-export type HumanId = string;
+export type BeingId = string;
 export type RendezvousId = string;
 
-export interface Human {
-  id: HumanId;
+export interface Being {
+  id: BeingId;
   publicKey: string;
   words: string[];
   emoji: string[];
@@ -39,7 +39,7 @@ export type SignalKind =
 
 export interface SignalPayload {
   kind: 'SIGNAL';
-  target: HumanId;
+  target: BeingId;
   channelId: RendezvousId;
   signal: SignalKind;
   transferId: string;
@@ -52,7 +52,7 @@ export type EnvelopeType = EnvelopePayload['kind'];
 export interface Envelope<T extends EnvelopePayload = EnvelopePayload> {
   v: 1;
   type: T['kind'];
-  author: HumanId;
+  author: BeingId;
   publicKey: string;
   createdAt: number;
   payload: T;
@@ -62,12 +62,14 @@ export interface Envelope<T extends EnvelopePayload = EnvelopePayload> {
 export interface StoredIdentity {
   privateKey: CryptoKey;
   publicKey: string;
-  humanId: HumanId;
+  humanId: BeingId;
 }
 
 export interface MaskRecord extends StoredIdentity {
   id: string;
   createdAt: number;
+  /** Limit direct mesh links and SIGNAL traffic to locally verified beings. */
+  verifiedOnlySignalling: boolean;
 }
 
 export interface MaskState {
@@ -81,13 +83,13 @@ export interface MaskVerificationRecord extends VerificationRecord {
 }
 
 export interface VerificationRecord {
-  humanId: HumanId;
+  humanId: BeingId;
   publicKey: string;
   verifiedAt: number | null;
 }
 
 export interface MeshPeerInfo {
-  humanId: HumanId;
+  humanId: BeingId;
   publicKey: string;
 }
 
@@ -98,14 +100,14 @@ export interface PinRecord {
 }
 
 export interface PeerRecord {
-  humanId: HumanId;
+  humanId: BeingId;
   publicKey: string;
   lastSeen: number;
 }
 
 export interface GoingAnnouncement {
   envelopeId: string;
-  author: HumanId;
+  author: BeingId;
   publicKey: string;
   channelId: RendezvousId;
   scheduledAt: number;
@@ -122,7 +124,7 @@ export interface ChannelView {
 export interface IncomingImageOffer {
   transferId: string;
   channelId: RendezvousId;
-  sender: HumanId;
+  sender: BeingId;
   senderWords: string[];
   senderEmoji: string[];
   verified: boolean;
@@ -133,7 +135,7 @@ export interface IncomingImageOffer {
 export interface IncomingAudioRequest {
   transferId: string;
   channelId: RendezvousId;
-  sender: HumanId;
+  sender: BeingId;
   senderWords: string[];
   senderEmoji: string[];
   verified: boolean;
@@ -143,7 +145,7 @@ export interface IncomingAudioRequest {
 export interface ImageTransferProgress {
   transferId: string;
   direction: 'outgoing' | 'incoming';
-  peer: HumanId;
+  peer: BeingId;
   name: string;
   size: number;
   phase: 'offer' | 'waiting' | 'connecting' | 'transferring' | 'done' | 'failed' | 'declined' | 'cancelled';
@@ -153,7 +155,7 @@ export interface ImageTransferProgress {
 
 export interface AudioSession {
   transferId: string;
-  peer: HumanId;
+  peer: BeingId;
   phase: 'requesting' | 'incoming' | 'connecting' | 'live' | 'ended' | 'failed';
   startedAt: number | null;
   muted: boolean;
