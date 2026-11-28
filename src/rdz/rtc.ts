@@ -22,8 +22,17 @@ const ALLOWED_IMAGE_TYPES = new Set([
   'image/avif',
 ]);
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-const CHUNK_SIZE = 64 * 1024;
-const MAX_BUFFERED_SEND_BYTES = 1024 * 1024;
+// 16 KiB is below the conservative 64 KiB SCTP message-size default and keeps
+// mobile browsers from aborting a data channel on a large user message.
+const CHUNK_SIZE = 16 * 1024;
+const MAX_BUFFERED_SEND_BYTES = 256 * 1024;
+const IMAGE_SEND_WINDOW_BYTES = 256 * 1024;
+const IMAGE_WINDOW_ACK_BYTES = 64 * 1024;
+const FLOW_CONTROL_READY_TIMEOUT_MS = 1_500;
+// Older recipients do not send receive-window updates. Keep their fallback
+// deliberately paced instead of trusting bufferedAmount, which older WebKit
+// versions only update asynchronously.
+const LEGACY_SEND_BYTES_PER_MS = 512;
 const MAX_PENDING_ICE = 100;
 const OFFER_TIMEOUT_MS = 120_000;
 const IMAGE_CONNECT_TIMEOUT_MS = 30_000;
@@ -77,6 +86,9 @@ interface OutgoingImage extends NegotiatedPeer {
   file: File;
   channel: RTCDataChannel | null;
   timeout: number;
+  sendTimer: number;
+  flowTimer: number;
+  closePending: boolean;
   done: boolean;
 }
 
@@ -92,6 +104,8 @@ interface IncomingImage extends NegotiatedPeer {
   expected: number;
   mime: string;
   accepted: boolean;
+  flowControl: boolean;
+  windowAcknowledged: number;
   connectTimer: number;
   idleTimer: number;
 }
@@ -225,6 +239,9 @@ export class RtcManager {
       pendingIce: [],
       channel: null,
       timeout: window.setTimeout(() => this.failOutgoingImage('No answer from the recipient.'), OFFER_TIMEOUT_MS),
+      sendTimer: 0,
+      flowTimer: 0,
+      closePending: false,
       done: false,
     };
     this.outgoingImage = transfer;
@@ -425,6 +442,8 @@ export class RtcManager {
         expected: 0,
         mime: '',
         accepted: false,
+        flowControl: false,
+        windowAcknowledged: 0,
         connectTimer: 0,
         idleTimer: 0,
       });
@@ -588,6 +607,9 @@ export class RtcManager {
       }, IMAGE_TRANSFER_TIMEOUT_MS);
       void this.sendImageBytes(transfer);
     });
+    channel.addEventListener('error', () => {
+      this.reportOutgoingClose(transfer);
+    });
     channel.addEventListener('close', () => {
       this.reportOutgoingClose(transfer);
     });
@@ -631,38 +653,130 @@ export class RtcManager {
       this.reportOutgoingClose(transfer);
       return;
     }
-    try {
-      channel.send(
-        JSON.stringify({
-          type: 'meta',
-          name: 'image',
-          size: transfer.file.size,
-          mime: transfer.file.type,
-        }),
-      );
-    } catch {
-      this.failOutgoingImage('The image could not be sent over the direct connection.');
-      return;
-    }
-    let buffer: Uint8Array;
-    try {
-      buffer = new Uint8Array(await transfer.file.arrayBuffer());
-    } catch {
-      this.failOutgoingImage('The image could not be read.');
-      return;
-    }
-    if (buffer.length === 0) {
-      this.failOutgoingImage('That image is empty.');
-      return;
-    }
+
+    let buffer: Uint8Array | null = null;
+    let offset = 0;
+    let reported = 0;
+    let acknowledgedOffset = 0;
+    let flowControl: 'pending' | 'active' | 'unsupported' = 'pending';
+    let nextLegacySendAt = 0;
+
+    const reportProgress = (): void => {
+      if (offset <= reported) return;
+      reported = offset;
+      this.deps.onImageProgress({
+        transferId: transfer.transferId,
+        direction: 'outgoing',
+        peer: transfer.target,
+        name: 'image',
+        size: transfer.file.size,
+        phase: 'transferring',
+        transferred: offset,
+        error: null,
+      });
+    };
+
+    const scheduleSend = (delay = 0): void => {
+      if (this.outgoingImage !== transfer || transfer.done) return;
+      window.clearTimeout(transfer.sendTimer);
+      transfer.sendTimer = window.setTimeout(sendNext, delay);
+    };
+
+    const sendNext = (): void => {
+      transfer.sendTimer = 0;
+      if (transfer.done || this.outgoingImage !== transfer) return;
+      if (channel.readyState !== 'open') {
+        this.reportOutgoingClose(transfer);
+        return;
+      }
+      if (!buffer || flowControl === 'pending' || offset >= buffer.length) return;
+
+      if (flowControl === 'unsupported') {
+        if (channel.bufferedAmount >= MAX_BUFFERED_SEND_BYTES) {
+          scheduleSend(50);
+          return;
+        }
+        const now = Date.now();
+        if (now < nextLegacySendAt) {
+          scheduleSend(Math.ceil(nextLegacySendAt - now));
+          return;
+        }
+        const start = offset;
+        const end = Math.min(buffer.length, offset + CHUNK_SIZE);
+        try {
+          channel.send(buffer.slice(offset, end));
+        } catch {
+          this.failOutgoingImage('The image could not be sent over the direct connection.');
+          return;
+        }
+        offset = end;
+        nextLegacySendAt = Date.now() + Math.ceil((offset - start) / LEGACY_SEND_BYTES_PER_MS);
+        reportProgress();
+        if (offset < buffer.length) {
+          scheduleSend(Math.max(0, Math.ceil(nextLegacySendAt - Date.now())));
+        }
+        return;
+      }
+
+      // A receiver-issued window is the authoritative limit. Unlike
+      // bufferedAmount, it cannot under-report queued bytes on older WebKit.
+      if (offset - acknowledgedOffset >= IMAGE_SEND_WINDOW_BYTES) return;
+      try {
+        while (
+          offset < buffer.length &&
+          offset - acknowledgedOffset < IMAGE_SEND_WINDOW_BYTES &&
+          channel.bufferedAmount < MAX_BUFFERED_SEND_BYTES
+        ) {
+          const end = Math.min(
+            buffer.length,
+            offset + CHUNK_SIZE,
+            acknowledgedOffset + IMAGE_SEND_WINDOW_BYTES,
+          );
+          if (channel.bufferedAmount + (end - offset) > MAX_BUFFERED_SEND_BYTES) break;
+          channel.send(buffer.slice(offset, end));
+          offset = end;
+        }
+      } catch {
+        this.failOutgoingImage('The image could not be sent over the direct connection.');
+        return;
+      }
+      reportProgress();
+      if (offset >= buffer.length || offset - acknowledgedOffset >= IMAGE_SEND_WINDOW_BYTES) return;
+      scheduleSend(channel.bufferedAmount + CHUNK_SIZE > MAX_BUFFERED_SEND_BYTES ? 50 : 0);
+    };
+
     channel.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') return;
       try {
-        const message = JSON.parse(event.data) as { type?: string };
+        const message = JSON.parse(event.data) as { type?: string; received?: unknown };
+        if (message.type === 'window') {
+          if (this.outgoingImage !== transfer || transfer.done) return;
+          const received = message.received;
+          if (
+            typeof received !== 'number' ||
+            !Number.isSafeInteger(received) ||
+            received < acknowledgedOffset ||
+            received > offset
+          ) {
+            return;
+          }
+          acknowledgedOffset = received;
+          if (flowControl !== 'active') {
+            flowControl = 'active';
+            window.clearTimeout(transfer.flowTimer);
+            transfer.flowTimer = 0;
+          }
+          scheduleSend(0);
+          return;
+        }
         if (message.type === 'ack') {
           if (this.outgoingImage !== transfer || transfer.done) return;
           transfer.done = true;
           window.clearTimeout(transfer.timeout);
+          window.clearTimeout(transfer.sendTimer);
+          window.clearTimeout(transfer.flowTimer);
+          transfer.sendTimer = 0;
+          transfer.flowTimer = 0;
           this.deps.onImageProgress({
             transferId: transfer.transferId,
             direction: 'outgoing',
@@ -679,47 +793,41 @@ export class RtcManager {
         // Ignore non-control messages.
       }
     });
-    let offset = 0;
-    let reported = 0;
-    const sendNext = (): void => {
-      if (transfer.done || this.outgoingImage !== transfer) return;
-      if (channel.readyState !== 'open') {
-        this.reportOutgoingClose(transfer);
-        return;
-      }
-      try {
-        // Respect the SCTP send buffer. Mobile browsers have a much smaller
-        // buffer than desktop ones and throw if it is filled in one burst.
-        while (offset < buffer.length && channel.bufferedAmount < MAX_BUFFERED_SEND_BYTES) {
-          const end = Math.min(buffer.length, offset + CHUNK_SIZE);
-          channel.send(buffer.slice(offset, end));
-          offset = end;
-        }
-      } catch {
-        this.failOutgoingImage('The image could not be sent over the direct connection.');
-        return;
-      }
-      if (offset > reported) {
-        reported = offset;
-        this.deps.onImageProgress({
-          transferId: transfer.transferId,
-          direction: 'outgoing',
-          peer: transfer.target,
+    channel.addEventListener('bufferedamountlow', () => scheduleSend(0));
+
+    try {
+      channel.send(
+        JSON.stringify({
+          type: 'meta',
           name: 'image',
           size: transfer.file.size,
-          phase: 'transferring',
-          transferred: offset,
-          error: null,
-        });
-      }
-      if (offset < buffer.length) {
-        window.setTimeout(
-          sendNext,
-          channel.bufferedAmount >= MAX_BUFFERED_SEND_BYTES ? 50 : 0,
-        );
-      }
-    };
-    sendNext();
+          mime: transfer.file.type,
+          flowControl: true,
+        }),
+      );
+    } catch {
+      this.failOutgoingImage('The image could not be sent over the direct connection.');
+      return;
+    }
+    transfer.flowTimer = window.setTimeout(() => {
+      transfer.flowTimer = 0;
+      if (this.outgoingImage !== transfer || transfer.done || flowControl !== 'pending') return;
+      flowControl = 'unsupported';
+      scheduleSend(0);
+    }, FLOW_CONTROL_READY_TIMEOUT_MS);
+
+    try {
+      buffer = new Uint8Array(await transfer.file.arrayBuffer());
+    } catch {
+      this.failOutgoingImage('The image could not be read.');
+      return;
+    }
+    if (this.outgoingImage !== transfer || transfer.done) return;
+    if (buffer.length === 0) {
+      this.failOutgoingImage('That image is empty.');
+      return;
+    }
+    scheduleSend(0);
   }
 
   private async handleWebRtcSignal(payload: SignalPayload): Promise<void> {
@@ -907,7 +1015,12 @@ export class RtcManager {
     if (this.incomingImages.get(transfer.transferId) !== transfer) return;
     if (typeof event.data === 'string') {
       try {
-        const message = JSON.parse(event.data) as { type?: string; size?: number; mime?: string };
+        const message = JSON.parse(event.data) as {
+          type?: string;
+          size?: number;
+          mime?: string;
+          flowControl?: unknown;
+        };
         if (message.type === 'meta') {
           if (transfer.expected > 0) return;
           if (
@@ -923,9 +1036,12 @@ export class RtcManager {
           }
           transfer.expected = message.size;
           transfer.mime = message.mime;
+          transfer.flowControl = message.flowControl === true;
+          transfer.windowAcknowledged = 0;
           window.clearTimeout(transfer.connectTimer);
           transfer.connectTimer = 0;
           this.resetIncomingIdleTimer(transfer);
+          if (transfer.flowControl) this.sendImageWindow(transfer);
           this.deps.onImageProgress({
             transferId: transfer.transferId,
             direction: 'incoming',
@@ -969,6 +1085,12 @@ export class RtcManager {
     transfer.chunks.push(chunk);
     transfer.received += chunk.length;
     this.resetIncomingIdleTimer(transfer);
+    if (
+      transfer.flowControl &&
+      transfer.received - transfer.windowAcknowledged >= IMAGE_WINDOW_ACK_BYTES
+    ) {
+      this.sendImageWindow(transfer);
+    }
     this.deps.onImageProgress({
       transferId: transfer.transferId,
       direction: 'incoming',
@@ -980,6 +1102,16 @@ export class RtcManager {
       error: null,
     });
     if (transfer.received === transfer.expected) this.finishIncomingImage(transfer);
+  }
+
+  private sendImageWindow(transfer: IncomingImage): void {
+    if (!transfer.flowControl || !transfer.channel || transfer.channel.readyState !== 'open') return;
+    transfer.windowAcknowledged = transfer.received;
+    try {
+      transfer.channel.send(JSON.stringify({ type: 'window', received: transfer.received }));
+    } catch {
+      this.failIncomingImage(transfer, 'The image transfer could not be acknowledged.');
+    }
   }
 
   private resetIncomingIdleTimer(transfer: IncomingImage): void {
@@ -1018,7 +1150,12 @@ export class RtcManager {
    * generic close message.
    */
   private reportOutgoingClose(transfer: OutgoingImage): void {
-    if (this.outgoingImage !== transfer || transfer.done) return;
+    if (this.outgoingImage !== transfer || transfer.done || transfer.closePending) return;
+    transfer.closePending = true;
+    window.clearTimeout(transfer.sendTimer);
+    window.clearTimeout(transfer.flowTimer);
+    transfer.sendTimer = 0;
+    transfer.flowTimer = 0;
     window.clearTimeout(transfer.timeout);
     transfer.timeout = window.setTimeout(() => {
       if (this.outgoingImage === transfer && !transfer.done) {
@@ -1051,6 +1188,10 @@ export class RtcManager {
     if (!transfer) return;
     this.outgoingImage = null;
     window.clearTimeout(transfer.timeout);
+    window.clearTimeout(transfer.sendTimer);
+    window.clearTimeout(transfer.flowTimer);
+    transfer.sendTimer = 0;
+    transfer.flowTimer = 0;
     closePeer(transfer.pc);
     this.connections.release(`image:out:${transfer.transferId}`);
   }
