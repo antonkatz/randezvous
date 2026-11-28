@@ -440,6 +440,7 @@ The specification does not promise that every peer can reach every other peer. N
 - Only raster image formats are accepted. SVG and other active-content image types are rejected.
 - The default maximum size is 25 MiB. A transfer that exceeds the actual byte limit is aborted.
 - An accepted transfer uses the authenticated WebRTC connection and is acknowledged per direction.
+- Image bytes use bounded chunks and receiver-controlled backpressure so a slow mobile uplink cannot overflow the direct connection.
 - A pending offer, an accepted connection, and an active transfer are all bounded. When one fails or times out, both humans are told what happened instead of seeing a permanently stuck transfer.
 - An accepted image is displayed in the live rendezvous surface.
 - An accepted image can be saved through the browser while it is displayed. Dismissing it removes the in-app copy.

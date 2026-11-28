@@ -91,6 +91,13 @@ interface CapturedSignal {
   data?: unknown;
 }
 
+function sentBinaryBytes(channel: FakeDataChannel): number {
+  return channel.sent.reduce(
+    (total, data) => total + (typeof data === 'string' ? 0 : data.byteLength),
+    0,
+  );
+}
+
 async function imageManager() {
   const identity = await createIdentity();
   const peer = await createIdentity();
@@ -318,6 +325,9 @@ describe('image connection mechanics', () => {
 
     expect(completed).toEqual([transferId]);
     expect(channel.sent).toContain(JSON.stringify({ type: 'ack' }));
+    expect(
+      channel.sent.some((data) => typeof data === 'string' && data.includes('"type":"window"')),
+    ).toBe(false);
     expect(pc.connectionState).not.toBe('closed');
 
     await vi.advanceTimersByTimeAsync(1_000);
@@ -415,6 +425,92 @@ describe('image connection mechanics', () => {
 
     expect(rtc.isSendingImage).toBe(true);
     expect(progress.some((entry) => entry.phase === 'failed')).toBe(false);
+    rtc.stop();
+  });
+
+  it('limits queued bytes to the receiver window when bufferedAmount stays stale', async () => {
+    const { rtc, identity, peer, signals } = await imageManager();
+    const size = 1024 * 1024;
+    rtc.sendImage(
+      peer.humanId,
+      'channel',
+      new File([new Uint8Array(size)], 'large.png', { type: 'image/png' }),
+    );
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
+    );
+    const channel = FakePeerConnection.instances[0]!.channels[0]!;
+    channel.dispatchEvent(new Event('open'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    // FakeDataChannel deliberately never increases bufferedAmount, matching
+    // older WebKit versions that only report it asynchronously.
+    expect(sentBinaryBytes(channel)).toBe(0);
+    channel.receive(JSON.stringify({ type: 'window', received: size + 1 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentBinaryBytes(channel)).toBe(0);
+
+    channel.receive(JSON.stringify({ type: 'window', received: 0 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentBinaryBytes(channel)).toBe(256 * 1024);
+
+    channel.receive(JSON.stringify({ type: 'window', received: 256 * 1024 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sentBinaryBytes(channel)).toBe(512 * 1024);
+    rtc.stop();
+  });
+
+  it('paces the compatibility fallback when the peer does not send windows', async () => {
+    const { rtc, identity, peer, signals } = await imageManager();
+    const size = 1024 * 1024;
+    rtc.sendImage(
+      peer.humanId,
+      'channel',
+      new File([new Uint8Array(size)], 'large.png', { type: 'image/png' }),
+    );
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
+    );
+    const channel = FakePeerConnection.instances[0]!.channels[0]!;
+    channel.dispatchEvent(new Event('open'));
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(sentBinaryBytes(channel)).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(101);
+    expect(sentBinaryBytes(channel)).toBeGreaterThan(0);
+    expect(sentBinaryBytes(channel)).toBeLessThan(128 * 1024);
+    rtc.stop();
+  });
+
+  it('acknowledges receive windows only when the sender requests flow control', async () => {
+    const { rtc, identity, peer, completed } = await imageManager();
+    const transferId = 'window-transfer';
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-offer', transferId, { sizeMb: 0.125 }),
+    );
+    await rtc.acceptImage(transferId);
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'offer', transferId, {
+        sdp: { type: 'offer', sdp: 'v=0' },
+      }),
+    );
+
+    const channel = FakePeerConnection.instances[0]!.channels[0]!;
+    channel.receive(
+      JSON.stringify({ type: 'meta', size: 128 * 1024, mime: 'image/png', flowControl: true }),
+    );
+    expect(channel.sent).toContain(JSON.stringify({ type: 'window', received: 0 }));
+
+    channel.receive(new Uint8Array(64 * 1024).buffer);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(channel.sent).toContain(JSON.stringify({ type: 'window', received: 64 * 1024 }));
+
+    channel.receive(new Uint8Array(64 * 1024).buffer);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).toEqual([transferId]);
+    expect(channel.sent).toContain(JSON.stringify({ type: 'ack' }));
     rtc.stop();
   });
 });

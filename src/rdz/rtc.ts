@@ -1041,7 +1041,6 @@ export class RtcManager {
           window.clearTimeout(transfer.connectTimer);
           transfer.connectTimer = 0;
           this.resetIncomingIdleTimer(transfer);
-          if (transfer.flowControl) this.sendImageWindow(transfer);
           this.deps.onImageProgress({
             transferId: transfer.transferId,
             direction: 'incoming',
@@ -1052,6 +1051,7 @@ export class RtcManager {
             transferred: 0,
             error: null,
           });
+          if (transfer.flowControl) this.sendImageWindow(transfer);
         }
       } catch {
         // Ignore malformed control messages.
@@ -1085,12 +1085,6 @@ export class RtcManager {
     transfer.chunks.push(chunk);
     transfer.received += chunk.length;
     this.resetIncomingIdleTimer(transfer);
-    if (
-      transfer.flowControl &&
-      transfer.received - transfer.windowAcknowledged >= IMAGE_WINDOW_ACK_BYTES
-    ) {
-      this.sendImageWindow(transfer);
-    }
     this.deps.onImageProgress({
       transferId: transfer.transferId,
       direction: 'incoming',
@@ -1101,6 +1095,12 @@ export class RtcManager {
       transferred: transfer.received,
       error: null,
     });
+    if (
+      transfer.flowControl &&
+      transfer.received - transfer.windowAcknowledged >= IMAGE_WINDOW_ACK_BYTES
+    ) {
+      this.sendImageWindow(transfer);
+    }
     if (transfer.received === transfer.expected) this.finishIncomingImage(transfer);
   }
 
