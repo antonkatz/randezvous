@@ -134,3 +134,7 @@ Decisions made where `docs/SPEC.md` is silent or incomplete. Append new entries;
 
 91. **Peer strength without private relay.** The note says **We encourage you to keep your public relay on to help the network stay connected and strong**. The **read why?** disclosure explains that each peer helps other beings find routes and makes the network resilient. It explicitly distinguishes public presence and connection requests from private content: photographs and voice never pass through another peer or the seed. This preserves the trust-versus-reachability explanation while removing any suggestion that being connected turns a browser into a personal-data relay.
 
+## 2026-11-28 — Image-offer identity metadata
+
+92. **Verification beside the sender ID.** An image transfer request groups the sender's word ID and **✓ verified** marker in one inline identity row so verification reads as a property of the being, not the image. The numeric size is a separate monospace line beneath it, with no verification text appended. The emoji ID remains above the identity row. Voice requests retain their existing layout; this change is scoped to image consent requests.
+

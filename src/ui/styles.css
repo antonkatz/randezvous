@@ -1145,6 +1145,10 @@ h2 {
   justify-content: flex-end;
 }
 
+.channel-join {
+  font-size: 0.8rem;
+}
+
 .audio-panel,
 .offers,
 .progress-panel {
@@ -1241,6 +1245,34 @@ h2 {
   line-height: 1.45;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.offer-being {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 7px;
+  min-width: 0;
+}
+
+.offer-being strong {
+  overflow-wrap: anywhere;
+}
+
+.offer-verification {
+  color: var(--green);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.offer-verification .verified-check {
+  margin-right: 2px;
+}
+
+.offer-size {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
 }
 
 .verified-check,

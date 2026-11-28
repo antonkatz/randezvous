@@ -1602,7 +1602,6 @@ export class RdzApp {
       ),
       this.beings,
     );
-    const hasTimes = entries.length > 0 || ownEntries.length > 0;
     const groups = groupAnnouncementsByMinute(entries);
     const authorIds = [...new Set(entries.map((entry) => entry.author))];
     const channelWords = idToSafeWords(channelId);
@@ -1630,7 +1629,7 @@ export class RdzApp {
         </div>
       </div>
       <div class="channel-actions">
-        <button class="small ghost" data-action="set-time" type="button">${hasTimes ? 'add a time' : 'set a time'}</button>
+        <button class="inline-link channel-join" data-action="set-time" type="button">${ownEntries.length ? 'add a time' : 'join now'}</button>
         ${
           channelPins
             ? `<button class="small ghost" data-action="unpin" data-id="${escapeAttr(channelId)}" type="button">unpin</button>`
@@ -1698,8 +1697,11 @@ export class RdzApp {
               <div class="offer ${offer.verified ? 'is-verified' : ''}">
                 <div>
                   <span class="offer-emoji">${escapeHtml(formatEmoji(offer.senderEmoji))}</span>
-                  <strong>${escapeHtml(formatWords(shortWords(offer.senderWords)))}</strong>
-                  <span>${formatMb(offer.sizeMb)}${offer.verified ? ` · ${verifiedLabel(true)}` : ''}</span>
+                  <span class="offer-being">
+                    <strong>${escapeHtml(formatWords(shortWords(offer.senderWords)))}</strong>
+                    ${offer.verified ? `<span class="offer-verification">${verifiedLabel(true)}</span>` : ''}
+                  </span>
+                  <span class="offer-size">${formatMb(offer.sizeMb)}</span>
                 </div>
                 <div class="row-actions">
                   <button class="small" data-action="accept-image" data-transfer="${escapeAttr(offer.transferId)}" type="button">accept</button>

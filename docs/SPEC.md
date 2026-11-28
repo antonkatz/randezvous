@@ -568,7 +568,7 @@ As anyone landing on RDZ, I see the full list of beings currently online and the
 
 ### VS-2 — Rendezvous times
 
-For a rendezvous channel, I see the beings grouped by the `HH:mm` time they announced, in ascending time order, with subtle separators between groups. My own announcement is confirmed above the groups in a dedicated "your rendezvous" line and is not counted as another participant. A being appears once for each time they announced. Each row shows whether that being is online. Online rows offer `send photo` and `open voice`. An announcement leaves this channel board at its scheduled time plus 3 minutes, while the being remains on the landing page's online list.
+For a rendezvous channel, I see the beings grouped by the `HH:mm` time they announced, in ascending time order, with subtle separators between groups. My own announcement is confirmed above the groups in a dedicated "your rendezvous" line and is not counted as another participant. A being appears once for each time they announced. Each row shows whether that being is online. Online rows offer `send photo` and `open voice`. An announcement leaves this channel board at its scheduled time plus 3 minutes, while the being remains on the landing page's online list. Before I announce a time, an underlined **join now** action opens the time picker; once I have joined, it reads **add a time** for additional times.
 
 ### VS-3 — Online beings
 
@@ -592,7 +592,7 @@ The rendezvous screen has no automatic close. It stays open until I explicitly l
 
 ### VS-8 — Photo offer
 
-An incoming photo offer shows the sender and a numeric size in megabytes. It shows no filename, path, MIME type, or preview.
+An incoming photo offer shows the sender's emoji and word being ID, with the sender's **✓ verified** status directly beside the ID when applicable. The numeric size in megabytes appears separately beneath the sender ID and never includes or appears joined to the verification status. The offer shows no filename, path, MIME type, or preview.
 
 ### VS-9 — Audio progress
 

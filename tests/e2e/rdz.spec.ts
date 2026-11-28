@@ -57,7 +57,7 @@ async function openChannel(page: Page, fullWords: string): Promise<void> {
 }
 
 async function announce(page: Page, time: string): Promise<void> {
-  await page.getByRole('button', { name: /(set|add) a time/ }).click();
+  await page.getByRole('button', { name: /(join now|add a time)/ }).click();
   await page.locator('input[name=time]').fill(time);
   await page.getByRole('button', { name: 'announce time' }).click();
   await expect(page.locator('.time-group').first()).toBeVisible();
@@ -274,7 +274,12 @@ test('presence, channel, verification, and the unverified gate', async ({ browse
 
   const channel = await createChannel(a.page, time);
   await openChannel(b.page, channel);
+  const join = b.page.getByRole('button', { name: 'join now', exact: true });
+  await expect(join).toBeVisible();
+  await expect(join).toHaveCSS('text-decoration-line', 'underline');
   await announce(b.page, time);
+  await expect(join).toHaveCount(0);
+  await expect(b.page.getByRole('button', { name: 'add a time', exact: true })).toBeVisible();
 
   await expect(beingRow(a.page, bWords)).toBeVisible();
   await expect(beingRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toHaveCount(0);
@@ -302,9 +307,32 @@ test('image consent, direct transfer, save, dismiss, reuse, and decline', async 
   await a.page.locator('input[type=file]').setInputFiles(file);
 
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
-  await expect(b.page.locator('.offer')).toContainText(/\d+(\.\d+)? (B|KB|MB)/);
-  await expect(b.page.locator('.offer .offer-emoji')).toContainText(senderEmoji);
-  await expect(b.page.locator('.offer .verified-check')).toHaveText('✓');
+  const offer = b.page.locator('.offer');
+  const offerSize = offer.locator('.offer-size');
+  await expect(offerSize).toHaveText(/^\d+(\.\d+)? (B|KB|MB)$/);
+  await expect(offerSize).not.toContainText('verified');
+  await expect(offer.locator('.offer-emoji')).toContainText(senderEmoji);
+  await expect(offer.locator('.offer-being')).toContainText('✓ verified');
+  await expect(offer.locator('.offer-verification .verified-check')).toHaveText('✓');
+  const senderLayout = await offer.evaluate((row) => {
+    const being = row.querySelector<HTMLElement>('.offer-being')!;
+    const words = being.querySelector<HTMLElement>('strong')!;
+    const verification = being.querySelector<HTMLElement>('.offer-verification')!;
+    const size = row.querySelector<HTMLElement>('.offer-size')!;
+    const wordsBox = words.getBoundingClientRect();
+    const verificationBox = verification.getBoundingClientRect();
+    const sizeBox = size.getBoundingClientRect();
+    return {
+      sameLine: Math.abs(wordsBox.top - verificationBox.top) < 2,
+      verificationAfterWords: verificationBox.left >= wordsBox.right - 1,
+      sizeBelowBeing: sizeBox.top >= being.getBoundingClientRect().bottom - 1,
+    };
+  });
+  expect(senderLayout).toEqual({
+    sameLine: true,
+    verificationAfterWords: true,
+    sizeBelowBeing: true,
+  });
   await expect(b.page.locator('.offer img')).toHaveCount(0);
   await b.page.getByRole('button', { name: 'accept', exact: true }).click();
   await expect(b.page.locator('img.received-image')).toBeVisible();
@@ -705,7 +733,7 @@ test('a GOING announcement leaves the channel three minutes after its time', asy
     .toBe(1);
 
   await aPage.clock.fastForward(3 * 60 * 60 * 1000 + 4 * 60 * 1000);
-  await aPage.getByRole('button', { name: 'set a time' }).click();
+  await aPage.getByRole('button', { name: 'join now', exact: true }).click();
   await aPage.getByRole('button', { name: 'cancel' }).click();
   await expect(aPage.locator('.time-group')).toHaveCount(0);
   await expect(aPage.locator('.own-announcements')).toHaveCount(0);
