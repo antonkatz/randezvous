@@ -138,3 +138,8 @@ Decisions made where `docs/SPEC.md` is silent or incomplete. Append new entries;
 
 92. **Verification beside the sender ID.** An image transfer request groups the sender's word ID and **✓ verified** marker in one inline identity row so verification reads as a property of the being, not the image. The numeric size is a separate monospace line beneath it, with no verification text appended. The emoji ID remains above the identity row. Voice requests retain their existing layout; this change is scoped to image consent requests.
 
+## 2026-11-28 — Mobile photo readability
+
+93. **File-read fallback.** Selected photos and received Blob chunks use a shared reader that tries `Blob.arrayBuffer()` and falls back to `FileReader.readAsArrayBuffer()` when the native promise API is missing or rejects. This addresses mobile browsers that cannot read a selected photo through the native method even though the legacy reader still can. If both paths fail, the sender releases the transfer and both beings see an actionable retry message. Unit and Android-emulation regressions cover rejection, missing API support, cleanup, and successful delivery.
+94. **Aspect-preserving desktop decode.** Received photos use their original intrinsic dimensions to calculate a bounded resize that fits the viewport without upscaling small images or changing the aspect ratio. Temporary decode output is capped at four million pixels, canvas failures fall back to the original Blob URL, and the source dimensions are retained across viewport resizes. The phone-to-desktop regression checks the decoded portrait aspect ratio, while a multi-chunk transfer exercises the original-Blob fallback when bitmap decoding rejects the source.
+

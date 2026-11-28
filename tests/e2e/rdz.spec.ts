@@ -13,6 +13,14 @@ const LANDSCAPE_PNG = Buffer.from(
   'base64',
 );
 
+const PORTRAIT_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAAECAYAAACk7+45AAAAFElEQVR4AWK64aX/H4SZGKAAkwEAAAD//119s44AAAAGSURBVAMAki4EqVie9+MAAAAASUVORK5CYII=',
+  'base64',
+);
+
+const ANDROID_USER_AGENT =
+  'Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
+
 function futureTime(): string {
   const date = new Date(Date.now() + 2 * 60 * 60 * 1000);
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -23,7 +31,11 @@ async function openPage(
   query = '',
   viewport?: { width: number; height: number },
 ): Promise<{ context: Awaited<ReturnType<Browser['newContext']>>; page: Page; errors: string[] }> {
-  const context = await browser.newContext(viewport ? { viewport, hasTouch: true } : {});
+  const context = await browser.newContext(
+    viewport
+      ? { viewport, hasTouch: true, isMobile: true, userAgent: ANDROID_USER_AGENT }
+      : {},
+  );
   const page = await context.newPage();
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -65,6 +77,26 @@ async function announce(page: Page, time: string): Promise<void> {
 
 function beingRow(page: Page, shortWords: string) {
   return page.locator('.being-row').filter({ hasText: shortWords }).first();
+}
+
+async function expectPortraitPhoto(page: Page, requireDataUrl = true): Promise<void> {
+  const image = page.locator('img.received-image');
+  await expect(image).toBeVisible({ timeout: 30_000 });
+  if (requireDataUrl) {
+    await expect
+      .poll(() => image.evaluate((element: HTMLImageElement) => element.currentSrc.startsWith('data:image/')))
+      .toBe(true);
+  } else {
+    await expect
+      .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+      .toBeGreaterThan(0);
+  }
+  const dimensions = await image.evaluate((element: HTMLImageElement) => ({
+    width: element.naturalWidth,
+    height: element.naturalHeight,
+  }));
+  expect(dimensions.width).toBeGreaterThan(0);
+  expect(dimensions.width / dimensions.height).toBeCloseTo(0.5, 2);
 }
 
 async function orbitProgress(page: Page): Promise<number> {
@@ -560,11 +592,36 @@ test('a received landscape photo fits every desktop viewport with its actions vi
   await b.context.close();
 });
 
-test('a photo travels from a phone-sized sender to a desktop', async ({ browser }, testInfo) => {
+test('an Android photo travels from a phone-sized sender to a desktop', async ({ browser }, testInfo) => {
   const { a, b, bWords } = await setupPair(browser, true);
   const file = testInfo.outputPath('phone.png');
+  writeFileSync(file, PORTRAIT_PNG);
+
+  await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await a.page.getByRole('button', { name: 'choose image' }).click();
+  await a.page.locator('input[type=file]').setInputFiles(file);
+
+  await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
+  await b.page.getByRole('button', { name: 'accept', exact: true }).click();
+  await expectPortraitPhoto(b.page);
+  await expect(a.page.locator('.progress-panel')).toHaveCount(0, { timeout: 15_000 });
+  expect(a.errors).toEqual([]);
+  expect(b.errors).toEqual([]);
+
+  await a.context.close();
+  await b.context.close();
+});
+
+test('an Android photo transfers when native blob reading fails', async ({ browser }, testInfo) => {
+  const { a, b, bWords } = await setupPair(browser, true);
+  await a.page.evaluate(() => {
+    Blob.prototype.arrayBuffer = function () {
+      return Promise.reject(new DOMException('The selected file is unavailable.', 'NotReadableError'));
+    };
+  });
+  const file = testInfo.outputPath('phone-fallback.png');
   const body = Buffer.alloc(2 * 1024 * 1024);
-  PNG.copy(body);
+  PORTRAIT_PNG.copy(body);
   writeFileSync(file, body);
 
   await beingRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
@@ -573,8 +630,8 @@ test('a photo travels from a phone-sized sender to a desktop', async ({ browser 
 
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
   await b.page.getByRole('button', { name: 'accept', exact: true }).click();
-  await expect(b.page.locator('img.received-image')).toBeVisible({ timeout: 30_000 });
-  await expect(a.page.locator('.transfer')).toHaveCount(0, { timeout: 15_000 });
+  await expectPortraitPhoto(b.page, false);
+  await expect(a.page.locator('.progress-panel')).toHaveCount(0, { timeout: 15_000 });
   expect(a.errors).toEqual([]);
   expect(b.errors).toEqual([]);
 

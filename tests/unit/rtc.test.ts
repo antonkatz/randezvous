@@ -304,6 +304,101 @@ describe('image connection mechanics', () => {
     rtc.stop();
   });
 
+  it('sends a photo through FileReader when native arrayBuffer rejects', async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    class FakeFileReader extends EventTarget {
+      result: ArrayBuffer | null = null;
+      error: DOMException | null = null;
+
+      readAsArrayBuffer(): void {
+        this.result = bytes.buffer;
+        this.dispatchEvent(new Event('load'));
+      }
+    }
+    vi.stubGlobal('FileReader', FakeFileReader);
+    const { rtc, identity, peer, signals, progress } = await imageManager();
+    const file = new File([bytes], 'phone.png', { type: 'image/png' });
+    vi.spyOn(file, 'arrayBuffer').mockRejectedValue(
+      new DOMException('The selected file is unavailable.', 'NotReadableError'),
+    );
+    rtc.sendImage(peer.humanId, 'channel', file);
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
+    );
+
+    const channel = FakePeerConnection.instances[0]!.channels[0]!;
+    channel.dispatchEvent(new Event('open'));
+    await vi.advanceTimersByTimeAsync(0);
+    channel.receive(JSON.stringify({ type: 'window', received: 0 }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sentBinaryBytes(channel)).toBe(bytes.byteLength);
+    expect(progress.some((entry) => entry.phase === 'failed')).toBe(false);
+    channel.receive(JSON.stringify({ type: 'ack' }));
+    expect(progress.at(-1)?.phase).toBe('done');
+    expect(rtc.isSendingImage).toBe(false);
+    rtc.stop();
+  });
+
+  it('releases the outgoing photo when neither file-reading API works', async () => {
+    class FakeFileReader extends EventTarget {
+      result: string | ArrayBuffer | null = null;
+      error = new DOMException('The selected file is unavailable.', 'NotReadableError');
+
+      readAsArrayBuffer(): void {
+        this.dispatchEvent(new Event('error'));
+      }
+    }
+    vi.stubGlobal('FileReader', FakeFileReader);
+    const { rtc, identity, peer, signals, progress } = await imageManager();
+    const file = new File([new Uint8Array([1, 2, 3])], 'phone.png', { type: 'image/png' });
+    vi.spyOn(file, 'arrayBuffer').mockRejectedValue(new Error('Native read failed.'));
+    rtc.sendImage(peer.humanId, 'channel', file);
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
+    );
+
+    const channel = FakePeerConnection.instances[0]!.channels[0]!;
+    channel.dispatchEvent(new Event('open'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const message = 'The photo could not be read from this device. Try choosing it again.';
+    expect(progress.at(-1)?.phase).toBe('failed');
+    expect(progress.at(-1)?.error).toBe(message);
+    expect(signals.find((entry) => entry.signal === 'image-decline')?.data).toEqual({
+      reason: message,
+    });
+    expect(rtc.isSendingImage).toBe(false);
+    expect(rtc.busyPeers().has(peer.humanId)).toBe(false);
+    rtc.stop();
+  });
+
+  it('reconstructs image chunks delivered as Blobs', async () => {
+    const { rtc, identity, peer, completed } = await imageManager();
+    const transferId = 'blob-chunks';
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-offer', transferId, { sizeMb: 0.1 }),
+    );
+    await rtc.acceptImage(transferId);
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'offer', transferId, {
+        sdp: { type: 'offer', sdp: 'v=0' },
+      }),
+    );
+
+    const channel = FakePeerConnection.instances[0]!.channels[0]!;
+    channel.receive(JSON.stringify({ type: 'meta', size: 3, mime: 'image/png' }));
+    channel.receive(new Blob([new Uint8Array([1, 2])]));
+    channel.receive(new Blob([new Uint8Array([3])]));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(completed).toEqual([transferId]);
+    expect(channel.sent).toContain(JSON.stringify({ type: 'ack' }));
+    rtc.stop();
+  });
+
   it('flushes the ack before closing the receiving connection', async () => {
     const { rtc, identity, peer, completed } = await imageManager();
     const transferId = 'ack-transfer';

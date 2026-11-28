@@ -1,3 +1,4 @@
+import { readBlobArrayBuffer } from './blob';
 import { ConnectionBudget } from './connection-budget';
 import { randomTransferId } from './ids';
 import type {
@@ -868,9 +869,11 @@ export class RtcManager {
     }, FLOW_CONTROL_READY_TIMEOUT_MS);
 
     try {
-      buffer = new Uint8Array(await transfer.file.arrayBuffer());
+      buffer = new Uint8Array(await readBlobArrayBuffer(transfer.file));
     } catch {
-      this.failOutgoingImage('The image could not be read.');
+      this.failOutgoingImage(
+        'The photo could not be read from this device. Try choosing it again.',
+      );
       return;
     }
     if (this.outgoingImage !== transfer || transfer.done) return;
@@ -1129,7 +1132,7 @@ export class RtcManager {
         if (this.incomingImages.get(transfer.transferId) !== transfer) return;
         const chunk =
           event.data instanceof Blob
-            ? new Uint8Array(await event.data.arrayBuffer())
+            ? new Uint8Array(await readBlobArrayBuffer(event.data))
             : new Uint8Array(event.data as ArrayBuffer);
         this.appendIncomingChunk(transfer, chunk);
       })

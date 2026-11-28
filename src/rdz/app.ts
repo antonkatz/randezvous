@@ -24,6 +24,7 @@ import {
 } from './ids';
 import instantHeroMark from '../ui/instanthero-mark.svg?raw';
 import { version } from '../../package.json';
+import { readBlobArrayBuffer } from './blob';
 import { Chime } from './chime';
 import { ConnectionBudget } from './connection-budget';
 import { MeshManager, resolveBootstrapUrl, type MeshStatus } from './mesh';
@@ -80,6 +81,9 @@ import type {
 
 // Keep in sync with the 26s orbit-dot animation in styles.css.
 const ORBIT_DURATION_MS = 26_000;
+// Bound the temporary canvas used to display a received photo. A phone photo
+// can be far larger than its on-screen size, especially on a Retina display.
+const MAX_DECODE_PIXELS = 4_000_000;
 
 type Modal =
   | { type: 'set-time'; channelId: string | null }
@@ -97,6 +101,8 @@ interface ImageViewer {
   size: number;
   filename: string;
   bitmap: ImageBitmap | null;
+  intrinsicWidth: number;
+  intrinsicHeight: number;
   bitmapGeneration: number;
   decodeQueued: boolean;
   resizing: boolean;
@@ -547,6 +553,8 @@ export class RdzApp {
       size: blob.size,
       filename: safeImageFilename(mime),
       bitmap: null,
+      intrinsicWidth: 0,
+      intrinsicHeight: 0,
       bitmapGeneration: 0,
       decodeQueued: false,
       resizing: false,
@@ -2004,40 +2012,86 @@ export class RdzApp {
     const width = viewport.clientWidth;
     const height = viewport.clientHeight;
     if (width <= 0 || height <= 0) return;
+    const image = viewport.querySelector<HTMLImageElement>('.received-image');
+    if (!image) return;
+    if (!viewer.intrinsicWidth || !viewer.intrinsicHeight) {
+      if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+        viewer.intrinsicWidth = image.naturalWidth;
+        viewer.intrinsicHeight = image.naturalHeight;
+      } else {
+        // The original Blob URL is still decoding. Wait for its real dimensions
+        // rather than guessing an aspect ratio or forcing a square bitmap.
+        image.addEventListener(
+          'load',
+          () => {
+            if (this.imageViewer !== viewer || !viewport.isConnected) return;
+            if (image.naturalWidth > 0 && image.naturalHeight > 0) {
+              viewer.intrinsicWidth = image.naturalWidth;
+              viewer.intrinsicHeight = image.naturalHeight;
+              this.scheduleImageViewerDecode();
+            }
+          },
+          { once: true },
+        );
+        return;
+      }
+    }
+
     viewer.resizing = true;
     const generation = ++viewer.bitmapGeneration;
     try {
       const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-      let scale = (Math.max(width, height) * pixelRatio) / 1024;
+      const sourcePixels = viewer.intrinsicWidth * viewer.intrinsicHeight;
+      const scale = Math.min(
+        1,
+        (width * pixelRatio) / viewer.intrinsicWidth,
+        (height * pixelRatio) / viewer.intrinsicHeight,
+        Math.sqrt(MAX_DECODE_PIXELS / sourcePixels),
+      );
+      let targetWidth = Math.max(1, Math.round(viewer.intrinsicWidth * scale));
+      let targetHeight = Math.max(1, Math.round(viewer.intrinsicHeight * scale));
       let bitmap: ImageBitmap | null = null;
       for (let attempt = 0; attempt < 8; attempt += 1) {
         if (generation !== viewer.bitmapGeneration || this.imageViewer !== viewer) return;
         try {
-          bitmap = await this.decodeImage(viewer.blob, scale);
+          bitmap = await this.decodeImage(viewer.blob, targetWidth, targetHeight);
           break;
         } catch {
-          if (scale <= 1) break;
+          if (targetWidth <= 1 && targetHeight <= 1) break;
           // Very large or resource-constrained images may reject a decode even
           // at a reduced size. Retry smaller before using the original URL.
-          scale /= 2;
+          targetWidth = Math.max(1, Math.floor(targetWidth / 2));
+          targetHeight = Math.max(1, Math.floor(targetHeight / 2));
         }
       }
       if (generation !== viewer.bitmapGeneration || this.imageViewer !== viewer) {
         bitmap?.close();
         return;
       }
-      const previous = viewer.bitmap;
-      viewer.bitmap = bitmap;
-      const image = viewport.querySelector<HTMLImageElement>('.received-image');
       if (image && bitmap) {
         const canvas = document.createElement('canvas');
         canvas.width = bitmap.width;
         canvas.height = bitmap.height;
-        canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
-        image.src = canvas.toDataURL('image/png');
-        canvas.width = 1;
-        canvas.height = 1;
+        try {
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('Canvas is unavailable.');
+          context.drawImage(bitmap, 0, 0);
+          const dataUrl = canvas.toDataURL('image/png');
+          if (!dataUrl.startsWith('data:image/')) throw new Error('Canvas is empty.');
+          image.src = dataUrl;
+        } catch {
+          bitmap.close();
+          bitmap = null;
+          image.src = viewer.url;
+        } finally {
+          canvas.width = 1;
+          canvas.height = 1;
+        }
+      } else if (image && !bitmap) {
+        image.src = viewer.url;
       }
+      const previous = viewer.bitmap;
+      viewer.bitmap = bitmap;
       previous?.close();
       // The viewport can grow while decoding; settle at its final measured size.
       if (viewport.clientWidth !== width || viewport.clientHeight !== height) {
@@ -2073,11 +2127,11 @@ export class RdzApp {
     }
   }
 
-  private async decodeImage(blob: Blob, scale: number): Promise<ImageBitmap> {
-    const source = await blob.arrayBuffer();
+  private async decodeImage(blob: Blob, width: number, height: number): Promise<ImageBitmap> {
+    const source = await readBlobArrayBuffer(blob);
     return window.createImageBitmap(new Blob([source], { type: blob.type }), {
-      resizeWidth: Math.max(1, Math.round(1024 * scale)),
-      resizeHeight: Math.max(1, Math.round(1024 * scale)),
+      resizeWidth: width,
+      resizeHeight: height,
       resizeQuality: 'high',
     });
   }
