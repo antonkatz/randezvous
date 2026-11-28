@@ -173,6 +173,7 @@ As a participant, I want to request a live audio channel with another participan
 - The request is available only for a being I have verified.
 - The receiver must explicitly accept and grant microphone permission before any audio flows.
 - Each conversation lasts one minute.
+- The request shows the sender's being ID and verification status together, with the one-minute duration on a separate line.
 - The pair may start another conversation afterwards, with no limit on reconnections.
 - A gentle pink progress bar shows the remaining time. It has no numbers.
 - Either participant can mute or end the conversation early.
@@ -568,7 +569,7 @@ As anyone landing on RDZ, I see the full list of beings currently online and the
 
 ### VS-2 — Rendezvous times
 
-For a rendezvous channel, I see the beings grouped by the `HH:mm` time they announced, in ascending time order, with subtle separators between groups. My own announcement is confirmed above the groups in a dedicated "your rendezvous" line and is not counted as another participant. A being appears once for each time they announced. Each row shows whether that being is online. Online rows offer `send photo` and `open voice`. An announcement leaves this channel board at its scheduled time plus 3 minutes, while the being remains on the landing page's online list. Before I announce a time, an underlined **join now** action opens the time picker; once I have joined, it reads **add a time** for additional times.
+For a rendezvous channel, I see the beings grouped by the `HH:mm` time they announced, in ascending time order, with subtle separators between groups. My own announcement is confirmed above the groups in a dedicated "your rendezvous" line and is not counted as another participant. A being appears once for each time they announced. Each row shows whether that being is online. Online rows offer `send photo` and `open voice`. An announcement leaves this channel board at its scheduled time plus 3 minutes, while the being remains on the landing page's online list. An underlined **add a time** action is always present and opens the time picker for additional times. When no other being has announced a time, the empty-state message is a button with **join now** underneath it; **join now** immediately announces the current minute without opening the picker.
 
 ### VS-3 — Online beings
 

@@ -704,6 +704,12 @@ export class RdzApp {
       this.render();
       return;
     }
+    if (action === 'join-now') {
+      if (!this.activeChannelId) return;
+      const scheduledAt = Math.floor(Date.now() / 60_000) * 60_000;
+      await this.announceRendezvous(this.activeChannelId, scheduledAt);
+      return;
+    }
     if (action === 'pin') {
       if (this.activeChannelId) {
         this.modal = { type: 'pin', channelId: this.activeChannelId };
@@ -893,28 +899,7 @@ export class RdzApp {
         this.showToast('Choose a valid time.');
         return;
       }
-      const id = channelId || randomRendezvousId();
-      const envelope = await this.buildAndSend({
-        kind: 'GOING',
-        rendezvousId: id,
-        scheduledAt,
-      });
-      if (envelope) {
-        const envelopeKey = await envelopeId(envelope);
-        this.seen.set(envelopeKey, scheduledAt + ANNOUNCEMENT_GRACE_MS);
-        this.announcements.set(envelopeKey, {
-          envelopeId: envelopeKey,
-          author: envelope.author,
-          publicKey: envelope.publicKey,
-          channelId: id,
-          scheduledAt,
-          createdAt: envelope.createdAt,
-        });
-        void saveEnvelope(envelopeKey, envelope);
-      }
-      this.activeChannelId = id;
-      this.modal = null;
-      this.render();
+      await this.announceRendezvous(channelId || null, scheduledAt);
       return;
     }
     if (form.dataset.form === 'pin') {
@@ -926,6 +911,31 @@ export class RdzApp {
       this.modal = null;
       this.render();
     }
+  }
+
+  private async announceRendezvous(channelId: string | null, scheduledAt: number): Promise<void> {
+    const id = channelId || randomRendezvousId();
+    const envelope = await this.buildAndSend({
+      kind: 'GOING',
+      rendezvousId: id,
+      scheduledAt,
+    });
+    if (envelope) {
+      const envelopeKey = await envelopeId(envelope);
+      this.seen.set(envelopeKey, scheduledAt + ANNOUNCEMENT_GRACE_MS);
+      this.announcements.set(envelopeKey, {
+        envelopeId: envelopeKey,
+        author: envelope.author,
+        publicKey: envelope.publicKey,
+        channelId: id,
+        scheduledAt,
+        createdAt: envelope.createdAt,
+      });
+      void saveEnvelope(envelopeKey, envelope);
+    }
+    this.activeChannelId = id;
+    this.modal = null;
+    this.render();
   }
 
   private async toggleVerifiedOnlySignalling(): Promise<void> {
@@ -1572,7 +1582,7 @@ export class RdzApp {
               : `<span class="row-actions">
                 ${
                   online && being.verified
-                    ? `<button class="small" data-action="send-photo" data-id="${escapeAttr(being.id)}" type="button">send photo</button>
+                    ? `<button class="small ghost" data-action="send-photo" data-id="${escapeAttr(being.id)}" type="button">send photo</button>
                        <button class="small ghost" data-action="open-voice" data-id="${escapeAttr(being.id)}" type="button">open voice</button>`
                     : `<button class="small ghost" data-action="open-being" data-id="${escapeAttr(being.id)}" type="button">${being.verified ? 'offline' : 'verify'}</button>`
                 }
@@ -1637,7 +1647,7 @@ export class RdzApp {
         </div>
       </div>
       <div class="channel-actions">
-        <button class="inline-link channel-join" data-action="set-time" type="button">${ownEntries.length ? 'add a time' : 'join now'}</button>
+        <button class="inline-link channel-add-time" data-action="set-time" type="button">add a time</button>
         ${
           channelPins
             ? `<button class="small ghost" data-action="unpin" data-id="${escapeAttr(channelId)}" type="button">unpin</button>`
@@ -1662,7 +1672,10 @@ export class RdzApp {
             `,
           )
           .join('')
-      : '<p class="empty">No one else has announced a time here yet.</p>';
+      : `<button class="empty empty-action channel-empty" data-action="join-now" type="button">
+          <span class="channel-empty-copy">No one else has announced a time here yet.</span>
+          <span class="empty-link">join now</span>
+        </button>`;
     return {
       'channel-head': channelHead,
       'audio-panel': this.renderAudioPanel(),
@@ -1733,8 +1746,11 @@ export class RdzApp {
               <div class="offer ${request.verified ? 'is-verified' : ''}">
                 <div>
                   <span class="offer-emoji">${escapeHtml(formatEmoji(request.senderEmoji))}</span>
-                  <strong>${escapeHtml(formatWords(shortWords(request.senderWords)))}</strong>
-                  <span>one minute · ${verifiedLabel(request.verified)}</span>
+                  <span class="offer-being">
+                    <strong>${escapeHtml(formatWords(shortWords(request.senderWords)))}</strong>
+                    <span class="offer-verification${request.verified ? '' : ' is-unverified'}">${verifiedLabel(request.verified)}</span>
+                  </span>
+                  <span class="offer-duration">one minute</span>
                 </div>
                 <div class="row-actions">
                   <button class="small" data-action="accept-audio" data-transfer="${escapeAttr(request.transferId)}" type="button">accept</button>

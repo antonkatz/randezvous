@@ -1145,8 +1145,17 @@ h2 {
   justify-content: flex-end;
 }
 
-.channel-join {
+.channel-add-time {
   font-size: 0.8rem;
+}
+
+.channel-empty {
+  display: grid;
+  gap: 5px;
+}
+
+.channel-empty .empty-link {
+  justify-self: start;
 }
 
 .audio-panel,
@@ -1247,29 +1256,35 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.offer-being {
+.offer .offer-being {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 2px 7px;
   min-width: 0;
+  color: var(--ink);
 }
 
 .offer-being strong {
   overflow-wrap: anywhere;
 }
 
-.offer-verification {
+.offer .offer-verification {
   color: var(--green);
   font-size: 0.72rem;
   white-space: nowrap;
 }
 
-.offer-verification .verified-check {
+.offer .offer-verification.is-unverified {
+  color: var(--muted);
+}
+
+.offer .offer-verification .verified-check {
   margin-right: 2px;
 }
 
-.offer-size {
+.offer .offer-size,
+.offer .offer-duration {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.72rem;

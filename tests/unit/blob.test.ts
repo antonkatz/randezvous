@@ -53,11 +53,51 @@ describe('readBlobArrayBuffer', () => {
     expect(new Uint8Array(await readBlobArrayBuffer(blob))).toEqual(bytes);
   });
 
-  it('rejects when neither file-reading API can access the bytes', async () => {
+  it('reads through Blob.stream when native and legacy readers reject the file', async () => {
+    const bytes = new Uint8Array([10, 11, 12, 13]);
+    stubFileReader(new DOMException('The selected file is unavailable.', 'NotReadableError'));
+    const blob = new Blob([bytes]);
+    vi.spyOn(blob, 'arrayBuffer').mockRejectedValue(new Error('Native read failed.'));
+    vi.spyOn(blob, 'stream').mockImplementation(
+      () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes.slice(0, 2));
+            controller.enqueue(bytes.slice(2));
+            controller.close();
+          },
+        }),
+    );
+
+    expect(new Uint8Array(await readBlobArrayBuffer(blob))).toEqual(bytes);
+  });
+
+  it('fetches a temporary Blob URL when stream reading is unavailable', async () => {
+    const bytes = new Uint8Array([14, 15, 16]);
+    stubFileReader(new DOMException('The selected file is unavailable.', 'NotReadableError'));
+    const blob = new Blob([bytes]);
+    vi.spyOn(blob, 'arrayBuffer').mockRejectedValue(new Error('Native read failed.'));
+    Object.defineProperty(blob, 'stream', { value: undefined });
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:photo-test');
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(bytes));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(new Uint8Array(await readBlobArrayBuffer(blob))).toEqual(bytes);
+    expect(createUrl).toHaveBeenCalledWith(blob);
+    expect(fetchMock).toHaveBeenCalledWith('blob:photo-test');
+    expect(revokeUrl).toHaveBeenCalledWith('blob:photo-test');
+  });
+
+  it('rejects when no reader can access the bytes', async () => {
     const failure = new DOMException('The selected file is unavailable.', 'NotReadableError');
     stubFileReader(failure);
     const blob = new Blob([new Uint8Array([1])]);
     vi.spyOn(blob, 'arrayBuffer').mockRejectedValue(new Error('Native read failed.'));
+    Object.defineProperty(blob, 'stream', { value: undefined });
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      throw failure;
+    });
 
     await expect(readBlobArrayBuffer(blob)).rejects.toBe(failure);
   });

@@ -85,6 +85,9 @@ interface OutgoingImage extends NegotiatedPeer {
   target: BeingId;
   channelId: RendezvousId;
   file: File;
+  // Start reading in the selection gesture, while Android's provider-backed
+  // File permission is still fresh, rather than waiting for peer consent.
+  readPromise: Promise<ArrayBuffer>;
   channel: RTCDataChannel | null;
   timeout: number;
   sendTimer: number;
@@ -284,6 +287,7 @@ export class RtcManager {
       target,
       channelId,
       file,
+      readPromise: readBlobArrayBuffer(file),
       pc: null,
       remoteReady: false,
       pendingIce: [],
@@ -295,6 +299,13 @@ export class RtcManager {
       done: false,
     };
     this.outgoingImage = transfer;
+    void transfer.readPromise.catch(() => {
+      if (this.outgoingImage === transfer && !transfer.done) {
+        this.failOutgoingImage(
+          'The photo could not be read from this device. Try choosing it again.',
+        );
+      }
+    });
     this.deps.sendSignal(target, channelId, 'image-offer', transferId, {
       sizeMb: file.size / (1024 * 1024),
     });
@@ -869,11 +880,13 @@ export class RtcManager {
     }, FLOW_CONTROL_READY_TIMEOUT_MS);
 
     try {
-      buffer = new Uint8Array(await readBlobArrayBuffer(transfer.file));
+      buffer = new Uint8Array(await transfer.readPromise);
     } catch {
-      this.failOutgoingImage(
-        'The photo could not be read from this device. Try choosing it again.',
-      );
+      if (this.outgoingImage === transfer && !transfer.done) {
+        this.failOutgoingImage(
+          'The photo could not be read from this device. Try choosing it again.',
+        );
+      }
       return;
     }
     if (this.outgoingImage !== transfer || transfer.done) return;

@@ -69,7 +69,7 @@ async function openChannel(page: Page, fullWords: string): Promise<void> {
 }
 
 async function announce(page: Page, time: string): Promise<void> {
-  await page.getByRole('button', { name: /(join now|add a time)/ }).click();
+  await page.getByRole('button', { name: 'add a time', exact: true }).click();
   await page.locator('input[name=time]').fill(time);
   await page.getByRole('button', { name: 'announce time' }).click();
   await expect(page.locator('.time-group').first()).toBeVisible();
@@ -306,12 +306,10 @@ test('presence, channel, verification, and the unverified gate', async ({ browse
 
   const channel = await createChannel(a.page, time);
   await openChannel(b.page, channel);
-  const join = b.page.getByRole('button', { name: 'join now', exact: true });
-  await expect(join).toBeVisible();
-  await expect(join).toHaveCSS('text-decoration-line', 'underline');
-  await announce(b.page, time);
-  await expect(join).toHaveCount(0);
+  await expect(beingRow(b.page, aWords)).toBeVisible();
+  await expect(b.page.locator('.channel-empty')).toHaveCount(0);
   await expect(b.page.getByRole('button', { name: 'add a time', exact: true })).toBeVisible();
+  await announce(b.page, time);
 
   await expect(beingRow(a.page, bWords)).toBeVisible();
   await expect(beingRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toHaveCount(0);
@@ -320,12 +318,49 @@ test('presence, channel, verification, and the unverified gate', async ({ browse
   await verify(a.page, bWords);
   await verify(b.page, aWords);
 
-  await expect(beingRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toBeVisible();
-  await expect(beingRow(a.page, bWords).getByRole('button', { name: 'open voice' })).toBeVisible();
+  const sendPhoto = beingRow(a.page, bWords).getByRole('button', { name: 'send photo' });
+  const openVoice = beingRow(a.page, bWords).getByRole('button', { name: 'open voice' });
+  await expect(sendPhoto).toBeVisible();
+  await expect(openVoice).toBeVisible();
+  await expect(sendPhoto).toHaveClass('small ghost');
+  await expect(openVoice).toHaveClass('small ghost');
+  await expect(sendPhoto).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(openVoice).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(beingRow(a.page, bWords)).toContainText('✓ verified');
 
   await a.context.close();
   await b.context.close();
+});
+
+test('join now announces the current minute and add a time remains available', async ({ browser }) => {
+  const { page, context } = await openPage(browser, '?seed=off');
+  await createChannel(page, futureTime());
+  const join = page.locator('.channel-empty');
+  const addTime = page.getByRole('button', { name: 'add a time', exact: true });
+  await expect(join).toBeVisible();
+  await expect(join.locator('.empty-link')).toHaveText('join now');
+  await expect(join.locator('.empty-link')).toHaveCSS('text-decoration-line', 'underline');
+  await expect(addTime).toBeVisible();
+  const emptyLayout = await join.evaluate((button) => {
+    const message = button.querySelector<HTMLElement>('.channel-empty-copy')!.getBoundingClientRect();
+    const action = button.querySelector<HTMLElement>('.empty-link')!.getBoundingClientRect();
+    return { messageBottom: message.bottom, actionTop: action.top };
+  });
+  expect(emptyLayout.actionTop).toBeGreaterThanOrEqual(emptyLayout.messageBottom);
+
+  const currentTime = await page.evaluate(() => {
+    const date = new Date();
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  });
+  await join.click();
+  await expect(page.locator('.modal')).toHaveCount(0);
+  await expect(page.locator('.own-announcements')).toContainText(currentTime);
+  await expect(addTime).toBeVisible();
+
+  await addTime.click();
+  await expect(page.getByRole('heading', { name: 'Set a time here' })).toBeVisible();
+  await page.getByRole('button', { name: 'cancel' }).click();
+  await context.close();
 });
 
 test('image consent, direct transfer, save, dismiss, reuse, and decline', async ({ browser }, testInfo) => {
@@ -612,12 +647,23 @@ test('an Android photo travels from a phone-sized sender to a desktop', async ({
   await b.context.close();
 });
 
-test('an Android photo transfers when native blob reading fails', async ({ browser }, testInfo) => {
+test('an Android photo transfers when native and legacy blob reading fail', async ({ browser }, testInfo) => {
   const { a, b, bWords } = await setupPair(browser, true);
   await a.page.evaluate(() => {
     Blob.prototype.arrayBuffer = function () {
       return Promise.reject(new DOMException('The selected file is unavailable.', 'NotReadableError'));
     };
+    Object.defineProperty(window, 'FileReader', {
+      configurable: true,
+      value: class extends EventTarget {
+        result = null;
+        error = new DOMException('The selected file is unavailable.', 'NotReadableError');
+
+        readAsArrayBuffer(): void {
+          this.dispatchEvent(new Event('error'));
+        }
+      },
+    });
   });
   const file = testInfo.outputPath('phone-fallback.png');
   const body = Buffer.alloc(2 * 1024 * 1024);
@@ -647,7 +693,10 @@ test('one-minute audio request, consent, live panel, and end', async ({ browser 
   await beingRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
   await expect(b.page.locator('.offer .offer-emoji')).toContainText(aEmoji);
-  await expect(b.page.locator('.offer')).toContainText('✓ verified');
+  await expect(b.page.locator('.offer-being strong')).toContainText(aWords.split(' ').slice(0, 4).join(' '));
+  await expect(b.page.locator('.offer-being .offer-verification')).toContainText('✓ verified');
+  await expect(b.page.locator('.offer-duration')).toHaveText('one minute');
+  await expect(b.page.locator('.offer-duration')).not.toContainText('verified');
   await b.page.getByRole('button', { name: 'accept', exact: true }).click();
 
   await expect(a.page.locator('.audio-panel')).toBeVisible();
@@ -790,10 +839,15 @@ test('a GOING announcement leaves the channel three minutes after its time', asy
     .toBe(1);
 
   await aPage.clock.fastForward(3 * 60 * 60 * 1000 + 4 * 60 * 1000);
-  await aPage.getByRole('button', { name: 'join now', exact: true }).click();
-  await aPage.getByRole('button', { name: 'cancel' }).click();
+  const currentTime = await aPage.evaluate(() => {
+    const date = new Date();
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  });
+  await aPage.locator('.channel-empty').click();
+  await expect(aPage.locator('.modal')).toHaveCount(0);
   await expect(aPage.locator('.time-group')).toHaveCount(0);
-  await expect(aPage.locator('.own-announcements')).toHaveCount(0);
+  await expect(aPage.locator('.own-announcements')).toBeVisible();
+  await expect(aPage.locator('.own-announcement strong')).toHaveText(currentTime);
   await expect(aPage.getByText('No one else has announced a time here yet.')).toBeVisible();
 
   await aContext.close();

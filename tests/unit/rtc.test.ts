@@ -318,10 +318,12 @@ describe('image connection mechanics', () => {
     vi.stubGlobal('FileReader', FakeFileReader);
     const { rtc, identity, peer, signals, progress } = await imageManager();
     const file = new File([bytes], 'phone.png', { type: 'image/png' });
-    vi.spyOn(file, 'arrayBuffer').mockRejectedValue(
+    const nativeRead = vi.spyOn(file, 'arrayBuffer').mockRejectedValue(
       new DOMException('The selected file is unavailable.', 'NotReadableError'),
     );
     rtc.sendImage(peer.humanId, 'channel', file);
+    // Reading starts in the selection gesture, before the recipient consents.
+    expect(nativeRead).toHaveBeenCalledOnce();
     const offer = signals.find((entry) => entry.signal === 'image-offer');
     await rtc.handleSignal(
       await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
@@ -341,27 +343,25 @@ describe('image connection mechanics', () => {
     rtc.stop();
   });
 
-  it('releases the outgoing photo when neither file-reading API works', async () => {
+  it('releases the outgoing photo when no file-reading API works', async () => {
+    const failure = new DOMException('The selected file is unavailable.', 'NotReadableError');
     class FakeFileReader extends EventTarget {
       result: string | ArrayBuffer | null = null;
-      error = new DOMException('The selected file is unavailable.', 'NotReadableError');
+      error = failure;
 
       readAsArrayBuffer(): void {
         this.dispatchEvent(new Event('error'));
       }
     }
     vi.stubGlobal('FileReader', FakeFileReader);
-    const { rtc, identity, peer, signals, progress } = await imageManager();
+    const { rtc, peer, signals, progress } = await imageManager();
     const file = new File([new Uint8Array([1, 2, 3])], 'phone.png', { type: 'image/png' });
     vi.spyOn(file, 'arrayBuffer').mockRejectedValue(new Error('Native read failed.'));
+    Object.defineProperty(file, 'stream', { value: undefined });
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      throw failure;
+    });
     rtc.sendImage(peer.humanId, 'channel', file);
-    const offer = signals.find((entry) => entry.signal === 'image-offer');
-    await rtc.handleSignal(
-      await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
-    );
-
-    const channel = FakePeerConnection.instances[0]!.channels[0]!;
-    channel.dispatchEvent(new Event('open'));
     await vi.advanceTimersByTimeAsync(0);
 
     const message = 'The photo could not be read from this device. Try choosing it again.';
