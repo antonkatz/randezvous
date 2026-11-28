@@ -522,6 +522,31 @@ test('the landing orbit keeps its phase when the landing re-renders', async ({ b
   await a.context.close();
 });
 
+test('the clock tick does not rebuild the landing', async ({ browser }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const base = Date.now();
+  await page.clock.install({ time: base });
+  await page.clock.pauseAt(base);
+  await page.goto('/');
+  await page.waitForTimeout(1_000);
+  await page.clock.fastForward(1_000);
+  await expect(page.locator('.live')).toHaveText(/live|off/);
+  await expect(page.locator('.hero .orbit')).toBeVisible();
+
+  const filter = page.locator('#filter');
+  await filter.focus();
+  await filter.evaluate((element) => {
+    element.dataset.tickProbe = 'kept';
+  });
+
+  await page.clock.fastForward(11_000);
+
+  await expect(page.locator('#filter')).toHaveAttribute('data-tick-probe', 'kept');
+  await expect(page.locator('#filter')).toBeFocused();
+  await context.close();
+});
+
 test('landing rendezvous emoji prefixes are complete and unique', async ({ browser }) => {
   const a = await openPage(browser);
   for (let index = 0; index < 3; index += 1) {
