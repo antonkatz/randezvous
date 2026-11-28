@@ -1044,6 +1044,17 @@ h2 {
   background: linear-gradient(180deg, #faf6ed, #f8e8ed);
 }
 
+.audio-human {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.audio-human strong {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
 .pink-bar {
   height: 8px;
   border-radius: 999px;

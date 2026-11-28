@@ -262,16 +262,19 @@ test('a photo travels from a phone-sized sender to a desktop', async ({ browser 
 
 test('one-minute audio request, consent, live panel, and end', async ({ browser }) => {
   const { a, b, aWords, bWords } = await setupPair(browser);
-  const senderEmoji = (await humanRow(b.page, aWords).locator('.human-emoji').innerText()).trim();
+  const aEmoji = (await humanRow(b.page, aWords).locator('.human-emoji').innerText()).trim();
+  const bEmoji = (await humanRow(a.page, bWords).locator('.human-emoji').innerText()).trim();
 
   await humanRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
-  await expect(b.page.locator('.offer .offer-emoji')).toContainText(senderEmoji);
+  await expect(b.page.locator('.offer .offer-emoji')).toContainText(aEmoji);
   await expect(b.page.locator('.offer')).toContainText('✓ verified');
   await b.page.getByRole('button', { name: 'accept', exact: true }).click();
 
   await expect(a.page.locator('.audio-panel')).toBeVisible();
   await expect(b.page.locator('.audio-panel')).toBeVisible();
+  await expect(a.page.locator('.audio-panel .human-emoji')).toHaveText(bEmoji);
+  await expect(b.page.locator('.audio-panel .human-emoji')).toHaveText(aEmoji);
   await expect(a.page.locator('.audio-panel')).toContainText('live');
   await expect(a.page.locator('.pink-bar')).toBeVisible();
   await expect(a.page.locator('.pink-bar')).not.toContainText(/\d/);

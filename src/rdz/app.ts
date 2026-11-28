@@ -1646,10 +1646,15 @@ export class RdzApp {
     const session = this.audioSession;
     if (!session) return '';
     const remaining = audioRemaining(session.startedAt, this.now);
+    const words = formatWords(shortWords(idToWords(session.peer)));
+    const emoji = formatEmoji(shortEmoji(idToEmoji(session.peer)));
     return `
       <section class="audio-panel panel">
         <div class="panel-head"><h2>voice · one minute</h2><span>${session.phase}</span></div>
-        <p>${escapeHtml(formatWords(shortWords(idToWords(session.peer))))}</p>
+        <div class="audio-human">
+          <span class="human-emoji">${escapeHtml(emoji)}</span>
+          <strong>${escapeHtml(words)}</strong>
+        </div>
         <div class="pink-bar"><span style="width:${(remaining / 60_000) * 100}%"></span></div>
         <div class="row-actions">
           <button class="small ghost" data-action="mute-audio" type="button">${session.muted ? 'unmute' : 'mute'}</button>
