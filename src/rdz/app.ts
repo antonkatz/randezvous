@@ -1377,7 +1377,7 @@ export class RdzApp {
         ${
           channels.length
             ? channels.map((channel) => this.renderChannelCard(channel, channelIds)).join('')
-            : '<p class="empty">No live rendezvous. Set one.</p>'
+            : '<button class="empty empty-action" data-action="new-rendezvous" type="button">No live rendezvous. <span class="empty-link">Set one</span>.</button>'
         }
       </div>
     `;
@@ -1437,7 +1437,7 @@ export class RdzApp {
           <span class="human-emoji">${escapeHtml(emoji)}</span>
           <span class="human-copy">
             <strong>${escapeHtml(words)}</strong>
-            <span>${isSelf ? 'me · active mask' : human.verified ? 'verified' : 'not verified'}</span>
+            <span>${isSelf ? 'me · active mask' : verifiedLabel(human.verified)}</span>
           </span>
           <span class="presence ${online ? 'online' : ''}">${online ? 'here now' : 'away'}</span>
         </button>
@@ -1579,8 +1579,9 @@ export class RdzApp {
             (offer) => `
               <div class="offer ${offer.verified ? 'is-verified' : ''}">
                 <div>
+                  <span class="offer-emoji">${escapeHtml(formatEmoji(offer.senderEmoji))}</span>
                   <strong>${escapeHtml(formatWords(shortWords(offer.senderWords)))}</strong>
-                  <span>${formatMb(offer.sizeMb)}${offer.verified ? ' · verified' : ''}</span>
+                  <span>${formatMb(offer.sizeMb)}${offer.verified ? ` · ${verifiedLabel(true)}` : ''}</span>
                 </div>
                 <div class="row-actions">
                   <button class="small" data-action="accept-image" data-transfer="${escapeAttr(offer.transferId)}" type="button">accept</button>
@@ -1603,8 +1604,9 @@ export class RdzApp {
             (request) => `
               <div class="offer ${request.verified ? 'is-verified' : ''}">
                 <div>
+                  <span class="offer-emoji">${escapeHtml(formatEmoji(request.senderEmoji))}</span>
                   <strong>${escapeHtml(formatWords(shortWords(request.senderWords)))}</strong>
-                  <span>one minute · ${request.verified ? 'verified' : 'not verified'}</span>
+                  <span>one minute · ${verifiedLabel(request.verified)}</span>
                 </div>
                 <div class="row-actions">
                   <button class="small" data-action="accept-audio" data-transfer="${escapeAttr(request.transferId)}" type="button">accept</button>
@@ -1705,7 +1707,7 @@ export class RdzApp {
       const human = this.humans.get(this.modal.humanId);
       if (!human) return '';
       return this.modalShell(
-        human.verified ? 'Verified human' : 'Verify this human',
+        human.verified ? '✓ Verified human' : 'Verify this human',
         `
           <div class="identity-words full">${escapeHtml(formatEmoji(human.emoji))}</div>
           <div class="identity-words full mono">${escapeHtml(formatWords(human.words))}</div>
@@ -1908,6 +1910,12 @@ function envelopeExpiry(envelope: Envelope): number {
 
 function formatMb(sizeMb: number): string {
   return `${Math.max(0.1, sizeMb).toFixed(1)} MB`;
+}
+
+function verifiedLabel(verified: boolean): string {
+  return verified
+    ? '<span class="verified-check" aria-hidden="true">✓</span> verified'
+    : 'not verified';
 }
 
 function safeImageFilename(mime: string): string {

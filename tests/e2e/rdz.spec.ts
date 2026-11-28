@@ -124,6 +124,22 @@ test('the landing traffic stream opens the full network page', async ({ browser 
   await a.context.close();
 });
 
+test('the empty rendezvous panel offers a set-one button', async ({ browser }) => {
+  const a = await openPage(browser, '?seed=off');
+  const action = a.page.locator('[data-region="channels-panel"] [data-action="new-rendezvous"]');
+
+  await expect(action).toBeVisible();
+  await expect(action).toHaveRole('button');
+  await expect(action).toContainText('No live rendezvous. Set one.');
+  await expect(action.locator('.empty-link')).toHaveCSS('text-decoration-line', 'underline');
+
+  await action.click();
+  await expect(a.page.getByRole('heading', { name: 'Set a rendezvous' })).toBeVisible();
+  await expect(a.page.locator('input[name=time]')).toBeVisible();
+
+  await a.context.close();
+});
+
 test('presence, channel, verification, and the unverified gate', async ({ browser }) => {
   const time = futureTime();
   const a = await openPage(browser);
@@ -149,15 +165,17 @@ test('presence, channel, verification, and the unverified gate', async ({ browse
 
   await expect(humanRow(a.page, bWords).getByRole('button', { name: 'send photo' })).toBeVisible();
   await expect(humanRow(a.page, bWords).getByRole('button', { name: 'open voice' })).toBeVisible();
+  await expect(humanRow(a.page, bWords)).toContainText('✓ verified');
 
   await a.context.close();
   await b.context.close();
 });
 
 test('image consent, direct transfer, save, dismiss, reuse, and decline', async ({ browser }, testInfo) => {
-  const { a, b, bWords } = await setupPair(browser);
+  const { a, b, aWords, bWords } = await setupPair(browser);
   const file = testInfo.outputPath('one.png');
   writeFileSync(file, PNG);
+  const senderEmoji = (await humanRow(b.page, aWords).locator('.human-emoji').innerText()).trim();
 
   await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
   await a.page.getByRole('button', { name: 'choose image' }).click();
@@ -165,6 +183,8 @@ test('image consent, direct transfer, save, dismiss, reuse, and decline', async 
 
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
   await expect(b.page.locator('.offer')).toContainText(/\d+(\.\d+)? (B|KB|MB)/);
+  await expect(b.page.locator('.offer .offer-emoji')).toContainText(senderEmoji);
+  await expect(b.page.locator('.offer .verified-check')).toHaveText('✓');
   await expect(b.page.locator('.offer img')).toHaveCount(0);
   await b.page.getByRole('button', { name: 'accept', exact: true }).click();
   await expect(b.page.locator('img.received-image')).toBeVisible();
@@ -206,10 +226,13 @@ test('a photo travels from a phone-sized sender to a desktop', async ({ browser 
 });
 
 test('one-minute audio request, consent, live panel, and end', async ({ browser }) => {
-  const { a, b, bWords } = await setupPair(browser);
+  const { a, b, aWords, bWords } = await setupPair(browser);
+  const senderEmoji = (await humanRow(b.page, aWords).locator('.human-emoji').innerText()).trim();
 
   await humanRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
   await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
+  await expect(b.page.locator('.offer .offer-emoji')).toContainText(senderEmoji);
+  await expect(b.page.locator('.offer')).toContainText('✓ verified');
   await b.page.getByRole('button', { name: 'accept', exact: true }).click();
 
   await expect(a.page.locator('.audio-panel')).toBeVisible();
