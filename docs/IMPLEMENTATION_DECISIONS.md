@@ -108,3 +108,10 @@ Decisions made where `docs/SPEC.md` is silent or incomplete. Append new entries;
 
 80. **Local notification cues.** The app synthesizes three short tones locally with the Web Audio API: a rising two-note cue when voice becomes live, a falling two-note cue when a live voice session ends, and a distinct three-note cue when an image offer or voice request arrives. They play once per transition or incoming request, reuse one audio context, require no downloaded audio or microphone stream, and degrade silently if the browser blocks audio playback. Incoming image offers share the request cue because they are the same user-facing consent event; the voice-request cue remains separate from start/end cues.
 
+## 2026-11-28 — Protocol and media safety fixes
+
+81. **Canonical identifier boundary.** Envelope verification accepts only canonical 15-character base64url encodings of 88-bit rendezvous, target, and channel identifiers. Transfer IDs are bounded URL-safe tokens. A malformed `GOING` is dropped instead of entering the board, seed cache, relay, or IndexedDB; poisoned rows from older builds are purged on load. Display helpers retain a raw-string fallback so no identifier can throw inside a render pass.
+82. **One-week scheduling horizon.** A `GOING` may schedule at most seven days after its own signed `createdAt`. Browsers and the seed enforce the same rule before caching or replaying. The bound is relative to the signed creation time, so ordinary clock skew does not change it.
+83. **Voice disconnect notices.** Both incoming and outgoing audio connection-state handlers announce "The voice connection was lost." before removing the live panel, satisfying FR-20/US-16 when the remote peer vanishes without sending `audio-end`.
+84. **Signature-complete canonical JSON.** Canonicalisation builds null-prototype records, so a `__proto__` key remains an ordinary signed field instead of disappearing into the prototype setter. Relay-injected content now invalidates the signature.
+

@@ -15,6 +15,7 @@ import {
   formatWords,
   idToEmoji,
   idToWords,
+  isCanonicalId,
   randomRendezvousId,
   shortEmoji,
   shortWords,
@@ -1500,8 +1501,10 @@ export class RdzApp {
     const hasTimes = entries.length > 0 || ownEntries.length > 0;
     const groups = groupAnnouncementsByMinute(entries);
     const authorIds = [...new Set(entries.map((entry) => entry.author))];
-    const words = formatWords(shortWords(idToWords(channelId)));
-    const emoji = formatEmoji(shortEmoji(idToEmoji(channelId)));
+    const channelWords = idToSafeWords(channelId);
+    const channelEmoji = idToSafeEmoji(channelId);
+    const words = formatWords(shortWords(channelWords));
+    const emoji = formatEmoji(shortEmoji(channelEmoji));
     const channelPins = this.pins.find((pin) => pin.channelId === channelId);
     const incoming = [...this.incomingImages.values()]
       .filter((offer) => offer.channelId === channelId)
@@ -1681,7 +1684,7 @@ export class RdzApp {
           .map(
             (pin) => `
               <button class="dock-item" data-action="open-channel" data-id="${escapeAttr(pin.channelId)}" title="${escapeAttr(pin.label)}" type="button">
-                ${escapeHtml(formatEmoji(shortEmoji(idToEmoji(pin.channelId), 2)))}
+                ${escapeHtml(formatEmoji(shortEmoji(idToSafeEmoji(pin.channelId), 2)))}
               </button>
             `,
           )
@@ -1886,6 +1889,19 @@ function trafficIdShortEmoji(id: string, length: number): string {
   } catch {
     return 'peer';
   }
+}
+
+/**
+ * Display helpers that tolerate a non-canonical identifier instead of throwing
+ * inside a render pass. The transport boundary rejects such IDs, but a value
+ * restored from older local state must never brick the interface.
+ */
+function idToSafeWords(id: string): string[] {
+  return isCanonicalId(id) ? idToWords(id) : [id];
+}
+
+function idToSafeEmoji(id: string): string[] {
+  return isCanonicalId(id) ? idToEmoji(id) : [id];
 }
 
 function trafficIdShortWords(id: string, length: number): string {

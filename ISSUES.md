@@ -1,7 +1,15 @@
 # RDZ — Security & Correctness Review Issues
 
 Review date: 2026-11-28
-Scope: full working tree (including uncommitted UI polish in `src/rdz/app.ts`, `src/ui/styles.css`, `tests/e2e/rdz.spec.ts`), ~7k lines of protocol/UI/server code. Legacy `archive/` excluded.
+Scope: full working tree on branch `fix/h1-m1-m2-m3`, ~7k lines of protocol/UI/server code. Legacy `archive/` excluded.
+
+## Fix verification (H1, M1, M2, M3)
+
+- `npm run typecheck` and `npm run build` — clean
+- `npm test` — 77/77 unit tests pass
+- `npx playwright test` — 27/27 e2e tests pass (24 existing + 3 hostile-input regressions)
+- All 3 `tests/e2e/hostile.spec.ts` regressions **fail against the pre-fix build** and pass against the fix
+- Original attack probes: malformed `GOING` rejected and not cached; +100-year `GOING` rejected by `isValidGoing`; injected `__proto__` invalidates the signature; mid-call disconnect now shows `The voice connection was lost.`
 
 ## Verification performed
 
@@ -27,7 +35,7 @@ The core design is genuinely well-built:
 
 ## 🔴 High severity
 
-### H1. One signed message permanently bricks every browser that sees it — CONFIRMED end-to-end
+### H1. One signed message permanently bricks every browser that sees it — **FIXED in `fix/h1-m1-m2-m3`**
 
 `verifyEnvelope` (`src/rdz/crypto.ts:90-98`) validates `rendezvousId` only as `typeof string`. Rendering then calls `idToWords`/`idToEmoji` **unguarded** (`src/rdz/ids.ts:27` throws on any non-11-byte ID) via:
 
@@ -49,6 +57,8 @@ With `scheduledAt` far in the future (see M1), this is permanent until site data
 - Defense-in-depth: try/catch in the ID-display helpers (the traffic page already does this correctly — `trafficIdFull` etc.).
 - The seed should reject malformed IDs too, so one peer can't poison shared infrastructure.
 
+**Resolution:** `isCanonicalId` validates the 15-character/11-byte canonical form at the `verifyEnvelope` boundary for GOING rendezvous IDs and SIGNAL target/channel IDs. `isValidGoing` also checks it so poisoned IndexedDB rows are purged on startup. Display helpers (`uniqueWordDisplay`, `uniqueEmojiDisplay`, `filterChannels`, channel header, dock) now tolerate invalid IDs instead of throwing. Regressions in `tests/e2e/hostile.spec.ts` fail against the pre-fix build and pass against this branch.
+
 ### H2. Single unauthenticated request crashes the seed server — CONFIRMED
 
 `server/index.ts:450` and `server/index.ts:472`: `new URL(request.url, 'http://' + request.headers.host)` is unguarded. A malformed `Host` header throws `ERR_INVALID_URL` inside the request handler → uncaught exception → process exit.
@@ -61,7 +71,7 @@ With `scheduledAt` far in the future (see M1), this is permanent until site data
 
 ## 🟠 Medium severity
 
-### M1. Unbounded cache growth via far-future `GOING` — CONFIRMED
+### M1. Unbounded cache growth via far-future `GOING` — **FIXED in `fix/h1-m1-m2-m3` (1-week horizon)**
 
 `isValidGoing` (`src/rdz/crypto.ts:158`) bounds `createdAt` but **not `scheduledAt`**. A `GOING` scheduled +100 years is valid, cached until `scheduledAt + 3min`, and replayed to every new peer. Neither the client cache (`src/rdz/mesh.ts:82`) nor the seed cache (`server/index.ts:56`) has any size cap — `prune()` only removes expired entries.
 
@@ -69,7 +79,12 @@ With `scheduledAt` far in the future (see M1), this is permanent until site data
 
 **Fix:** cap the scheduling horizon (e.g. `scheduledAt <= createdAt + 24h` — the UI's own `parseTime`/`nextOccurrence` never produces more than ~24h), plus an LRU/size cap on both caches and per-session rate limits on the seed.
 
-### M2. Live voice call drops silently on connection failure — CONFIRMED, violates FR-20/US-16
+**Resolution:** `MAX_SCHEDULE_HORIZON_MS` is one week relative to the signed `createdAt`, enforced by `isValidGoing` on every browser and by `processEnvelopeData` on the seed. Cache-size caps and seed rate limits remain open under M5.
+
+### M2. Live voice call drops silently on connection failure — **FIXED in `fix/h1-m1-m2-m3`**
+
+> Confirmed FR-20/US-16 violation; both connection-loss handlers now emit
+> `The voice connection was lost.` before tearing down the panel.
 
 - Incoming-audio `connectionstatechange` → `dropIncomingAudio` with no notice (`src/rdz/rtc.ts:783-790`).
 - Outgoing-audio → `closeAudio(false)` (`src/rdz/rtc.ts:1064-1071`).
@@ -80,7 +95,10 @@ FR-20 explicitly: *"Losing a peer connection … MUST NOT remove a media panel w
 
 **Fix:** emit `onAudioNotice('The voice connection was lost.')` in both handlers (image transfers already do this correctly via `failIncomingImage`).
 
-### M3. `__proto__` keys escape the signature — CONFIRMED
+### M3. `__proto__` keys escape the signature — **FIXED in `fix/h1-m1-m2-m3`**
+
+> Canonicalisation now builds records with a null prototype, so `__proto__` is
+> an ordinary signed key; injected content invalidates the envelope signature.
 
 `canonicalJson`'s `sortValue` (`src/rdz/bytes.ts:49-53`) assigns into a plain `{}` — `sorted['__proto__'] = …` hits the prototype setter instead of creating an own property, so **`__proto__` keys are silently dropped from the signed canonical form**.
 

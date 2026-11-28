@@ -298,6 +298,8 @@ The 24/7 RDZ peer is optional. No core function may depend on it. Presence, rend
 - A rejected message must never leave a user action hanging. If clock skew prevents a request or session message from being accepted, the affected request or session times out with a visible message.
 - Relays preserve the original signature and never re-sign a message.
 - A message with an invalid signature is rejected.
+- Every human, rendezvous, and channel identifier in an envelope MUST be the canonical 15-character base64url encoding of an 88-bit value. Malformed identifiers are rejected before they can reach verification, caching, or rendering.
+- Canonicalisation MUST include every own enumerable field, including a key named `__proto__`; no field may be silently omitted from the signed form.
 
 ### FR-5 — PING
 
@@ -330,6 +332,7 @@ GOING [rendezvous id] [scheduled time] [created-at] [signature]
 - Two humans may send `GOING` for the same ID with different scheduled times.
 - `GOING` uses flood-once relay.
 - A `GOING` is valid until its scheduled time plus 3 minutes.
+- The scheduled time MUST be no more than one week after the envelope's signed `created-at`. A farther-future announcement is invalid and is never cached or replayed.
 - Clients display all valid claims for a rendezvous ID. They do not elect a canonical time.
 
 ### FR-7 — Relay, replay, and deduplication

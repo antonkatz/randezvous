@@ -9,6 +9,7 @@ import { bytesToBase64Url } from '../src/rdz/bytes';
 import {
   envelopeId,
   MAX_CLOCK_SKEW_MS,
+  MAX_SCHEDULE_HORIZON_MS,
   verifyEnvelope,
   verifyText,
 } from '../src/rdz/crypto';
@@ -166,6 +167,7 @@ async function processEnvelopeData(session: Session, parsed: unknown): Promise<v
   if (envelope.createdAt > Date.now() + MAX_CLOCK_SKEW_MS) return;
 
   if (envelope.type === 'GOING' && envelope.payload.kind === 'GOING') {
+    if (envelope.payload.scheduledAt > envelope.createdAt + MAX_SCHEDULE_HORIZON_MS) return;
     if (envelope.payload.scheduledAt + GOING_GRACE_MS <= Date.now()) return;
   }
   if (envelope.type === 'PING' && envelope.createdAt + PING_TTL_MS <= Date.now()) return;

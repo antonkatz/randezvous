@@ -1,5 +1,5 @@
 import { asBufferSource, base64UrlToBytes, bytesToBase64Url, canonicalJson, utf8 } from './bytes';
-import { humanIdFromPublicKey } from './ids';
+import { humanIdFromPublicKey, isCanonicalId } from './ids';
 import type { Envelope, EnvelopePayload, StoredIdentity } from './types';
 
 const ECDSA = { name: 'ECDSA', namedCurve: 'P-256' } as const;
@@ -90,6 +90,7 @@ export async function verifyEnvelope(value: unknown): Promise<Envelope | null> {
   if (payload.kind === 'GOING') {
     if (
       typeof payload.rendezvousId !== 'string' ||
+      !isCanonicalId(payload.rendezvousId) ||
       typeof payload.scheduledAt !== 'number' ||
       !Number.isFinite(payload.scheduledAt)
     ) {
@@ -99,9 +100,14 @@ export async function verifyEnvelope(value: unknown): Promise<Envelope | null> {
   if (payload.kind === 'SIGNAL') {
     if (
       typeof payload.target !== 'string' ||
+      !isCanonicalId(payload.target) ||
       typeof payload.channelId !== 'string' ||
+      // Mesh mechanics signals carry no channel; every other SIGNAL names a
+      // canonical rendezvous ID.
+      (payload.channelId !== '' && !isCanonicalId(payload.channelId)) ||
       typeof payload.signal !== 'string' ||
-      typeof payload.transferId !== 'string'
+      typeof payload.transferId !== 'string' ||
+      !/^[A-Za-z0-9_-]{1,64}$/u.test(payload.transferId)
     ) {
       return null;
     }
@@ -143,6 +149,14 @@ export const SIGNAL_TTL_MS = 2 * 60 * 1000;
  */
 export const MAX_CLOCK_SKEW_MS = 60 * 1000;
 
+/**
+ * A GOING may schedule at most one week past its own creation. Without a
+ * horizon, a single signed announcement for the far future stays valid,
+ * cached, and replayed forever, growing every peer's cache without bound.
+ * The bound is relative to the signed createdAt, not the receiver's clock.
+ */
+export const MAX_SCHEDULE_HORIZON_MS = 7 * 24 * 60 * 60 * 1000;
+
 export function isNotFromFuture(envelope: Envelope, now = Date.now()): boolean {
   return envelope.createdAt <= now + MAX_CLOCK_SKEW_MS;
 }
@@ -159,6 +173,8 @@ export function isValidGoing(envelope: Envelope, now = Date.now()): boolean {
   if (envelope.type !== 'GOING' || !isNotFromFuture(envelope, now)) return false;
   const payload = envelope.payload;
   if (payload.kind !== 'GOING') return false;
+  if (!isCanonicalId(payload.rendezvousId)) return false;
+  if (payload.scheduledAt > envelope.createdAt + MAX_SCHEDULE_HORIZON_MS) return false;
   return now <= payload.scheduledAt + ANNOUNCEMENT_GRACE_MS;
 }
 

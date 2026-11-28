@@ -669,4 +669,56 @@ describe('audio permission timing', () => {
     expect(notices).toEqual(['The voice request ended.']);
     expect(states.at(-1)).toBeNull();
   });
+
+  it('reports a lost outgoing voice connection instead of removing the panel silently', async () => {
+    vi.stubGlobal('RTCPeerConnection', FakePeerConnection);
+    FakePeerConnection.instances = [];
+    const stream = { getTracks: () => [] } as unknown as MediaStream;
+    const { rtc, identity, peer, signals, states, notices } = await audioManager(() =>
+      Promise.resolve(stream),
+    );
+    await rtc.requestAudio(peer.humanId, 'channel');
+    const request = signals.find((entry) => entry.signal === 'audio-request');
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'audio-accept', request!.transferId),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    const pc = FakePeerConnection.instances.at(-1)!;
+    expect(states.at(-1)?.phase).toBe('connecting');
+    pc.connectionState = 'failed';
+    pc.dispatchEvent(new Event('connectionstatechange'));
+
+    expect(notices).toEqual(['The voice connection was lost.']);
+    expect(states.at(-1)).toBeNull();
+    rtc.stop();
+  });
+
+  it('reports a lost incoming voice connection instead of removing the panel silently', async () => {
+    vi.stubGlobal('RTCPeerConnection', FakePeerConnection);
+    FakePeerConnection.instances = [];
+    const stream = { getTracks: () => [] } as unknown as MediaStream;
+    const { rtc, identity, peer, signals, states, notices } = await audioManager(() =>
+      Promise.resolve(stream),
+    );
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'audio-request', 'incoming-voice'),
+    );
+    await rtc.acceptAudio('incoming-voice');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signals.some((entry) => entry.signal === 'audio-accept')).toBe(true);
+
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'offer', 'incoming-voice', {
+        sdp: { type: 'offer', sdp: 'v=0' },
+      }),
+    );
+    const pc = FakePeerConnection.instances.at(-1)!;
+    pc.connectionState = 'failed';
+    pc.dispatchEvent(new Event('connectionstatechange'));
+
+    expect(notices).toEqual(['The voice connection was lost.']);
+    expect(states.at(-1)).toBeNull();
+    rtc.stop();
+  });
 });

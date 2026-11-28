@@ -46,7 +46,10 @@ function sortValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortValue);
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
+    // A null-prototype record keeps `__proto__` an ordinary own key. Assigning
+    // it into a plain `{}` would hit the prototype setter and silently drop the
+    // key from the signed form, letting a relay inject unsigned content.
+    const sorted: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(record).sort()) {
       const entry = record[key];
       if (entry !== undefined) sorted[key] = sortValue(entry);

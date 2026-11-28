@@ -904,6 +904,7 @@ export class RtcManager {
             (peer.connectionState === 'failed' || peer.connectionState === 'closed') &&
             this.incomingAudio.get(incomingAudio.transferId) === incomingAudio
           ) {
+            this.deps.onAudioNotice('The voice connection was lost.');
             this.dropIncomingAudio(incomingAudio.transferId);
           }
         });
@@ -1239,6 +1240,7 @@ export class RtcManager {
         (pc.connectionState === 'failed' || pc.connectionState === 'closed') &&
         this.outgoingAudio?.transferId === outgoing.transferId
       ) {
+        this.deps.onAudioNotice('The voice connection was lost.');
         this.closeAudio(false);
       }
     });

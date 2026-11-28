@@ -8,6 +8,7 @@ import {
   emojiToId,
   idToEmoji,
   idToWords,
+  isCanonicalId,
   randomRendezvousId,
   wordsToId,
 } from '../../src/rdz/ids';
@@ -94,5 +95,25 @@ describe('identifier encoding', () => {
   it('rejects malformed word and emoji sequences', () => {
     expect(wordsToId(['abandon'])).toBeNull();
     expect(emojiToId(['😀'])).toBeNull();
+  });
+
+  it('accepts only the canonical 15-character encoding of an 88-bit id', () => {
+    expect(isCanonicalId(randomRendezvousId())).toBe(true);
+    expect(isCanonicalId('not-a-valid-id')).toBe(false);
+    expect(isCanonicalId('')).toBe(false);
+    // 11 chars decode to 8 bytes, 16 chars to 12 bytes, 15 chars with padding
+    // is non-canonical even though it decodes to 11 bytes.
+    expect(isCanonicalId('AAAAAAAAAAA')).toBe(false);
+    expect(isCanonicalId('AAAAAAAAAAAAAAAA')).toBe(false);
+    expect(isCanonicalId('AAAAAAAAAAAAAA=')).toBe(false);
+    expect(isCanonicalId('../AAAAAAAAAAA')).toBe(false);
+  });
+
+  it('never throws when a display ID is malformed', () => {
+    const self = randomRendezvousId();
+    expect(uniqueWordDisplay([self, 'not-a-valid-id'], 'not-a-valid-id')).toEqual(['not-a-valid-id']);
+    expect(uniqueEmojiDisplay([self, 'not-a-valid-id'], 'not-a-valid-id')).toEqual(['not-a-valid-id']);
+    // A malformed neighbor is skipped rather than poisoning the length search.
+    expect(uniqueWordDisplay([self, 'not-a-valid-id'], self, 4)).toHaveLength(4);
   });
 });

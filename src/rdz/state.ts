@@ -1,5 +1,5 @@
 import { ANNOUNCEMENT_GRACE_MS, PRESENCE_MS } from './crypto';
-import { formatEmoji, formatWords, idToEmoji, idToWords } from './ids';
+import { formatEmoji, formatWords, idToEmoji, idToWords, isCanonicalId } from './ids';
 import type {
   ChannelView,
   GoingAnnouncement,
@@ -143,8 +143,9 @@ export function filterChannels(channels: readonly ChannelView[], query: string):
   const normalized = query.trim().toLowerCase();
   if (!normalized) return [...channels];
   return channels.filter((channel) => {
-    const words = formatWords(idToWords(channel.id)).toLowerCase();
-    const emoji = formatEmoji(idToEmoji(channel.id));
+    // A poisoned channel ID must not break filtering; it simply cannot match.
+    const words = isCanonicalId(channel.id) ? formatWords(idToWords(channel.id)).toLowerCase() : '';
+    const emoji = isCanonicalId(channel.id) ? formatEmoji(idToEmoji(channel.id)) : '';
     const label = channel.pinnedLabel?.toLowerCase() ?? '';
     return words.includes(normalized) || emoji.includes(query.trim()) || label.includes(normalized);
   });

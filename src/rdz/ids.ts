@@ -22,6 +22,22 @@ export function randomTransferId(): string {
   return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(12)));
 }
 
+/**
+ * True when value is the canonical base64url encoding of an 88-bit identifier:
+ * exactly 15 URL-safe characters that round-trip to 11 bytes. Untrusted input
+ * must pass this before any code decodes it for display; `idToWords` and
+ * `idToEmoji` throw on anything else.
+ */
+export function isCanonicalId(value: string): boolean {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{15}$/u.test(value)) return false;
+  try {
+    const bytes = base64UrlToBytes(value);
+    return bytes.length === ID_BYTES && bytesToBase64Url(bytes) === value;
+  } catch {
+    return false;
+  }
+}
+
 export function idToWords(id: string): string[] {
   const bytes = base64UrlToBytes(id);
   if (bytes.length !== ID_BYTES) throw new Error('Identifier must be 88 bits.');
@@ -105,8 +121,10 @@ export function uniqueWordDisplay(
   self: string,
   minimum = DEFAULT_SHORT_WORDS,
 ): string[] {
-  const others = ids.filter((id) => id !== self).map((id) => idToWords(id));
-  const own = idToWords(self);
+  // Malformed identifiers can never be canonical, but a display helper must
+  // not throw on one: skip invalid peers and fall back to the raw string.
+  const others = ids.filter((id) => id !== self && isCanonicalId(id)).map((id) => idToWords(id));
+  const own = isCanonicalId(self) ? idToWords(self) : [self];
   let length = Math.min(own.length, Math.max(minimum, 1));
   while (length < own.length) {
     const prefix = own.slice(0, length).join('\u0000');
@@ -122,8 +140,8 @@ export function uniqueEmojiDisplay(
   self: string,
   minimum = DEFAULT_SHORT_EMOJI,
 ): string[] {
-  const others = ids.filter((id) => id !== self).map((id) => idToEmoji(id));
-  const own = idToEmoji(self);
+  const others = ids.filter((id) => id !== self && isCanonicalId(id)).map((id) => idToEmoji(id));
+  const own = isCanonicalId(self) ? idToEmoji(self) : [self];
   let length = Math.min(own.length, Math.max(minimum, 1));
   while (length < own.length) {
     const prefix = own.slice(0, length).join('');
