@@ -196,7 +196,7 @@ test('verified-only signalling is styled, keyboard accessible, persistent, and m
   await expect(toggle).toHaveCSS('box-shadow', 'none');
   await expect(a.page.locator('.topbar .signal-toggle')).toHaveCount(0);
   await expect(a.page.locator('.signal-policy-note')).toContainText(
-    'We encourage you to keep this on to help the network stay connected',
+    'We encourage you to keep this on to help the network stay connected and strong',
   );
   await expect(a.page.locator('.signal-policy-note')).toContainText(
     'but we understand if you turn it off.',
@@ -206,6 +206,15 @@ test('verified-only signalling is styled, keyboard accessible, persistent, and m
   await why.click();
   await expect(why).toHaveAttribute('aria-expanded', 'true');
   await expect(a.page.locator('.signal-explainer')).toBeVisible();
+  await expect(a.page.locator('.signal-explainer')).toContainText(
+    'Every peer you connect with helps other beings find a route to one another',
+  );
+  await expect(a.page.locator('.signal-explainer')).toContainText(
+    'No personal data passes through your browser',
+  );
+  await expect(a.page.locator('.signal-explainer')).toContainText(
+    'photographs and voice travel only between the beings sending and receiving them',
+  );
   await expect(a.page.locator('.signal-explainer')).toContainText('broader reachability');
   await why.click();
   await expect(why).toHaveAttribute('aria-expanded', 'false');

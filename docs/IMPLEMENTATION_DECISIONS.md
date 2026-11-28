@@ -130,3 +130,7 @@ Decisions made where `docs/SPEC.md` is silent or incomplete. Append new entries;
 
 90. **Explicit cancellation.** Every active photo progress row (waiting, connecting, or transferring) has a cancel button for both sender and recipient. Cancellation sends a signed `image-decline` with a side-specific reason, closes the direct connection, clears timers, and releases the connection-budget slot. The cancelling side sees "Image transfer cancelled." rather than a failure; the other side sees who cancelled. Incoming transports use the same 1.5 s close-reason grace as outgoing transports so the signed cancellation reason wins over the raw channel-close event.
 
+## 2026-11-28 — Signalling encouragement copy
+
+91. **Peer strength without private relay.** The **read why?** disclosure encourages peer connections by explaining that each peer helps other beings find routes and makes the network resilient. It explicitly distinguishes public presence and connection requests from private content: photographs and voice never pass through another peer or the seed. This preserves the trust-versus-reachability explanation while removing any suggestion that being connected turns a browser into a personal-data relay.
+

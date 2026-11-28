@@ -1236,12 +1236,12 @@ export class RdzApp {
     return `
       ${this.renderSignalToggle('traffic')}
       <p class="signal-policy-note">
-        We encourage you to keep this on to help the network stay connected
+        We encourage you to keep this on to help the network stay connected and strong
         (<button class="inline-link" data-action="toggle-signal-explainer" type="button" aria-expanded="${this.signalExplainerOpen}" aria-controls="signal-policy-explainer">read why?</button>),
         but we understand if you turn it off.
       </p>
       <div class="signal-explainer" id="signal-policy-explainer" role="note"${this.signalExplainerOpen ? '' : ' hidden'}>
-        Verified-only mode keeps your direct signalling circle focused on beings you trust and avoids connection churn from unknown peers. It can reduce the number of available routes, so turning it off is a reasonable choice when broader reachability matters more. Public presence stays open either way.
+        Every peer you connect with helps other beings find a route to one another and keeps the network resilient. No personal data passes through your browser: photographs and voice travel only between the beings sending and receiving them. Peers relay connection requests and public presence signals, not private content. Verified-only mode also limits your direct signalling circle to beings you trust. It can reduce the number of available routes, so turning it off is a reasonable choice when broader reachability matters more.
       </div>
     `;
   }
