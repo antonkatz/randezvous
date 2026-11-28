@@ -1,6 +1,6 @@
 {
   "name": "rdz",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "A permissionless peer-to-peer rendezvous board with direct image and one-minute voice.",
   "type": "module",
   "private": true,
