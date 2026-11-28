@@ -503,7 +503,7 @@ test('I see my active mask in the online list', async ({ browser }) => {
   await a.context.close();
 });
 
-test('the landing orbit keeps its phase when the landing re-renders', async ({ browser }) => {
+test('the landing orbit survives a list update', async ({ browser }) => {
   const a = await openPage(browser);
   await expect(a.page.locator('.hero .orbit')).toBeVisible();
   await a.page.waitForTimeout(2500);
@@ -511,10 +511,10 @@ test('the landing orbit keeps its phase when the landing re-renders', async ({ b
   expect(before).toBeGreaterThan(5);
 
   await a.page.locator('.hero .orbit').evaluate((orbit) => {
-    orbit.dataset.renderProbe = 'stale';
+    orbit.dataset.renderProbe = 'kept';
   });
   await a.page.locator('#filter').fill('x');
-  await expect(a.page.locator('.hero .orbit')).not.toHaveAttribute('data-render-probe', 'stale');
+  await expect(a.page.locator('.hero .orbit')).toHaveAttribute('data-render-probe', 'kept');
 
   const after = await orbitProgress(a.page);
   expect(after).toBeGreaterThan(before - 1.5);
@@ -545,6 +545,50 @@ test('the clock tick does not rebuild the landing', async ({ browser }) => {
   await expect(page.locator('#filter')).toHaveAttribute('data-tick-probe', 'kept');
   await expect(page.locator('#filter')).toBeFocused();
   await context.close();
+});
+
+test('humans lead the landing and tabs switch lists on small screens', async ({ browser }) => {
+  const desktop = await browser.newContext();
+  const desktopPage = await desktop.newPage();
+  await desktopPage.goto('/');
+  await expect(desktopPage.locator('.live')).toHaveText(/live|off/);
+
+  const desktopHumans = await desktopPage.locator('[data-region="humans-panel"]').boundingBox();
+  const desktopChannels = await desktopPage.locator('[data-region="channels-panel"]').boundingBox();
+  expect(desktopHumans).not.toBeNull();
+  expect(desktopChannels).not.toBeNull();
+  expect(desktopHumans!.x).toBeLessThan(desktopChannels!.x);
+  await expect(desktopPage.locator('.landing-tabs')).toBeHidden();
+  await desktop.close();
+
+  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await mobile.newPage();
+  await page.goto('/');
+  await expect(page.locator('.live')).toHaveText(/live|off/);
+
+  const humans = page.locator('[data-region="humans-panel"]');
+  const channels = page.locator('[data-region="channels-panel"]');
+  await expect(page.locator('.landing-tabs')).toBeVisible();
+  await expect(humans).toBeVisible();
+  await expect(channels).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Humans', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+
+  await page.getByRole('button', { name: 'Rendezvous', exact: true }).click();
+  await expect(channels).toBeVisible();
+  await expect(humans).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Rendezvous', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+
+  await page.getByRole('button', { name: 'Humans', exact: true }).click();
+  await expect(humans).toBeVisible();
+  await expect(channels).toBeHidden();
+
+  await mobile.close();
 });
 
 test('landing rendezvous emoji prefixes are complete and unique', async ({ browser }) => {

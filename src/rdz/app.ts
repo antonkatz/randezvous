@@ -110,6 +110,7 @@ export class RdzApp {
   private signalChain: Promise<void> = Promise.resolve();
   private now = Date.now();
   private query = '';
+  private landingTab: 'humans' | 'rendezvous' = 'humans';
   private activeChannelId: string | null = null;
   private modal: Modal = null;
   private incomingImages = new Map<string, IncomingImageOffer>();
@@ -122,6 +123,8 @@ export class RdzApp {
   private ticker = 0;
   private pingTicker = 0;
   private renderQueued = false;
+  private renderedView = '';
+  private renderedRegions = new Map<string, string>();
   private lastRenderedClock = '';
   private toast = '';
   private toastTimer = 0;
@@ -444,7 +447,7 @@ export class RdzApp {
     for (const [id, expiresAt] of this.seen) {
       if (expiresAt <= this.now) this.seen.delete(id);
     }
-    if (this.timeSensitiveState() !== this.lastRenderedClock) this.scheduleRender();
+    if (this.timeSensitiveState() !== this.lastRenderedClock) this.render();
   }
 
   private timeSensitiveState(): string {
@@ -557,6 +560,14 @@ export class RdzApp {
       if (this.imageViewer) URL.revokeObjectURL(this.imageViewer.url);
       this.imageViewer = null;
       this.render();
+      return;
+    }
+    if (action === 'landing-tab') {
+      this.landingTab = id === 'rendezvous' ? 'rendezvous' : 'humans';
+      this.render();
+      document
+        .querySelector<HTMLElement>(`.landing-tab[data-id="${this.landingTab}"]`)
+        ?.focus();
       return;
     }
     if (action === 'new-rendezvous') {
@@ -920,20 +931,52 @@ export class RdzApp {
     });
   }
 
+  // The shell is built once per screen; live updates only replace the regions
+  // whose markup actually changed, so the hero, orbit, and focused inputs stay put.
   private render(): void {
     if (!this.identity) return;
     const root = document.querySelector<HTMLDivElement>('#app');
     if (!root) return;
     this.now = Date.now();
-    const statusLabel =
-      this.meshStatus === 'online' ? 'live' : this.meshStatus === 'connecting' ? 'connecting' : 'off';
-    const statusClass = this.meshStatus === 'online' ? 'is-live' : '';
-    const ownShortWords = formatWords(shortWords(idToWords(this.identity.humanId)));
-    const ownShortEmoji = formatEmoji(shortEmoji(idToEmoji(this.identity.humanId)));
-    const body = this.activeChannelId
-      ? this.renderChannel(this.activeChannelId)
-      : this.renderLanding();
-    root.innerHTML = `
+
+    const view = this.activeChannelId ? `channel:${this.activeChannelId}` : 'landing';
+    if (view !== this.renderedView) {
+      this.renderedView = view;
+      this.renderedRegions.clear();
+      root.innerHTML = this.renderShell();
+    }
+
+    this.patchRegion('topbar', this.renderTopbar());
+    if (this.activeChannelId) {
+      const regions = this.renderChannel(this.activeChannelId);
+      for (const [name, html] of Object.entries(regions)) this.patchRegion(name, html);
+    } else {
+      this.patchRegion('filter', this.renderFilterRow());
+      this.patchRegion('landing-tabs', this.renderLandingTabs());
+      this.patchRegion('channels-panel', this.renderChannelsPanel());
+      this.patchRegion('humans-panel', this.renderHumansPanel());
+    }
+    root.querySelector<HTMLElement>('.columns')?.setAttribute('data-tab', this.landingTab);
+    this.patchRegion('dock', this.renderDock());
+    this.patchRegion('modal', this.renderModal());
+    this.patchRegion('image', this.renderImage());
+    this.patchRegion(
+      'toast',
+      this.toast ? `<div class="toast" role="status">${escapeHtml(this.toast)}</div>` : '',
+    );
+    this.lastRenderedClock = this.timeSensitiveState();
+  }
+
+  private patchRegion(name: string, html: string): void {
+    if (this.renderedRegions.get(name) === html) return;
+    const container = document.querySelector<HTMLElement>(`#app [data-region="${name}"]`);
+    if (!container) return;
+    container.innerHTML = html;
+    this.renderedRegions.set(name, html);
+  }
+
+  private renderShell(): string {
+    return `
       <div class="shell">
         <p class="masthead">
           <span class="masthead-name">rendezvous</span>
@@ -943,40 +986,38 @@ export class RdzApp {
           <span class="masthead-by">by</span>
           <span class="masthead-stamp" role="img" aria-label="InstantHero">${instantHeroMark}</span>
         </p>
-        <header class="topbar">
-          <div class="top-actions">
-            <span class="live ${statusClass}" title="WebRTC mesh"><span class="dot"></span>${statusLabel}</span>
-            <button class="identity-chip" data-action="identity" type="button">
-              <span class="identity-emoji">${escapeHtml(ownShortEmoji)}</span>
-              <span class="identity-words">${escapeHtml(ownShortWords)}</span>
-            </button>
-          </div>
-        </header>
-        ${body}
+        <header class="topbar" data-region="topbar"></header>
+        <div class="region" data-region="screen">
+          ${this.activeChannelId ? this.renderChannelShell() : this.renderLandingShell()}
+        </div>
       </div>
-      ${this.renderDock()}
-      ${this.renderModal()}
-      ${this.renderImage()}
-      ${this.toast ? `<div class="toast" role="status">${escapeHtml(this.toast)}</div>` : ''}
+      <div class="region" data-region="dock"></div>
+      <div class="region" data-region="modal"></div>
+      <div class="region" data-region="image"></div>
+      <div class="region" data-region="toast"></div>
     `;
-    this.lastRenderedClock = this.timeSensitiveState();
   }
 
-  private renderLanding(): string {
-    const humans = sortHumans(
-      [...this.humans.values()].filter(
-        (human) =>
-          human.id === this.identity.humanId || isOnline(human, this.now) || human.verified,
-      ),
-      this.now,
-    );
-    const allChannels = buildChannels([...this.announcements.values()], this.pins, this.now);
-    const channels = filterChannels(allChannels, this.query);
-    const visibleHumans = filterHumans(humans, this.query);
-    const humanIds = visibleHumans.map((human) => human.id);
-    const channelIds = allChannels.map((channel) => channel.id);
-    // Live updates re-render the landing, which restarts CSS animations.
-    // A negative delay keeps the orbit at its true phase instead of snapping back.
+  private renderTopbar(): string {
+    const statusLabel =
+      this.meshStatus === 'online' ? 'live' : this.meshStatus === 'connecting' ? 'connecting' : 'off';
+    const statusClass = this.meshStatus === 'online' ? 'is-live' : '';
+    const ownShortWords = formatWords(shortWords(idToWords(this.identity.humanId)));
+    const ownShortEmoji = formatEmoji(shortEmoji(idToEmoji(this.identity.humanId)));
+    return `
+      <div class="top-actions">
+        <span class="live ${statusClass}" title="WebRTC mesh"><span class="dot"></span>${statusLabel}</span>
+        <button class="identity-chip" data-action="identity" type="button">
+          <span class="identity-emoji">${escapeHtml(ownShortEmoji)}</span>
+          <span class="identity-words">${escapeHtml(ownShortWords)}</span>
+        </button>
+      </div>
+    `;
+  }
+
+  private renderLandingShell(): string {
+    // The shell survives live updates, so the orbit only needs a phase offset
+    // when the landing is rebuilt after leaving a channel.
     const orbitDelay = `${(((this.orbitStartedAt - this.now) % ORBIT_DURATION_MS) / 1000).toFixed(3)}s`;
     return `
       <main class="landing">
@@ -987,38 +1028,91 @@ export class RdzApp {
             <button class="primary" data-action="new-rendezvous" type="button">Set a rendezvous</button>
           </div>
         </section>
-        <div class="filter-row">
-          <div class="filter-field">
-            <svg class="filter-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <circle cx="10.5" cy="10.5" r="6.25"></circle>
-              <path d="m15.2 15.2 4.3 4.3"></path>
-            </svg>
-            <input id="filter" class="filter" type="search" placeholder="filter humans or channels by words or emoji" value="${escapeAttr(this.query)}" />
-          </div>
-        </div>
-        <div class="columns">
-          <section class="panel">
-            <div class="panel-head"><h2>Rendezvous</h2><span>${channels.length}</span></div>
-            <div class="list">
-              ${
-                channels.length
-                  ? channels.map((channel) => this.renderChannelCard(channel, channelIds)).join('')
-                  : '<p class="empty">No live rendezvous. Set one.</p>'
-              }
-            </div>
-          </section>
-          <section class="panel">
-            <div class="panel-head"><h2>Humans</h2><span>${visibleHumans.length}</span></div>
-            <div class="list humans">
-              ${
-                visibleHumans.length
-                  ? visibleHumans.map((human) => this.renderHumanRow(human, false, humanIds)).join('')
-                  : '<p class="empty">Nobody else is visible yet.</p>'
-              }
-            </div>
-          </section>
+        <div class="filter-row" data-region="filter"></div>
+        <div class="landing-tabs" data-region="landing-tabs" role="group" aria-label="Landing view"></div>
+        <div class="columns" data-tab="${this.landingTab}">
+          <section class="panel panel-humans" data-region="humans-panel"></section>
+          <section class="panel panel-channels" data-region="channels-panel"></section>
         </div>
       </main>
+    `;
+  }
+
+  private renderChannelShell(): string {
+    return `
+      <main class="channel">
+        <div class="channel-head" data-region="channel-head"></div>
+        <div class="region" data-region="audio-panel"></div>
+        <div class="region" data-region="audio-requests"></div>
+        <div class="region" data-region="image-offers"></div>
+        <div class="region" data-region="progress"></div>
+        <div class="region" data-region="own-announcements"></div>
+        <section class="time-groups" data-region="time-groups"></section>
+        <div class="region" data-region="channel-note"></div>
+      </main>
+    `;
+  }
+
+  private renderFilterRow(): string {
+    return `
+      <div class="filter-field">
+        <svg class="filter-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="10.5" cy="10.5" r="6.25"></circle>
+          <path d="m15.2 15.2 4.3 4.3"></path>
+        </svg>
+        <input id="filter" class="filter" type="search" placeholder="filter humans or channels by words or emoji" value="${escapeAttr(this.query)}" />
+      </div>
+    `;
+  }
+
+  private renderLandingTabs(): string {
+    const tabs = [
+      { id: 'humans', label: 'Humans' },
+      { id: 'rendezvous', label: 'Rendezvous' },
+    ] as const;
+    return tabs
+      .map(({ id, label }) => {
+        const active = this.landingTab === id;
+        return `<button class="landing-tab${active ? ' is-active' : ''}" data-action="landing-tab" data-id="${id}" type="button" aria-pressed="${active}">${label}</button>`;
+      })
+      .join('');
+  }
+
+  private renderChannelsPanel(): string {
+    const allChannels = buildChannels([...this.announcements.values()], this.pins, this.now);
+    const channels = filterChannels(allChannels, this.query);
+    const channelIds = allChannels.map((channel) => channel.id);
+    return `
+      <div class="panel-head"><h2>Rendezvous</h2><span>${channels.length}</span></div>
+      <div class="list">
+        ${
+          channels.length
+            ? channels.map((channel) => this.renderChannelCard(channel, channelIds)).join('')
+            : '<p class="empty">No live rendezvous. Set one.</p>'
+        }
+      </div>
+    `;
+  }
+
+  private renderHumansPanel(): string {
+    const humans = sortHumans(
+      [...this.humans.values()].filter(
+        (human) =>
+          human.id === this.identity.humanId || isOnline(human, this.now) || human.verified,
+      ),
+      this.now,
+    );
+    const visibleHumans = filterHumans(humans, this.query);
+    const humanIds = visibleHumans.map((human) => human.id);
+    return `
+      <div class="panel-head"><h2>Humans</h2><span>${visibleHumans.length}</span></div>
+      <div class="list humans">
+        ${
+          visibleHumans.length
+            ? visibleHumans.map((human) => this.renderHumanRow(human, false, humanIds)).join('')
+            : '<p class="empty">Nobody else is visible yet.</p>'
+        }
+      </div>
     `;
   }
 
@@ -1076,7 +1170,7 @@ export class RdzApp {
     `;
   }
 
-  private renderChannel(channelId: string): string {
+  private renderChannel(channelId: string): Record<string, string> {
     const channel = buildChannels([...this.announcements.values()], this.pins, this.now).find(
       (entry) => entry.id === channelId,
     );
@@ -1118,61 +1212,55 @@ export class RdzApp {
     const progress = [...this.imageProgress.values()].filter(
       (entry) => entry.phase === 'waiting' || entry.phase === 'connecting' || entry.phase === 'transferring',
     );
-    return `
-      <main class="channel">
-        <div class="channel-head">
-          <button class="back" data-action="back" type="button">← landing</button>
-          <div class="channel-title">
-            <span class="channel-emoji">${escapeHtml(emoji)}</span>
-            <div>
-              <p class="eyebrow">rendezvous channel</p>
-              <h1>${escapeHtml(channelPins?.label ?? words)}</h1>
-              <p class="mono">${escapeHtml(words)}</p>
-            </div>
-          </div>
-          <div class="channel-actions">
-            <button class="small ghost" data-action="set-time" type="button">${hasTimes ? 'add a time' : 'set a time'}</button>
-            ${
-              channelPins
-                ? `<button class="small ghost" data-action="unpin" data-id="${escapeAttr(channelId)}" type="button">unpin</button>`
-                : `<button class="small ghost" data-action="pin" type="button">pin circle</button>`
-            }
-          </div>
+    const channelHead = `
+      <button class="back" data-action="back" type="button">← landing</button>
+      <div class="channel-title">
+        <span class="channel-emoji">${escapeHtml(emoji)}</span>
+        <div>
+          <p class="eyebrow">rendezvous channel</p>
+          <h1>${escapeHtml(channelPins?.label ?? words)}</h1>
+          <p class="mono">${escapeHtml(words)}</p>
         </div>
-        ${this.renderAudioPanel()}
-        ${audioRequests.length ? this.renderAudioRequests(audioRequests) : ''}
-        ${incoming.length ? this.renderImageOffers(incoming) : ''}
-        ${progress.length ? this.renderProgress(progress) : ''}
-        ${ownEntries.length ? this.renderOwnAnnouncements(ownEntries) : ''}
-        <section class="time-groups">
-          ${
-            groups.size
-              ? [...groups.entries()]
-                  .map(
-                    ([minute, rows]) => `
-                      <div class="time-group">
-                        <div class="time-separator"><span>${escapeHtml(formatTime(minute))}${formatDay(minute, this.now) ? ` · ${escapeHtml(formatDay(minute, this.now))}` : ''}</span></div>
-                        ${rows
-                          .map((row) => {
-                            const human = this.humans.get(row.author);
-                            if (!human) return '';
-                            return this.renderHumanRow(human, true, authorIds);
-                          })
-                          .join('')}
-                      </div>
-                    `,
-                  )
-                  .join('')
-              : '<p class="empty">No one else has announced a time here yet.</p>'
-          }
-        </section>
+      </div>
+      <div class="channel-actions">
+        <button class="small ghost" data-action="set-time" type="button">${hasTimes ? 'add a time' : 'set a time'}</button>
         ${
-          channel
-            ? ''
-            : '<p class="empty">This channel is pinned but has no live announcements.</p>'
+          channelPins
+            ? `<button class="small ghost" data-action="unpin" data-id="${escapeAttr(channelId)}" type="button">unpin</button>`
+            : `<button class="small ghost" data-action="pin" type="button">pin circle</button>`
         }
-      </main>
+      </div>
     `;
+    const groupsHtml = groups.size
+      ? [...groups.entries()]
+          .map(
+            ([minute, rows]) => `
+              <div class="time-group">
+                <div class="time-separator"><span>${escapeHtml(formatTime(minute))}${formatDay(minute, this.now) ? ` · ${escapeHtml(formatDay(minute, this.now))}` : ''}</span></div>
+                ${rows
+                  .map((row) => {
+                    const human = this.humans.get(row.author);
+                    if (!human) return '';
+                    return this.renderHumanRow(human, true, authorIds);
+                  })
+                  .join('')}
+              </div>
+            `,
+          )
+          .join('')
+      : '<p class="empty">No one else has announced a time here yet.</p>';
+    return {
+      'channel-head': channelHead,
+      'audio-panel': this.renderAudioPanel(),
+      'audio-requests': audioRequests.length ? this.renderAudioRequests(audioRequests) : '',
+      'image-offers': incoming.length ? this.renderImageOffers(incoming) : '',
+      progress: progress.length ? this.renderProgress(progress) : '',
+      'own-announcements': ownEntries.length ? this.renderOwnAnnouncements(ownEntries) : '',
+      'time-groups': groupsHtml,
+      'channel-note': channel
+        ? ''
+        : '<p class="empty">This channel is pinned but has no live announcements.</p>',
+    };
   }
 
   private renderOwnAnnouncements(entries: GoingAnnouncement[]): string {

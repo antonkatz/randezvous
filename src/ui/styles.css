@@ -107,6 +107,10 @@ h2 {
   padding: 0 0 120px;
 }
 
+.region {
+  display: contents;
+}
+
 .masthead {
   display: flex;
   align-items: center;
@@ -391,9 +395,28 @@ h2 {
   border-color: var(--accent);
 }
 
+.landing-tabs {
+  display: none;
+}
+
+.landing-tab {
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.01em;
+}
+
+.landing-tab.is-active {
+  background: var(--ink);
+  color: var(--paper-bright);
+}
+
 .columns {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
   gap: 34px;
   align-items: start;
 }
@@ -836,9 +859,10 @@ h2 {
 
 .mask-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -853,13 +877,13 @@ h2 {
 .mask-copy {
   display: grid;
   gap: 2px;
+  flex: 1 1 12rem;
   min-width: 0;
 }
 
 .mask-copy strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .mask-emoji {
@@ -909,6 +933,21 @@ h2 {
     gap: 28px;
   }
 
+  .landing-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    margin: 0 0 22px;
+    padding: 4px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+  }
+
+  .columns[data-tab='humans'] > .panel-channels,
+  .columns[data-tab='rendezvous'] > .panel-humans {
+    display: none;
+  }
+
   .topbar {
     align-items: flex-start;
   }
@@ -942,7 +981,7 @@ h2 {
     height: clamp(190px, 48vw, 280px);
   }
 
-  .identity-words {
+  .identity-chip .identity-words {
     display: none;
   }
 
