@@ -94,6 +94,30 @@ async function setupPair(browser: Browser): Promise<{
   return { a, b, aWords, bWords, channel };
 }
 
+test('the landing traffic stream opens the full network page', async ({ browser }) => {
+  const a = await openPage(browser);
+
+  const stream = a.page.locator('.traffic-stream');
+  await expect(stream).toBeVisible();
+  await expect(stream).toContainText('network traffic');
+  await stream.click();
+
+  await expect(a.page.locator('.traffic-page h1')).toHaveText('Network traffic');
+  const first = a.page.locator('.traffic-entry').first();
+  await expect(first).toBeVisible();
+  const firstId = await first.getAttribute('data-id');
+  const entry = a.page.locator(`.traffic-entry[data-id="${firstId}"]`);
+  await entry.click();
+  await expect(entry).toHaveAttribute('aria-expanded', 'true');
+  await expect(entry.locator('.traffic-detail')).toContainText('author');
+  await expect(entry.locator('.traffic-detail')).toContainText('created');
+
+  await a.page.getByRole('button', { name: /back/i }).click();
+  await expect(stream).toBeVisible();
+
+  await a.context.close();
+});
+
 test('presence, channel, verification, and the unverified gate', async ({ browser }) => {
   const time = futureTime();
   const a = await openPage(browser);

@@ -30,6 +30,7 @@ export interface TrafficEvent {
   signal: SignalKind | null;
   target: HumanId | null;
   channelId: string | null;
+  scheduledAt: number | null;
 }
 
 export const DEFAULT_TRAFFIC_LIMIT = 250;
@@ -74,6 +75,7 @@ export class TrafficLog {
           : payload.kind === 'SIGNAL' && payload.channelId
             ? payload.channelId
             : null,
+      scheduledAt: payload.kind === 'GOING' ? payload.scheduledAt : null,
     };
     this.nextSeq += 1;
     this.events.unshift(event);

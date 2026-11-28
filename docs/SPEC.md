@@ -507,6 +507,20 @@ The specification does not promise that every peer can reach every other peer. N
 - Blocked media playback MUST be reported and MUST be retryable through a user gesture.
 - Losing a peer connection, timing out a request, or leaving a channel while media is pending MUST NOT remove a media panel without a notice.
 
+### FR-21 — Network traffic observability
+
+- The app exposes a local, session-only network traffic view for debugging the WebRTC mesh.
+- The view records routing metadata only: sequence, direction (`coming`, `going`, `relaying`), envelope type, author, peer, byte size, created and observed times, `SIGNAL` kind, target, destination count, replay flag, rendezvous ID, and scheduled time where applicable.
+- The view MUST NOT display, store, or retain payload bodies or sensitive envelope fields. This includes image chunks, audio, SDP, ICE candidates, signatures, public keys, and any other envelope content.
+- Media privacy: photographs and voice are live-only and never recorded or uploaded. A payload viewer would turn the diagnostics page into a recorder.
+- Network privacy: SDP and ICE candidates can reveal local and remote IP addresses, hostnames, and NAT details. The traffic view is not a place to expose them.
+- Identity hygiene: public keys and signatures are not needed to debug routing and add correlation and copy/paste risk.
+- Untrusted content: rendering arbitrary payloads in the UI adds an XSS and accidental-leak surface. The view renders escaped metadata only.
+- Memory bounds: the log is capped at 250 events. SDP and media bodies are far larger than metadata and would break the bounded, session-only design.
+- Message-surface integrity: `SIGNAL` is connection mechanics and is never a user-visible message. `PING` and `GOING` remain the only user-visible application messages; the traffic view is diagnostics, not a second message reader.
+- The traffic view MUST remain local and in-memory. It clears on reload, never uploads, and never becomes a stored log.
+- Invalid, duplicate, expired, or unauthorized traffic remains silently discarded per FR-20.
+
 ## Visual User Stories
 
 ### VS-1 — The landing page

@@ -61,6 +61,7 @@ describe('traffic log', () => {
     });
 
     expect(going.channelId).toBe('rendezvous-id');
+    expect(going.scheduledAt).toBe(42_000);
     expect(going.signal).toBeNull();
     expect(going.target).toBeNull();
     expect(signal.signal).toBe('mesh-ice');

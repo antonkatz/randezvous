@@ -11,6 +11,7 @@ import {
 } from './crypto';
 import { envelopeTransportKey, meshHelloBody } from './mesh-control';
 import { randomTransferId } from './ids';
+import type { TrafficPeer, TrafficReport } from './traffic';
 import type {
   Envelope,
   HumanId,
@@ -30,6 +31,7 @@ interface MeshOptions {
   onEnvelope: (value: unknown) => void;
   onStatus: (status: MeshStatus) => void;
   onPeers: (peers: MeshPeerInfo[]) => void;
+  onTraffic: (report: TrafficReport) => void;
 }
 
 type PeerState = 'connecting' | 'open' | 'closed';
@@ -174,11 +176,18 @@ export class MeshManager {
 
   private async rememberAndPublish(envelope: Envelope): Promise<void> {
     await this.rememberAsync(envelope);
+    let destinations = 0;
     if (this.openPeers().length === 0) {
       if (envelope.type === 'SIGNAL') this.queueSignal(envelope);
-      return;
+    } else {
+      destinations = this.broadcast(envelope, null);
     }
-    this.broadcast(envelope, null);
+    this.reportTraffic({
+      direction: 'going',
+      envelope,
+      destinations,
+      bytes: envelopeBytes(envelope),
+    });
   }
 
   private connectBootstrap(): void {
@@ -503,10 +512,20 @@ export class MeshManager {
     if (prior && prior > Date.now()) return;
     this.seen.set(id, expiresAt);
 
+    const peer = this.peerLabel(source);
+    const bytes = envelopeBytes(envelope);
+    this.reportTraffic({
+      direction: 'coming',
+      envelope,
+      peer,
+      peerRole: peer ? 'from' : null,
+      bytes,
+    });
+
     if (envelope.type === 'PING' || envelope.type === 'GOING') {
       this.cache.set(id, { envelope, expiresAt });
       this.options.onEnvelope(envelope);
-      this.broadcast(envelope, source);
+      this.reportRelay(envelope, peer, this.broadcast(envelope, source), bytes);
       return;
     }
 
@@ -514,7 +533,7 @@ export class MeshManager {
     if (payload.kind !== 'SIGNAL') return;
     if (isMeshSignal(payload.signal)) {
       if (payload.target !== this.identity.humanId) {
-        this.broadcast(envelope, source);
+        this.reportRelay(envelope, peer, this.broadcast(envelope, source), bytes);
         return;
       }
       await this.handleMeshSignal(envelope, payload);
@@ -524,7 +543,7 @@ export class MeshManager {
       this.options.onEnvelope(envelope);
       return;
     }
-    this.broadcast(envelope, source);
+    this.reportRelay(envelope, peer, this.broadcast(envelope, source), bytes);
   }
 
   private async handleMeshSignal(envelope: Envelope, payload: SignalPayload): Promise<void> {
@@ -644,7 +663,16 @@ export class MeshManager {
     const now = Date.now();
     for (const { envelope, expiresAt } of this.cache.values()) {
       if (expiresAt <= now) continue;
-      this.sendTo(peer, envelope);
+      if (!this.sendTo(peer, envelope)) continue;
+      this.reportTraffic({
+        direction: 'relaying',
+        envelope,
+        peer: this.peerLabel(peer),
+        peerRole: 'to',
+        destinations: 1,
+        replayed: true,
+        bytes: envelopeBytes(envelope),
+      });
     }
   }
 
@@ -657,20 +685,24 @@ export class MeshManager {
     }
   }
 
-  private broadcast(envelope: Envelope, except: MeshPeer | null): void {
+  private broadcast(envelope: Envelope, except: MeshPeer | null): number {
+    let destinations = 0;
     for (const peer of this.peers.values()) {
       if (peer === except || peer.state !== 'open') continue;
-      this.sendTo(peer, envelope);
+      if (this.sendTo(peer, envelope)) destinations += 1;
     }
+    return destinations;
   }
 
-  private sendTo(peer: MeshPeer, envelope: Envelope): void {
+  private sendTo(peer: MeshPeer, envelope: Envelope): boolean {
     const channel = peer.channel;
-    if (!channel || channel.readyState !== 'open') return;
+    if (!channel || channel.readyState !== 'open') return false;
     try {
       channel.send(JSON.stringify(envelope));
+      return true;
     } catch {
       this.failPeer(peer);
+      return false;
     }
   }
 
@@ -771,6 +803,36 @@ export class MeshManager {
     }
   }
 
+  private peerLabel(peer: MeshPeer | null): TrafficPeer {
+    if (!peer) return null;
+    return peer.isSeed ? 'seed' : peer.humanId;
+  }
+
+  private reportTraffic(report: TrafficReport): void {
+    try {
+      this.options.onTraffic(report);
+    } catch {
+      // Observability must never break transport.
+    }
+  }
+
+  private reportRelay(
+    envelope: Envelope,
+    peer: TrafficPeer,
+    destinations: number,
+    bytes = envelopeBytes(envelope),
+  ): void {
+    if (destinations <= 0 || envelope.author === this.identity.humanId) return;
+    this.reportTraffic({
+      direction: 'relaying',
+      envelope,
+      peer,
+      peerRole: peer ? 'from' : null,
+      destinations,
+      bytes,
+    });
+  }
+
   private setStatus(status: MeshStatus): void {
     if (this.status === status) return;
     this.status = status;
@@ -783,6 +845,15 @@ export class MeshManager {
 }
 
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
+const TEXT_ENCODER = new TextEncoder();
+
+function envelopeBytes(envelope: Envelope): number {
+  try {
+    return TEXT_ENCODER.encode(JSON.stringify(envelope)).length;
+  } catch {
+    return 0;
+  }
+}
 
 export function bootstrapUrlFrom(
   protocol: string,

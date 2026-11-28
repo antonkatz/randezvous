@@ -80,6 +80,12 @@ peer-assisted signalling; connected peers relay `SIGNAL` for other peers.
 10. An image offer shows the sender and a numeric size in MB only. The recipient must accept before any bytes move.
 11. Audio is pairwise, lasts one minute, can be restarted, and never records or uploads.
 
+## Network traffic
+
+The landing hero shows a faded live feed of recent mesh activity on the right side of the orbit. It is a limited view of envelopes `coming` in, going out, and being `relaying` for other peers. Selecting it opens the full network traffic page.
+
+The full page is a session-only, 250-event log with direction filters. Collapsed rows show the short author and route; selecting a row reveals full identifiers, timestamps, sizes, rendezvous or signal metadata, and the peer count. The page never displays signatures, public keys, SDP/ICE bodies, or media bytes. `SIGNAL` appears only as transport metadata; it is not a user-visible application message.
+
 ## Verification
 
 Each human has eight words derived from their public key. Compare those words out loud or through another app, then mark the human verified. There is no pairwise code. Verification is local and persists in IndexedDB.

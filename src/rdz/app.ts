@@ -42,6 +42,7 @@ import {
   sortAnnouncements,
   sortHumans,
 } from './state';
+import { TrafficLog, type TrafficEvent, type TrafficFilter } from './traffic';
 import {
   createMaskRecord,
   deleteEnvelopes,
@@ -112,6 +113,10 @@ export class RdzApp {
   private query = '';
   private landingTab: 'humans' | 'rendezvous' = 'humans';
   private activeChannelId: string | null = null;
+  private readonly traffic = new TrafficLog();
+  private trafficOpen = false;
+  private trafficFilter: TrafficFilter = 'all';
+  private readonly expandedTraffic = new Set<number>();
   private modal: Modal = null;
   private incomingImages = new Map<string, IncomingImageOffer>();
   private incomingAudio = new Map<string, IncomingAudioRequest>();
@@ -230,6 +235,11 @@ export class RdzApp {
           this.mesh?.considerPeer(peer.humanId, peer.publicKey);
           void savePeerRegistryEntry({ ...peer, lastSeen: Date.now() });
         }
+      },
+      onTraffic: (report) => {
+        if (!current()) return;
+        this.traffic.record(report);
+        this.scheduleRender();
       },
     });
   }
@@ -572,8 +582,47 @@ export class RdzApp {
   }
 
   private async handleAction(action: string, id: string, transferId: string): Promise<void> {
+    if (action === 'open-traffic') {
+      this.trafficOpen = true;
+      this.modal = null;
+      this.render();
+      window.scrollTo(0, 0);
+      document.querySelector<HTMLElement>('.traffic-page .back')?.focus();
+      return;
+    }
+    if (action === 'close-traffic') {
+      this.trafficOpen = false;
+      this.render();
+      window.scrollTo(0, 0);
+      const target = this.activeChannelId ? '.channel .back' : '.traffic-stream';
+      document.querySelector<HTMLElement>(target)?.focus();
+      return;
+    }
+    if (action === 'traffic-filter') {
+      this.trafficFilter =
+        id === 'coming' || id === 'going' || id === 'relaying' ? id : 'all';
+      this.render();
+      document.querySelector<HTMLElement>(`.traffic-filter[data-id="${this.trafficFilter}"]`)?.focus();
+      return;
+    }
+    if (action === 'toggle-traffic') {
+      const seq = Number.parseInt(id, 10);
+      if (!Number.isInteger(seq)) return;
+      if (this.expandedTraffic.has(seq)) this.expandedTraffic.delete(seq);
+      else this.expandedTraffic.add(seq);
+      this.render();
+      document.querySelector<HTMLElement>(`.traffic-entry[data-id="${seq}"]`)?.focus();
+      return;
+    }
+    if (action === 'clear-traffic') {
+      this.traffic.clear();
+      this.expandedTraffic.clear();
+      this.render();
+      return;
+    }
     if (action === 'open-channel') {
       this.activeChannelId = id;
+      this.trafficOpen = false;
       this.modal = null;
       this.render();
       return;
@@ -594,6 +643,7 @@ export class RdzApp {
       return;
     }
     if (action === 'new-rendezvous') {
+      this.trafficOpen = false;
       this.modal = { type: 'set-time', channelId: null };
       this.render();
       return;
@@ -976,7 +1026,11 @@ export class RdzApp {
     if (!root) return;
     this.now = Date.now();
 
-    const view = this.activeChannelId ? `channel:${this.activeChannelId}` : 'landing';
+    const view = this.trafficOpen
+      ? 'traffic'
+      : this.activeChannelId
+        ? `channel:${this.activeChannelId}`
+        : 'landing';
     if (view !== this.renderedView) {
       this.renderedView = view;
       this.renderedRegions.clear();
@@ -984,7 +1038,11 @@ export class RdzApp {
     }
 
     this.patchRegion('topbar', this.renderTopbar());
-    if (this.activeChannelId) {
+    if (this.trafficOpen) {
+      this.patchRegion('traffic-summary', this.renderTrafficSummary());
+      this.patchRegion('traffic-filters', this.renderTrafficFilters());
+      this.patchRegion('traffic-list', this.renderTrafficList());
+    } else if (this.activeChannelId) {
       const regions = this.renderChannel(this.activeChannelId);
       for (const [name, html] of Object.entries(regions)) this.patchRegion(name, html);
     } else {
@@ -992,6 +1050,8 @@ export class RdzApp {
       this.patchRegion('landing-tabs', this.renderLandingTabs());
       this.patchRegion('channels-panel', this.renderChannelsPanel());
       this.patchRegion('humans-panel', this.renderHumansPanel());
+      this.patchRegion('traffic-stream-label', this.renderTrafficStreamLabel());
+      this.patchRegion('traffic-stream-rows', this.renderTrafficStreamRows());
     }
     root.querySelector<HTMLElement>('.columns')?.setAttribute('data-tab', this.landingTab);
     this.patchRegion('dock', this.renderDock());
@@ -1008,8 +1068,20 @@ export class RdzApp {
     if (this.renderedRegions.get(name) === html) return;
     const container = document.querySelector<HTMLElement>(`#app [data-region="${name}"]`);
     if (!container) return;
+    const active = document.activeElement;
+    const focused =
+      active instanceof HTMLElement && container.contains(active)
+        ? active.closest<HTMLElement>('[data-action]')
+        : null;
+    const action = focused?.dataset.action;
+    const id = focused?.dataset.id;
     container.innerHTML = html;
     this.renderedRegions.set(name, html);
+    if (action) {
+      const actionSelector = `[data-action="${CSS.escape(action)}"]`;
+      const selector = id ? `${actionSelector}[data-id="${CSS.escape(id)}"]` : actionSelector;
+      container.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+    }
   }
 
   private renderShell(): string {
@@ -1025,7 +1097,13 @@ export class RdzApp {
         </p>
         <header class="topbar" data-region="topbar"></header>
         <div class="region" data-region="screen">
-          ${this.activeChannelId ? this.renderChannelShell() : this.renderLandingShell()}
+          ${
+            this.trafficOpen
+              ? this.renderTrafficShell()
+              : this.activeChannelId
+                ? this.renderChannelShell()
+                : this.renderLandingShell()
+          }
         </div>
       </div>
       <div class="region" data-region="dock"></div>
@@ -1060,6 +1138,10 @@ export class RdzApp {
       <main class="landing">
         <section class="hero">
           <div class="orbit" aria-hidden="true" style="--orbit-delay: ${orbitDelay}"></div>
+          <button class="traffic-stream" data-action="open-traffic" type="button" aria-label="Open network traffic">
+            <span class="traffic-stream-label" data-region="traffic-stream-label"></span>
+            <span class="traffic-stream-rows" data-region="traffic-stream-rows"></span>
+          </button>
           <div class="hero-content">
             <h1>The Internet is Here</h1>
             <button class="primary" data-action="new-rendezvous" type="button">Set a rendezvous</button>
@@ -1113,6 +1195,169 @@ export class RdzApp {
         return `<button class="landing-tab${active ? ' is-active' : ''}" data-action="landing-tab" data-id="${id}" type="button" aria-pressed="${active}">${label}</button>`;
       })
       .join('');
+  }
+
+  private renderTrafficStreamLabel(): string {
+    const counts = this.traffic.counts();
+    return `
+      <span class="traffic-stream-title">network traffic</span>
+      <span class="traffic-stream-counts">
+        <span class="traffic-count is-coming">↓ ${counts.coming}</span>
+        <span class="traffic-count is-going">↑ ${counts.going}</span>
+        <span class="traffic-count is-relaying">⇄ ${counts.relaying}</span>
+        <span class="traffic-stream-open">open ↗</span>
+      </span>
+    `;
+  }
+
+  private renderTrafficStreamRows(): string {
+    const events = this.traffic.all().slice(0, 9);
+    if (events.length === 0) {
+      return '<span class="traffic-stream-empty">waiting for mesh traffic</span>';
+    }
+    return events
+      .map((event) => {
+        const meta = trafficDirectionMeta(event.direction);
+        return `
+          <span class="traffic-stream-row">
+            <span class="traffic-stream-time">${escapeHtml(formatTrafficTime(event.at))}</span>
+            <span class="traffic-stream-dir is-${event.direction}">${meta.glyph} ${meta.label}</span>
+            <span class="traffic-stream-type">${event.type}</span>
+            <span class="traffic-stream-who">${escapeHtml(trafficTickerDetail(event))}</span>
+          </span>
+        `;
+      })
+      .join('');
+  }
+
+  private renderTrafficShell(): string {
+    return `
+      <main class="traffic-page">
+        <header class="traffic-page-head">
+          <button class="back" data-action="close-traffic" type="button">← back</button>
+          <div class="traffic-page-copy">
+            <p class="eyebrow">local observability</p>
+            <h1>Network traffic</h1>
+            <p>Signed envelopes crossing this browser's WebRTC mesh.</p>
+          </div>
+          <button class="small ghost" data-action="clear-traffic" type="button">clear</button>
+        </header>
+        <div class="traffic-summary" data-region="traffic-summary"></div>
+        <div class="traffic-filters" data-region="traffic-filters" role="group" aria-label="Filter traffic"></div>
+        <div class="traffic-list" data-region="traffic-list"></div>
+      </main>
+    `;
+  }
+
+  private renderTrafficSummary(): string {
+    const counts = this.traffic.counts();
+    return TRAFFIC_DIRECTIONS.map(
+      (meta) => `
+        <div class="traffic-stat is-${meta.id}">
+          <span class="traffic-stat-label">${meta.glyph} ${meta.label}</span>
+          <strong>${counts[meta.id]}</strong>
+        </div>
+      `,
+    ).join('');
+  }
+
+  private renderTrafficFilters(): string {
+    const counts = this.traffic.counts();
+    const filters: Array<{ id: TrafficFilter; label: string; count: number }> = [
+      { id: 'all', label: 'all', count: this.traffic.size },
+      ...TRAFFIC_DIRECTIONS.map((meta) => ({
+        id: meta.id,
+        label: meta.label,
+        count: counts[meta.id],
+      })),
+    ];
+    return filters
+      .map(({ id, label, count }) => {
+        const active = this.trafficFilter === id;
+        return `<button class="traffic-filter${active ? ' is-active' : ''}" data-action="traffic-filter" data-id="${id}" type="button" aria-pressed="${active}">${label} <span>${count}</span></button>`;
+      })
+      .join('');
+  }
+
+  private renderTrafficList(): string {
+    const events = this.traffic.filtered(this.trafficFilter);
+    if (events.length === 0) {
+      const message = this.traffic.size
+        ? `No ${this.trafficFilter} traffic in this session.`
+        : 'No traffic yet. Messages appear here as the mesh connects.';
+      return `<p class="empty traffic-empty">${escapeHtml(message)}</p>`;
+    }
+    return events.map((event) => this.renderTrafficEvent(event)).join('');
+  }
+
+  private renderTrafficEvent(event: TrafficEvent): string {
+    const meta = trafficDirectionMeta(event.direction);
+    const expanded = this.expandedTraffic.has(event.seq);
+    const emoji = trafficIdShortEmoji(event.author, 6);
+    const words = trafficIdShortWords(event.author, 4);
+    return `
+      <button class="traffic-entry is-${event.direction}" data-action="toggle-traffic" data-id="${event.seq}" type="button" aria-expanded="${expanded}">
+        <span class="traffic-entry-head">
+          <span class="traffic-dir is-${event.direction}">${meta.glyph} ${meta.label}</span>
+          <span class="traffic-type">${event.type}</span>
+          <span class="traffic-entry-time">${escapeHtml(formatTrafficTime(event.at))}</span>
+        </span>
+        <span class="traffic-entry-body">
+          <span class="traffic-entry-author"><span class="traffic-entry-emoji">${escapeHtml(emoji)}</span><span class="traffic-entry-words">${escapeHtml(words)}</span></span>
+          <span class="traffic-entry-summary">${escapeHtml(trafficEventSummary(event))}</span>
+        </span>
+        ${
+          expanded
+            ? this.renderTrafficDetail(event)
+            : '<span class="traffic-entry-hint">details</span>'
+        }
+      </button>
+    `;
+  }
+
+  private renderTrafficDetail(event: TrafficEvent): string {
+    const rows: Array<[string, string]> = [
+      ['direction', event.direction],
+      ['message', event.signal ? `${event.type} · ${event.signal}` : event.type],
+      ['author', trafficIdFull(event.author)],
+      ['created', `${formatTrafficDate(event.createdAt)} · ${event.createdAt}`],
+      ['observed', `${formatTrafficDate(event.at)} · ${event.at}`],
+      ['size', formatBytes(event.bytes)],
+    ];
+    if (event.direction === 'coming') {
+      rows.push(['received from', trafficPeerFull(event.peer)]);
+    } else if (event.direction === 'going') {
+      rows.push(['sent', trafficGoingRoute(event)]);
+    } else {
+      rows.push([
+        event.replayed ? 'replayed to' : 'forwarded from',
+        trafficPeerFull(event.peer),
+      ]);
+      if (!event.replayed) rows.push(['forwarded to', trafficDestinationCount(event.destinations)]);
+    }
+    if (event.channelId) rows.push(['rendezvous', trafficIdFull(event.channelId)]);
+    if (event.scheduledAt !== null) {
+      rows.push([
+        'scheduled',
+        `${formatTime(event.scheduledAt)}${formatDay(event.scheduledAt, this.now) ? ` · ${formatDay(event.scheduledAt, this.now)}` : ''} · ${event.scheduledAt}`,
+      ]);
+    }
+    if (event.target) rows.push(['target', trafficIdFull(event.target)]);
+    rows.push(['event', `#${event.seq}`]);
+    return `
+      <span class="traffic-detail">
+        ${rows
+          .map(
+            ([label, value]) => `
+              <span class="traffic-detail-row">
+                <span class="traffic-detail-label">${escapeHtml(label)}</span>
+                <span class="traffic-detail-value">${escapeHtml(value)}</span>
+              </span>
+            `,
+          )
+          .join('')}
+      </span>
+    `;
   }
 
   private renderChannelsPanel(): string {
@@ -1548,6 +1793,102 @@ export class RdzApp {
       </div>
     `;
   }
+}
+
+const TRAFFIC_DIRECTIONS = [
+  { id: 'coming', glyph: '↓', label: 'coming' },
+  { id: 'going', glyph: '↑', label: 'going' },
+  { id: 'relaying', glyph: '⇄', label: 'relaying' },
+] as const;
+
+function trafficDirectionMeta(
+  direction: (typeof TRAFFIC_DIRECTIONS)[number]['id'],
+): (typeof TRAFFIC_DIRECTIONS)[number] {
+  return TRAFFIC_DIRECTIONS.find((meta) => meta.id === direction) ?? TRAFFIC_DIRECTIONS[0];
+}
+
+function trafficTickerDetail(event: TrafficEvent): string {
+  if (event.direction === 'coming') return `from ${trafficPeerShort(event.peer)}`;
+  if (event.direction === 'going') {
+    if (event.destinations) return `to ${trafficDestinationCount(event.destinations)}`;
+    return event.type === 'SIGNAL' ? 'queued' : 'no peers yet';
+  }
+  if (event.replayed) return `replay to ${trafficPeerShort(event.peer)}`;
+  return `from ${trafficPeerShort(event.peer)} · ${event.destinations} out`;
+}
+
+function trafficEventSummary(event: TrafficEvent): string {
+  if (event.direction === 'coming') return `from ${trafficPeerLabel(event.peer)}`;
+  if (event.direction === 'going') {
+    if (event.destinations) return `sent to ${trafficDestinationCount(event.destinations)}`;
+    return event.type === 'SIGNAL' ? 'queued for the first peer' : 'no peers yet';
+  }
+  return event.replayed
+    ? `replayed to ${trafficPeerLabel(event.peer)}`
+    : `from ${trafficPeerLabel(event.peer)} · forwarded to ${trafficDestinationCount(event.destinations)}`;
+}
+
+function trafficGoingRoute(event: TrafficEvent): string {
+  if (event.destinations) return `sent to ${trafficDestinationCount(event.destinations)}`;
+  return event.type === 'SIGNAL' ? 'queued for the first peer' : 'no peers yet';
+}
+
+function trafficDestinationCount(count: number): string {
+  return `${count} peer${count === 1 ? '' : 's'}`;
+}
+
+function trafficPeerShort(peer: TrafficEvent['peer']): string {
+  if (!peer) return 'mesh';
+  if (peer === 'seed') return 'seed';
+  return trafficIdShortEmoji(peer, 4);
+}
+
+function trafficPeerLabel(peer: TrafficEvent['peer']): string {
+  if (!peer) return 'mesh';
+  if (peer === 'seed') return 'seed';
+  return `${trafficIdShortEmoji(peer, 6)} ${trafficIdShortWords(peer, 4)}`;
+}
+
+function trafficPeerFull(peer: TrafficEvent['peer']): string {
+  if (!peer) return 'mesh';
+  if (peer === 'seed') return 'seed';
+  return trafficIdFull(peer);
+}
+
+function trafficIdShortEmoji(id: string, length: number): string {
+  try {
+    return formatEmoji(shortEmoji(idToEmoji(id), length));
+  } catch {
+    return 'peer';
+  }
+}
+
+function trafficIdShortWords(id: string, length: number): string {
+  try {
+    return formatWords(shortWords(idToWords(id), length));
+  } catch {
+    return id;
+  }
+}
+
+function trafficIdFull(id: string): string {
+  try {
+    return `${formatEmoji(idToEmoji(id))} · ${formatWords(idToWords(id))}`;
+  } catch {
+    return id;
+  }
+}
+
+function formatTrafficTime(at: number): string {
+  const date = new Date(at);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+}
+
+function formatTrafficDate(at: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  }).format(at);
 }
 
 function envelopeExpiry(envelope: Envelope): number {
