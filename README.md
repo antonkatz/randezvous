@@ -138,7 +138,8 @@ Environment:
 - Seedless first contact requires an existing signalling path. A cached peer registry helps reconnect, but a browser cannot receive inbound sockets on its own.
 - The app stores masks, verification, the peer registry, pins, and recent signed messages locally. Images are not kept after dismissal.
 - Clearing site data removes every mask. There is no recovery or multi-device sync.
-- Auto-banning peers that send future `PING` timestamps is deferred; invalid messages are rejected.
+- Messages dated more than one minute in the future are rejected. Ordinary phone/desktop clock skew up to one minute is tolerated; larger skew makes the affected request time out with a visible notice instead of hanging.
+- Auto-banning peers that send invalid `PING` timestamps is deferred.
 
 ## Third-party notices
 

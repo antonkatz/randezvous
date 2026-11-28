@@ -169,6 +169,43 @@ test('one-minute audio request, consent, live panel, and end', async ({ browser 
   await a.page.getByRole('button', { name: 'end', exact: true }).click();
   await expect(a.page.locator('.audio-panel')).toHaveCount(0);
   await expect(b.page.locator('.audio-panel')).toHaveCount(0);
+  await expect(b.page.getByRole('status')).toContainText(
+    'The other person ended the voice conversation.',
+  );
+
+  await a.context.close();
+  await b.context.close();
+});
+
+test('declining a voice request tells the requester', async ({ browser }) => {
+  const { a, b, bWords } = await setupPair(browser);
+
+  await humanRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
+  await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
+  await b.page.getByRole('button', { name: 'decline', exact: true }).click();
+
+  await expect(a.page.getByRole('status')).toContainText('The voice request was declined.');
+  await expect(a.page.locator('.audio-panel')).toHaveCount(0);
+  await expect(b.page.locator('.audio-panel')).toHaveCount(0);
+
+  await a.context.close();
+  await b.context.close();
+});
+
+test('a phone clock ahead does not strand the voice call', async ({ browser }) => {
+  const { a, b, bWords } = await setupPair(browser);
+  await b.page.clock.install({ time: Date.now() + 30_000 });
+
+  await humanRow(a.page, bWords).getByRole('button', { name: 'open voice' }).click();
+  await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
+  await b.page.getByRole('button', { name: 'accept', exact: true }).click();
+
+  await expect(a.page.locator('.audio-panel')).toContainText('live');
+  await expect(b.page.locator('.audio-panel')).toContainText('live');
+
+  await a.page.getByRole('button', { name: 'end', exact: true }).click();
+  await expect(a.page.locator('.audio-panel')).toHaveCount(0);
+  await expect(b.page.locator('.audio-panel')).toHaveCount(0);
 
   await a.context.close();
   await b.context.close();
@@ -249,8 +286,8 @@ test('a GOING announcement leaves the channel three minutes after its time', asy
     })
     .toBeGreaterThan(0);
   await openChannel(bPage, channel);
-  // Put A's clock ahead so strict no-future validation accepts B's later
-  // messages while B still accepts A's earlier GOING.
+  // Put A's clock slightly ahead so B's later messages still fall within the
+  // one-minute skew allowance while B still accepts A's earlier GOING.
   await aPage.clock.fastForward(10_000);
   await announce(bPage, time);
   await expect

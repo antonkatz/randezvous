@@ -78,7 +78,7 @@ The 24/7 peer is optional infrastructure and must behave as an ordinary peer. No
 - Sent every 3 minutes by default, best effort. Send promptly when the page becomes visible.
 - A valid `PING` marks the human online for 5 minutes from receipt.
 - Presence expires locally after 5 minutes without a fresh `PING`.
-- Strict time rule: any message whose `created-at` is later than the receiver's current time is invalid. No future tolerance.
+- Bounded time rule: a message may be up to one minute ahead of the receiver's clock. Farther-future messages are invalid. This tolerates ordinary network and phone/desktop clock skew.
 - `PING` uses flood-once relay.
 - Local auto-ban for invalid `PING` creators is deferred. The current build rejects the message.
 
@@ -230,7 +230,7 @@ Work in this order and keep the build green as often as practical:
    - 88-bit IDs, word/emoji encoding, display disambiguation.
    - Signed envelope format, canonical encoding, dedup hash.
    - `PING`, `GOING`, `SIGNAL` types and validation.
-   - Floors: strict non-future `created-at`, expiry, signature verification.
+   - Floors: bounded clock-skew `created-at`, expiry, signature verification.
 
 3. **Relay, presence, and rendezvous state**
    - Flood-once relay, replay on new peer, dedup cache, purge.

@@ -8,6 +8,7 @@ import {
   isValidGoing,
   isValidPing,
   isValidSignal,
+  MAX_CLOCK_SKEW_MS,
   verifyEnvelope,
 } from '../../src/rdz/crypto';
 import type { Envelope, GoingPayload } from '../../src/rdz/types';
@@ -66,8 +67,30 @@ describe('message freshness', () => {
       ...overrides,
     }) as Envelope;
 
-  it('rejects future messages', () => {
-    expect(isNotFromFuture(base({ createdAt: Date.now() + 1_000 }))).toBe(false);
+  it('tolerates bounded clock skew but rejects far-future messages', () => {
+    const now = Date.now();
+    expect(isNotFromFuture(base({ createdAt: now + 1_000 }), now)).toBe(true);
+    expect(isNotFromFuture(base({ createdAt: now + MAX_CLOCK_SKEW_MS }), now)).toBe(true);
+    expect(isNotFromFuture(base({ createdAt: now + MAX_CLOCK_SKEW_MS + 1 }), now)).toBe(false);
+  });
+
+  it('accepts a slightly future SIGNAL so a fast phone can complete a call', () => {
+    const now = Date.now();
+    const envelope = base({
+      createdAt: now + 30_000,
+      type: 'SIGNAL',
+      payload: {
+        kind: 'SIGNAL',
+        target: 'target',
+        channelId: 'channel',
+        signal: 'audio-accept',
+        transferId: 'transfer',
+      },
+    });
+    expect(isValidSignal(envelope, now)).toBe(true);
+    expect(isValidSignal(base({ ...envelope, createdAt: now + MAX_CLOCK_SKEW_MS + 1 }), now)).toBe(
+      false,
+    );
   });
 
   it('expires PING after five minutes', () => {

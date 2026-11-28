@@ -24,6 +24,8 @@ const ALLOWED_IMAGE_TYPES = new Set([
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const CHUNK_SIZE = 64 * 1024;
 const OFFER_TIMEOUT_MS = 120_000;
+const AUDIO_RESPONSE_TIMEOUT_MS = 2 * 60_000;
+const AUDIO_CONNECT_TIMEOUT_MS = 30_000;
 const AUDIO_LIMIT_MS = 60_000;
 
 interface RtcDeps {
@@ -42,6 +44,7 @@ interface RtcDeps {
   onImageFailed: (transferId: string, message: string) => void;
   onAudioRequest: (request: IncomingAudioRequest) => void;
   onAudioState: (session: AudioSession | null) => void;
+  onAudioNotice: (message: string) => void;
 }
 
 interface OutgoingImage {
@@ -236,36 +239,30 @@ export class RtcManager {
       remoteStream: null,
       error: null,
     });
+    // Wait for the recipient to respond. Once they press accept they send an
+    // interim "accepting" signal, so this timer never runs during their
+    // microphone permission prompt.
     this.outgoingAudio.timer = window.setTimeout(() => {
       if (this.outgoingAudio?.transferId === transferId && !this.outgoingAudio.startedAt) {
+        this.deps.sendSignal(target, channelId, 'audio-decline', transferId);
+        this.deps.onAudioNotice('No answer to the voice request.');
         this.closeAudio(false);
       }
-    }, 30_000);
+    }, AUDIO_RESPONSE_TIMEOUT_MS);
     this.deps.sendSignal(target, channelId, 'audio-request', transferId);
   }
 
   async acceptAudio(transferId: string): Promise<void> {
     const request = this.incomingAudio.get(transferId);
-    if (!request) return;
-    request.accepted = true;
-    try {
-      request.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      this.deps.sendSignal(request.sender, request.channelId, 'audio-decline', transferId);
-      this.incomingAudio.delete(transferId);
-      this.setAudio(null);
+    if (!request) {
+      this.deps.onAudioNotice('That voice request is no longer available.');
       return;
     }
-    this.deps.sendSignal(request.sender, request.channelId, 'audio-accept', transferId);
-    request.timer = window.setTimeout(() => {
-      if (this.incomingAudio.get(transferId)?.startedAt === null) {
-        closePeer(request.pc);
-        for (const track of request.stream?.getTracks() ?? []) track.stop();
-        this.connections.release(`audio:in:${transferId}`);
-        this.incomingAudio.delete(transferId);
-        this.setAudio(null);
-      }
-    }, 30_000);
+    if (request.accepted) return;
+    request.accepted = true;
+    // Tell the initiator we saw the request before the browser prompt opens.
+    // This stops their no-answer timer while permission is pending.
+    this.deps.sendSignal(request.sender, request.channelId, 'audio-accepting', transferId);
     this.setAudio({
       transferId,
       peer: request.sender,
@@ -275,14 +272,40 @@ export class RtcManager {
       remoteStream: null,
       error: null,
     });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (error) {
+      if (this.incomingAudio.get(transferId) === request) {
+        this.deps.sendSignal(request.sender, request.channelId, 'audio-decline', transferId);
+        this.dropIncomingAudio(transferId);
+        this.deps.onAudioNotice(microphoneErrorMessage(error));
+      }
+      return;
+    }
+    if (this.stopped || this.incomingAudio.get(transferId) !== request) {
+      stopStream(stream);
+      return;
+    }
+    request.stream = stream;
+    this.deps.sendSignal(request.sender, request.channelId, 'audio-accept', transferId);
+    request.timer = window.setTimeout(() => {
+      if (this.incomingAudio.get(transferId) === request && !request.startedAt) {
+        this.deps.sendSignal(request.sender, request.channelId, 'audio-decline', transferId);
+        this.deps.onAudioNotice('The other person did not start the voice connection.');
+        this.dropIncomingAudio(transferId);
+      }
+    }, AUDIO_RESPONSE_TIMEOUT_MS);
   }
 
   declineAudio(transferId: string): void {
     const request = this.incomingAudio.get(transferId);
-    if (!request) return;
+    if (!request) {
+      this.deps.onAudioNotice('That voice request is no longer available.');
+      return;
+    }
     this.deps.sendSignal(request.sender, request.channelId, 'audio-decline', transferId);
-    this.incomingAudio.delete(transferId);
-    this.setAudio(null);
+    this.dropIncomingAudio(transferId);
   }
 
   toggleMute(): void {
@@ -424,6 +447,28 @@ export class RtcManager {
       return;
     }
 
+    if (payload.signal === 'audio-accepting') {
+      const outgoing = this.outgoingAudio?.transferId === transferId ? this.outgoingAudio : null;
+      if (!outgoing) return;
+      window.clearTimeout(outgoing.timer);
+      if (this.audioSession?.transferId === transferId) {
+        this.setAudio({ ...this.audioSession, phase: 'connecting' });
+      }
+      outgoing.timer = window.setTimeout(() => {
+        if (this.outgoingAudio === outgoing && !outgoing.startedAt) {
+          this.deps.sendSignal(
+            outgoing.target,
+            outgoing.channelId,
+            'audio-decline',
+            outgoing.transferId,
+          );
+          this.deps.onAudioNotice('The other person did not finish starting their microphone.');
+          this.closeAudio(false);
+        }
+      }, AUDIO_RESPONSE_TIMEOUT_MS);
+      return;
+    }
+
     if (payload.signal === 'audio-accept') {
       if (this.outgoingAudio?.transferId === transferId) await this.startAudioOffer(this.outgoingAudio);
       return;
@@ -431,20 +476,26 @@ export class RtcManager {
 
     if (payload.signal === 'audio-decline') {
       if (this.outgoingAudio?.transferId === transferId) {
-        this.deps.onAudioState(null);
+        this.deps.onAudioNotice('The voice request was declined.');
         this.closeAudio(false);
+      } else if (this.incomingAudio.has(transferId)) {
+        this.deps.onAudioNotice('The voice request was cancelled.');
+        this.dropIncomingAudio(transferId);
       }
       return;
     }
 
     if (payload.signal === 'audio-end') {
-      if (this.outgoingAudio?.transferId === transferId) this.closeAudio(false);
+      const outgoing = this.outgoingAudio?.transferId === transferId ? this.outgoingAudio : null;
       const incoming = this.incomingAudio.get(transferId);
-      if (incoming) {
-        closePeer(incoming.pc);
-        this.incomingAudio.delete(transferId);
-        this.setAudio(null);
+      if (outgoing || incoming) {
+        const live = Boolean(outgoing?.startedAt || incoming?.startedAt);
+        this.deps.onAudioNotice(
+          live ? 'The other person ended the voice conversation.' : 'The voice request ended.',
+        );
       }
+      if (outgoing) this.closeAudio(false);
+      this.dropIncomingAudio(transferId);
       return;
     }
 
@@ -572,7 +623,7 @@ export class RtcManager {
       if (incoming && incoming.accepted) {
         if (!this.connections.tryAcquire(`image:in:${incoming.transferId}`)) {
           this.deps.sendSignal(incoming.sender, incoming.channelId, 'image-decline', incoming.transferId);
-          this.incomingImages.delete(incoming.transferId);
+          this.failIncomingImage(incoming, 'Too many live connections are open right now.');
           return;
         }
         const peer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
@@ -602,7 +653,8 @@ export class RtcManager {
       if (incomingAudio?.accepted) {
         if (!this.connections.tryAcquire(`audio:in:${incomingAudio.transferId}`)) {
           this.deps.sendSignal(incomingAudio.sender, incomingAudio.channelId, 'audio-decline', incomingAudio.transferId);
-          this.incomingAudio.delete(incomingAudio.transferId);
+          this.deps.onAudioNotice('Too many live connections are open right now.');
+          this.dropIncomingAudio(incomingAudio.transferId);
           return;
         }
         const peer = new RTCPeerConnection({ iceServers: ICE_SERVERS });
@@ -616,11 +668,7 @@ export class RtcManager {
             (peer.connectionState === 'failed' || peer.connectionState === 'closed') &&
             this.incomingAudio.get(incomingAudio.transferId) === incomingAudio
           ) {
-            closePeer(incomingAudio.pc);
-            for (const track of incomingAudio.stream?.getTracks() ?? []) track.stop();
-            this.connections.release(`audio:in:${incomingAudio.transferId}`);
-            this.incomingAudio.delete(incomingAudio.transferId);
-            this.setAudio(null);
+            this.dropIncomingAudio(incomingAudio.transferId);
           }
         });
         if (incomingAudio.stream) {
@@ -633,6 +681,24 @@ export class RtcManager {
         this.deps.sendSignal(incomingAudio.sender, incomingAudio.channelId, 'answer', incomingAudio.transferId, {
           sdp: plainSdp(peer.localDescription),
         });
+        // The caller only sends an offer after its own microphone is ready, so
+        // it is safe to time out the remaining connection setup now.
+        window.clearTimeout(incomingAudio.timer);
+        incomingAudio.timer = window.setTimeout(() => {
+          if (
+            this.incomingAudio.get(incomingAudio.transferId) === incomingAudio &&
+            !incomingAudio.startedAt
+          ) {
+            this.deps.sendSignal(
+              incomingAudio.sender,
+              incomingAudio.channelId,
+              'audio-end',
+              incomingAudio.transferId,
+            );
+            this.deps.onAudioNotice('The voice connection timed out.');
+            this.dropIncomingAudio(incomingAudio.transferId);
+          }
+        }, AUDIO_CONNECT_TIMEOUT_MS);
       }
       return;
     }
@@ -741,18 +807,34 @@ export class RtcManager {
   }
 
   private async startAudioOffer(outgoing: OutgoingAudio): Promise<void> {
+    if (this.outgoingAudio !== outgoing) return;
+    window.clearTimeout(outgoing.timer);
+    outgoing.timer = 0;
     if (!this.connections.tryAcquire(`audio:out:${outgoing.transferId}`)) {
       this.deps.sendSignal(outgoing.target, outgoing.channelId, 'audio-decline', outgoing.transferId);
+      this.deps.onAudioNotice('Too many live connections are open right now.');
       this.closeAudio(false);
       return;
     }
+    if (this.audioSession?.transferId === outgoing.transferId) {
+      this.setAudio({ ...this.audioSession, phase: 'connecting' });
+    }
+    let stream: MediaStream;
     try {
-      outgoing.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      this.deps.sendSignal(outgoing.target, outgoing.channelId, 'audio-decline', outgoing.transferId);
-      this.closeAudio(false);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (error) {
+      if (this.outgoingAudio === outgoing) {
+        this.deps.sendSignal(outgoing.target, outgoing.channelId, 'audio-decline', outgoing.transferId);
+        this.deps.onAudioNotice(microphoneErrorMessage(error));
+        this.closeAudio(false);
+      }
       return;
     }
+    if (this.stopped || this.outgoingAudio !== outgoing) {
+      stopStream(stream);
+      return;
+    }
+    outgoing.stream = stream;
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     outgoing.pc = pc;
     for (const track of outgoing.stream.getTracks()) pc.addTrack(track, outgoing.stream);
@@ -771,9 +853,19 @@ export class RtcManager {
     this.wireIce(pc, outgoing.target, outgoing.channelId, outgoing.transferId);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    if (this.outgoingAudio !== outgoing) return;
     this.deps.sendSignal(outgoing.target, outgoing.channelId, 'offer', outgoing.transferId, {
       sdp: plainSdp(pc.localDescription),
     });
+    // Start counting only after the microphone is ready and the offer is out;
+    // the earlier wait belongs to the recipient, not to the connection.
+    window.clearTimeout(outgoing.timer);
+    outgoing.timer = window.setTimeout(() => {
+      if (this.outgoingAudio === outgoing && !outgoing.startedAt) {
+        this.deps.onAudioNotice('The voice connection timed out.');
+        this.closeAudio(true);
+      }
+    }, AUDIO_CONNECT_TIMEOUT_MS);
   }
 
   private startOutgoingAudio(outgoing: OutgoingAudio): void {
@@ -841,6 +933,18 @@ export class RtcManager {
     this.deps.onAudioState(null);
   }
 
+  private dropIncomingAudio(transferId: string): void {
+    const incoming = this.incomingAudio.get(transferId);
+    if (!incoming) return;
+    window.clearTimeout(incoming.timer);
+    window.clearInterval(incoming.ticker);
+    stopStream(incoming.stream);
+    closePeer(incoming.pc);
+    this.connections.release(`audio:in:${transferId}`);
+    this.incomingAudio.delete(transferId);
+    if (this.audioSession?.transferId === transferId) this.setAudio(null);
+  }
+
   private setAudio(session: AudioSession | null): void {
     this.audioSession = session;
     this.deps.onAudioState(session);
@@ -895,5 +999,28 @@ function closePeer(pc: RTCPeerConnection | null): void {
     pc.close();
   } catch {
     // Ignore.
+  }
+}
+
+function stopStream(stream: MediaStream | null): void {
+  for (const track of stream?.getTracks() ?? []) track.stop();
+}
+
+function microphoneErrorMessage(error: unknown): string {
+  const name =
+    typeof error === 'object' && error !== null && 'name' in error
+      ? String((error as { name?: unknown }).name)
+      : '';
+  switch (name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'Microphone access was not allowed.';
+    case 'NotFoundError':
+      return 'No microphone was found.';
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'The microphone is unavailable.';
+    default:
+      return 'Could not start the microphone.';
   }
 }

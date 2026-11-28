@@ -6,7 +6,12 @@ import { extname, resolve, sep } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { RTCPeerConnection, type RTCDataChannel } from 'werift';
 import { bytesToBase64Url } from '../src/rdz/bytes';
-import { envelopeId, verifyEnvelope, verifyText } from '../src/rdz/crypto';
+import {
+  envelopeId,
+  MAX_CLOCK_SKEW_MS,
+  verifyEnvelope,
+  verifyText,
+} from '../src/rdz/crypto';
 import { humanIdFromPublicKey } from '../src/rdz/ids';
 import { envelopeTransportKey, meshHelloBody } from '../src/rdz/mesh-control';
 import type { Envelope } from '../src/rdz/types';
@@ -158,7 +163,7 @@ async function handleData(session: Session, raw: string): Promise<void> {
 async function processEnvelopeData(session: Session, parsed: unknown): Promise<void> {
   const envelope = await verifyEnvelope(parsed);
   if (!envelope) return;
-  if (envelope.createdAt > Date.now()) return;
+  if (envelope.createdAt > Date.now() + MAX_CLOCK_SKEW_MS) return;
 
   if (envelope.type === 'GOING' && envelope.payload.kind === 'GOING') {
     if (envelope.payload.scheduledAt + GOING_GRACE_MS <= Date.now()) return;

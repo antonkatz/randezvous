@@ -31,6 +31,7 @@ export type SignalKind =
   | 'image-accept'
   | 'image-decline'
   | 'audio-request'
+  | 'audio-accepting'
   | 'audio-accept'
   | 'audio-decline'
   | 'audio-end'

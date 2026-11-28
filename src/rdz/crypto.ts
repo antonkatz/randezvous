@@ -134,8 +134,17 @@ export const PING_INTERVAL_MS = 3 * 60 * 1000;
 export const ANNOUNCEMENT_GRACE_MS = 3 * 60 * 1000;
 export const SIGNAL_TTL_MS = 2 * 60 * 1000;
 
+/**
+ * Signed messages dated slightly in the future are still accepted. Two devices
+ * in the same rendezvous can drift apart without either clock being wrong on
+ * purpose; rejecting a phone's accept or answer because it is a minute ahead
+ * strands the call. The allowance is bounded so a bad clock cannot keep a
+ * message alive indefinitely.
+ */
+export const MAX_CLOCK_SKEW_MS = 60 * 1000;
+
 export function isNotFromFuture(envelope: Envelope, now = Date.now()): boolean {
-  return envelope.createdAt <= now;
+  return envelope.createdAt <= now + MAX_CLOCK_SKEW_MS;
 }
 
 export function isValidPing(envelope: Envelope, now = Date.now()): boolean {

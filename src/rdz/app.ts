@@ -201,6 +201,9 @@ export class RdzApp {
         onAudioState: (session) => {
           if (current()) this.handleAudioState(session);
         },
+        onAudioNotice: (message) => {
+          if (current()) this.showToast(message);
+        },
       },
       this.budget,
     );
@@ -253,6 +256,11 @@ export class RdzApp {
     this.fileInput.addEventListener('change', () => void this.onFileChosen());
 
     root.addEventListener('click', (event) => {
+      if (this.remoteAudio?.srcObject) {
+        // Browsers can block playback until a gesture. Every click is a chance
+        // to restore the other person's voice.
+        void this.remoteAudio.play().catch(() => undefined);
+      }
       const target = event.target as HTMLElement;
       const action = target.closest<HTMLElement>('[data-action]')?.dataset.action;
       if (!action) return;
@@ -484,6 +492,9 @@ export class RdzApp {
     if (progress.phase === 'declined') {
       this.showToast('The image was declined.');
     }
+    if (progress.phase === 'failed') {
+      this.showToast(progress.error ?? 'The image transfer failed.');
+    }
     this.scheduleRender();
   }
 
@@ -531,7 +542,11 @@ export class RdzApp {
       }
       if (this.remoteAudio.srcObject !== session.remoteStream) {
         this.remoteAudio.srcObject = session.remoteStream;
-        void this.remoteAudio.play().catch(() => undefined);
+        void this.remoteAudio.play().catch(() => {
+          if (this.remoteAudio?.srcObject === session.remoteStream) {
+            this.showToast('Your browser blocked the incoming audio. Click the page to enable sound.');
+          }
+        });
       }
     } else if (this.remoteAudio) {
       this.remoteAudio.pause();
@@ -549,6 +564,14 @@ export class RdzApp {
   }
 
   private async onAction(action: string, id: string, transferId: string): Promise<void> {
+    try {
+      await this.handleAction(action, id, transferId);
+    } catch {
+      this.showToast('Something went wrong. Try again.');
+    }
+  }
+
+  private async handleAction(action: string, id: string, transferId: string): Promise<void> {
     if (action === 'open-channel') {
       this.activeChannelId = id;
       this.modal = null;
@@ -687,6 +710,10 @@ export class RdzApp {
         this.showToast('Finish the current image first.');
         return;
       }
+      if (!this.incomingImages.has(transferId)) {
+        this.showToast('That image offer is no longer available.');
+        return;
+      }
       await this.rtc.acceptImage(transferId);
       this.incomingImages.delete(transferId);
       this.render();
@@ -703,9 +730,11 @@ export class RdzApp {
         this.showToast('Finish the current voice conversation first.');
         return;
       }
-      await this.rtc.acceptAudio(transferId);
+      // The request becomes a connecting voice panel immediately; the browser
+      // permission prompt is part of that panel, not a second listing.
       this.incomingAudio.delete(transferId);
       this.render();
+      await this.rtc.acceptAudio(transferId);
       return;
     }
     if (action === 'decline-audio') {
@@ -732,6 +761,14 @@ export class RdzApp {
   }
 
   private async onSubmit(form: HTMLFormElement): Promise<void> {
+    try {
+      await this.handleSubmit(form);
+    } catch {
+      this.showToast('Something went wrong. Try again.');
+    }
+  }
+
+  private async handleSubmit(form: HTMLFormElement): Promise<void> {
     if (form.dataset.form === 'set-time') {
       const input = form.querySelector<HTMLInputElement>('input[name="time"]');
       const channelId = form.dataset.channel ?? '';

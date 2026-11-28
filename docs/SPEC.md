@@ -139,6 +139,7 @@ As a participant, I want to choose an image and offer it to a specific human, so
 - No image bytes are sent before that human accepts.
 - I can have only one outgoing image transfer in progress at a time.
 - The next send becomes available only after the current recipient accepts and the image is received, or the offer is declined or fails.
+- If an image offer is declined, times out, or fails, I am told what happened instead of the transfer disappearing silently.
 - I may send again to the same human or to a different human; each send has its own image choice and its own consent.
 - Each transfer completes and is acknowledged independently.
 - An accepted image is displayed in the browser.
@@ -175,6 +176,9 @@ As a participant, I want to request a live audio channel with another participan
 - Either participant can mute or end the conversation early.
 - Audio is live only. It is never recorded, transcribed, or uploaded.
 - If the recipient declines, no audio starts and the rest of the rendezvous continues normally.
+- The recipient signals that they chose accept before their microphone permission prompt opens, so the initiator knows the request was seen.
+- If the request is declined, cancelled, times out, or microphone permission fails, I am told what happened instead of the voice panel disappearing silently.
+- If either device's clock is too far ahead for its signals to be accepted, the request times out with a visible message instead of staying in requesting indefinitely.
 - Audio ends at the one-minute cap or on disconnect.
 
 ### US-13 — I can keep multiple masks and activate one at a time
@@ -224,6 +228,21 @@ As someone scanning the landing page, I want each rendezvous emoji string to be 
 - The prefix never exceeds the full 11-emoji canonical rendezvous ID. An 88-bit ID has exactly 11 emoji of 8 bits each, so 11 emoji always distinguish two different IDs.
 - The rendered prefix is never visually truncated with an ellipsis or clipped by the layout.
 - Extending the displayed prefix does not change the canonical rendezvous ID.
+
+### US-16 — I am told when something fails
+
+As anyone using RDZ, I want a visible explanation whenever an action or a live session fails or is dropped, so that I am never left guessing what happened.
+
+**Acceptance criteria**
+
+- Every user-initiated action that fails produces a visible, plain-language message.
+- Every pending offer, request, transfer, or live session that is removed because it failed, was declined, timed out, was cancelled, or was ended by the other person is accompanied by a message at the moment it disappears.
+- A failure never looks like success or like a silent disappearance.
+- Microphone permission denial, a missing or busy microphone, blocked audio playback, connection timeout, declined or cancelled requests, failed transfers, a full connection budget, and storage failures that prevent a user action are all reported.
+- The message says what happened and, where possible, what the user can do next.
+- A failed action leaves the user able to retry without reloading the page.
+- Invalid, duplicate, malformed, or unauthorized inbound network traffic is ignored without a user-facing message. It is not a user action and must not produce error spam.
+- A notice never blocks the page and never interrupts an ongoing live session.
 
 ## Functional Requirements
 
@@ -275,7 +294,8 @@ The 24/7 RDZ peer is optional. No core function may depend on it. Presence, rend
 - `SIGNAL` is a peer connection-mechanics message, defined in FR-18. It is not user-visible.
 - Every peer message is cryptographically signed by its creator.
 - Every signed envelope carries the creator's public key. The human ID is derived from that key, so a receiver can verify the author without a separate key-discovery service.
-- No message may carry a `created-at` later than the receiver's current time. Messages from the future are invalid.
+- A message may carry a `created-at` up to one minute later than the receiver's current time, to tolerate ordinary network and device clock-skew effects. Messages dated farther in the future are invalid.
+- A rejected message must never leave a user action hanging. If clock skew prevents a request or session message from being accepted, the affected request or session times out with a visible message.
 - Relays preserve the original signature and never re-sign a message.
 - A message with an invalid signature is rejected.
 
@@ -290,7 +310,7 @@ PING [human id] [created-at] [signature]
 - Receiving a valid `PING` marks that human online for 5 minutes.
 - Presence expires locally after 5 minutes without a fresh `PING`.
 - `PING` uses flood-once relay.
-- A `PING` whose `created-at` is later than the receiver's current time is invalid. There is no future tolerance.
+- A `PING` whose `created-at` is more than one minute later than the receiver's current time is invalid.
 - A local, non-gossiped auto-ban for invalid `PING` creators is recorded in `docs/FUTURE_SPEC.md`.
 
 ### FR-6 — GOING
@@ -437,6 +457,10 @@ The specification does not promise that every peer can reach every other peer. N
 - Audio ends at the one-minute cap or on disconnect.
 - Audio uses WebRTC media over the authenticated peer connection. No audio bytes pass through any relay.
 - Audio requests and consent are connection mechanics, not `PING` or `GOING` messages.
+- Audio control signals are `audio-request`, `audio-accepting`, `audio-accept`, `audio-decline`, `audio-end`, and `audio-mute`.
+- `audio-accepting` means the recipient chose accept and is granting microphone permission. It is not consent for audio to flow.
+- `audio-accept` is sent only after the recipient's microphone stream is ready.
+- Waiting for an answer, for the recipient's microphone, and for the connection is bounded. Every timeout closes the pending voice session and is reported visibly.
 
 ### FR-18 — SIGNAL envelopes
 
@@ -469,6 +493,19 @@ The specification does not promise that every peer can reach every other peer. N
 - Existing single-mask data is migrated into the first mask.
 - Removing a mask deletes its private key and local verification state. Messages already signed by that mask remain valid. There is no recovery.
 - `GOING` announcements already signed by a mask are not retracted or reassigned when the active mask changes. They remain valid until `T + 3`.
+
+### FR-20 — No silent failures
+
+- Every failure of a locally initiated action MUST be reported visibly in the interface.
+- A pending request, offer, transfer, or live session that is removed because of failure, decline, cancellation, timeout, or a remote end MUST be accompanied by a user-visible message.
+- Error messages MUST use plain language. Raw exception names, stack traces, and protocol codes MUST NOT be shown.
+- Notices MUST be announced to assistive technology and remain visible long enough to read.
+- A failed action MUST release its pending UI state so the user can retry without reloading.
+- A request that receives no response MUST time out and notify instead of waiting indefinitely.
+- A local user's own explicit cancel, decline, dismiss, or end action does not require an error message.
+- Malformed, duplicate, expired, or unauthorized inbound messages MUST be dropped silently for safety. They are not failures of a user action.
+- Blocked media playback MUST be reported and MUST be retryable through a user gesture.
+- Losing a peer connection, timing out a request, or leaving a channel while media is pending MUST NOT remove a media panel without a notice.
 
 ## Visual User Stories
 
@@ -523,6 +560,10 @@ The landing hero carries a subtle elliptical orbit with one slow-moving dot behi
 ### VS-13 — Masthead and marks
 
 The app shows a centered, low-contrast masthead reading `rendezvous ✳ by [InstantHero mark]` above the top bar. The three intersecting lines are the RDZ mark and also appear in the top-bar brand button. The InstantHero stamp is decorative. The masthead does not intercept input.
+
+### VS-14 — Failure notices
+
+Failures appear as a short, plain-language notice fixed at the bottom center of the screen. The notice is announced with `role="status"`, stays visible for at least four seconds, does not block interaction, and disappears on its own. Removing a failed or declined panel is always paired with a notice that explains why it went away.
 
 ---
 
