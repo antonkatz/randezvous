@@ -543,6 +543,8 @@ test('I see my active mask in the online list', async ({ browser }) => {
 
   await expect(a.page.locator('.masthead-name')).toHaveText('rendezvous');
   await expect(a.page.locator('.masthead-stamp svg')).toBeVisible();
+  await expect(a.page.locator('.masthead-link')).toHaveAttribute('href', 'https://instanthero.ca');
+  await expect(a.page.locator('.masthead-link')).toHaveAttribute('target', '_blank');
   const humanEmoji = (await selfRow.locator('.human-emoji').innerText()).trim();
   const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
   expect([...segmenter.segment(humanEmoji)].length).toBeGreaterThanOrEqual(6);

@@ -94,6 +94,7 @@ Decisions made where `docs/SPEC.md` is silent or incomplete. Append new entries;
 71. **No payload bodies.** Traffic rows never display envelope signatures, public keys, SDP, ICE candidates, media bytes, or other payload bodies. `SIGNAL` appears only as transport metadata with its kind and routing fields. It remains absent from human and rendezvous message surfaces; the traffic page is a local observability view, not a new application message type.
 72. **Traffic instrumentation.** `MeshManager` reports a `coming` event once for each newly accepted inbound envelope, a `going` event for each locally signed publish with its destination count, and a `relaying` event whenever an accepted envelope is forwarded to at least one peer. Replay to a newly opened peer is tagged as `relaying` with a replay flag. Duplicate, invalid, and expired envelopes stay silent, matching FR-20's rule against error spam.
 73. **Direction labels.** The traffic UI displays `coming` as **inbound** and `going` as **outbound**, so direction cannot be confused with the `GOING` rendezvous message type. Internal event names remain `coming`, `going`, and `relaying`.
+74. **Masthead brand link.** The whole `rendezvous ✳ by [InstantHero mark]` masthead is an anchor to `https://instanthero.ca`, opened in a new tab so the current session stays intact. The link alone takes pointer events; the surrounding empty space remains inert. This supersedes the "does not capture input" clause of decision 57.
 
 ## 2026-11-28 — Image transfer robustness
 

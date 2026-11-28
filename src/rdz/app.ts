@@ -1089,12 +1089,14 @@ export class RdzApp {
     return `
       <div class="shell">
         <p class="masthead">
-          <span class="masthead-name">rendezvous</span>
-          <span class="masthead-star" aria-hidden="true">
-            <svg viewBox="0 0 32 32"><path d="M16 4v24M5.6 10l20.8 12M26.4 10 5.6 22" /></svg>
-          </span>
-          <span class="masthead-by">by</span>
-          <span class="masthead-stamp" role="img" aria-label="InstantHero">${instantHeroMark}</span>
+          <a class="masthead-link" href="https://instanthero.ca" target="_blank" rel="noopener noreferrer">
+            <span class="masthead-name">rendezvous</span>
+            <span class="masthead-star" aria-hidden="true">
+              <svg viewBox="0 0 32 32"><path d="M16 4v24M5.6 10l20.8 12M26.4 10 5.6 22" /></svg>
+            </span>
+            <span class="masthead-by">by</span>
+            <span class="masthead-stamp" role="img" aria-label="InstantHero">${instantHeroMark}</span>
+          </a>
         </p>
         <header class="topbar" data-region="topbar"></header>
         <div class="region" data-region="screen">

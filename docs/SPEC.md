@@ -574,7 +574,7 @@ The landing hero carries a subtle elliptical orbit with one slow-moving dot behi
 
 ### VS-13 — Masthead and marks
 
-The app shows a centered, low-contrast masthead reading `rendezvous ✳ by [InstantHero mark]` above the top bar. The three intersecting lines are the RDZ mark and also appear in the top-bar brand button. The InstantHero stamp is decorative. The masthead does not intercept input.
+The app shows a centered, low-contrast masthead reading `rendezvous ✳ by [InstantHero mark]` above the top bar. The three intersecting lines are the RDZ mark and also appear in the top-bar brand button. The masthead is a single link to `https://instanthero.ca` that opens in a new tab, leaving the current session in place. Empty space around the masthead does not intercept input.
 
 ### VS-14 — Failure notices
 
