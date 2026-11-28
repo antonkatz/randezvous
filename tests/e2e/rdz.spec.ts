@@ -1,5 +1,7 @@
 import { test, expect, type Browser, type Page } from '@playwright/test';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const VERSION = (JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }).version;
 
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=',
@@ -137,6 +139,39 @@ test('the empty rendezvous panel offers a set-one button', async ({ browser }) =
   await expect(a.page.getByRole('heading', { name: 'Set a rendezvous' })).toBeVisible();
   await expect(a.page.locator('input[name=time]')).toBeVisible();
 
+  await a.context.close();
+});
+
+test('the version stamp is faded in the top right corner', async ({ browser }) => {
+  const a = await openPage(browser);
+  const stamp = a.page.locator('.version-stamp');
+
+  await expect(stamp).toBeVisible();
+  await expect(stamp).toHaveText(`v${VERSION}`);
+  await expect(stamp).toHaveCSS('position', 'fixed');
+  await expect(stamp).toHaveCSS('pointer-events', 'none');
+
+  const box = await stamp.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return {
+      top: rect.top,
+      right: window.innerWidth - rect.right,
+      opacity: Number(getComputedStyle(node).opacity),
+    };
+  });
+
+  expect(box.top).toBeLessThan(24);
+  expect(box.right).toBeLessThan(24);
+  // Faded, but still legible.
+  expect(box.opacity).toBeGreaterThan(0.2);
+  expect(box.opacity).toBeLessThan(1);
+
+  // The stamp lives in the shell, so it survives moving to another view.
+  await a.page.locator('.traffic-stream').click();
+  await expect(a.page.locator('.traffic-page h1')).toHaveText('Network traffic');
+  await expect(stamp).toHaveText(`v${VERSION}`);
+
+  expect(a.errors).toEqual([]);
   await a.context.close();
 });
 

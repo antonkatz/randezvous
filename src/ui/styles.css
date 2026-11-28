@@ -188,6 +188,22 @@ h2 {
   fill: currentColor;
 }
 
+.version-stamp {
+  position: fixed;
+  top: 12px;
+  right: 14px;
+  z-index: 5;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  /* Faded like the masthead, but held above it so small mono type stays
+     legible rather than dissolving into the paper. */
+  opacity: 0.8;
+  pointer-events: none;
+  user-select: none;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -1377,6 +1393,12 @@ h2 {
   .masthead-stamp {
     width: 26px;
     height: 26px;
+  }
+
+  .version-stamp {
+    top: 8px;
+    right: 10px;
+    font-size: 0.66rem;
   }
 
   .hero {

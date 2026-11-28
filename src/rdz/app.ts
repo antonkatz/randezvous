@@ -22,6 +22,7 @@ import {
   uniqueWordDisplay,
 } from './ids';
 import instantHeroMark from '../ui/instanthero-mark.svg?raw';
+import { version } from '../../package.json';
 import { ConnectionBudget } from './connection-budget';
 import { MeshManager, resolveBootstrapUrl, type MeshStatus } from './mesh';
 import { RtcManager } from './rtc';
@@ -1098,6 +1099,7 @@ export class RdzApp {
             <span class="masthead-stamp" role="img" aria-label="InstantHero">${instantHeroMark}</span>
           </a>
         </p>
+        <span class="version-stamp">v${escapeHtml(version)}</span>
         <header class="topbar" data-region="topbar"></header>
         <div class="region" data-region="screen">
           ${
