@@ -1434,7 +1434,6 @@ export class RdzApp {
       );
     }
     if (this.modal.type === 'identity') {
-      const ids = this.masks.map((mask) => mask.humanId);
       return this.modalShell(
         'Masks',
         `
@@ -1443,8 +1442,8 @@ export class RdzApp {
             ${this.masks
               .map((mask) => {
                 const active = mask.id === this.identity.id;
-                const words = formatWords(uniqueWordDisplay(ids, mask.humanId));
-                const emoji = formatEmoji(uniqueEmojiDisplay(ids, mask.humanId));
+                const words = formatWords(idToWords(mask.humanId));
+                const emoji = formatEmoji(idToEmoji(mask.humanId));
                 return `
                   <div class="mask-row ${active ? 'is-active' : ''}">
                     <div class="mask-copy">
@@ -1460,10 +1459,10 @@ export class RdzApp {
               })
               .join('')}
           </div>
-          <p class="modal-copy">Verification words for the active mask:</p>
+          <p class="modal-copy">Full verification set for the active mask:</p>
           <div class="identity-words full">${escapeHtml(formatEmoji(idToEmoji(this.identity.humanId)))}</div>
           <div class="identity-words full mono">${escapeHtml(formatWords(idToWords(this.identity.humanId)))}</div>
-          <p class="modal-copy">These eight words are this mask's verification set. They are derived from its key. There is no account to recover.</p>
+          <p class="modal-copy">These eight words and eleven emoji are this mask's verification set. They are derived from its key. There is no account to recover.</p>
           <div class="modal-actions">
             <button class="primary" data-action="create-mask" type="button">new mask</button>
             <button class="small ghost" data-action="close-modal" type="button">close</button>

@@ -503,6 +503,65 @@ test('I see my active mask in the online list', async ({ browser }) => {
   await a.context.close();
 });
 
+test('the mask switcher shows the full words and emoji on a small screen', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 320, height: 568 } });
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/');
+  await expect(page.locator('.live')).toHaveText(/live|off/);
+  await page.locator('.identity-chip').click();
+  await expect(page.getByRole('heading', { name: 'Masks' })).toBeVisible();
+
+  const fullEmoji = page.locator('.identity-words.full:not(.mono)').first();
+  const fullWords = page.locator('.identity-words.full.mono').first();
+  const rowEmoji = page.locator('.mask-row .mask-emoji').first();
+  const rowWords = page.locator('.mask-row .mask-copy strong').first();
+  await expect(fullEmoji).toBeVisible();
+  await expect(fullWords).toBeVisible();
+
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  expect([...segmenter.segment((await fullEmoji.innerText()).trim())]).toHaveLength(11);
+  expect([...segmenter.segment((await rowEmoji.innerText()).trim())]).toHaveLength(11);
+  expect((await fullWords.innerText()).trim().split(/\s+/)).toHaveLength(8);
+  expect((await rowWords.innerText()).trim().split(/\s+/)).toHaveLength(8);
+
+  const layout = await page.evaluate(() => {
+    const modal = document.querySelector<HTMLElement>('.modal')!;
+    const row = document.querySelector<HTMLElement>('.mask-row')!;
+    const words = document.querySelector<HTMLElement>('.mask-row .mask-copy strong')!;
+    const style = (element: HTMLElement) => ({
+      display: getComputedStyle(element).display,
+      whiteSpace: getComputedStyle(element).whiteSpace,
+      textOverflow: getComputedStyle(element).textOverflow,
+    });
+    return {
+      modal: {
+        clientHeight: modal.clientHeight,
+        scrollHeight: modal.scrollHeight,
+        overflowY: getComputedStyle(modal).overflowY,
+      },
+      emoji: style(document.querySelector<HTMLElement>('.identity-words.full:not(.mono)')!),
+      fullWords: style(document.querySelector<HTMLElement>('.identity-words.full.mono')!),
+      rowWords: style(words),
+      rowClipped: row.scrollWidth > row.clientWidth + 1,
+    };
+  });
+
+  expect(layout.emoji).toEqual({ display: 'block', whiteSpace: 'normal', textOverflow: 'clip' });
+  expect(layout.fullWords).toEqual({ display: 'block', whiteSpace: 'normal', textOverflow: 'clip' });
+  expect(layout.rowWords).toEqual({ display: 'block', whiteSpace: 'normal', textOverflow: 'clip' });
+  expect(layout.rowClipped).toBe(false);
+  expect(layout.modal.overflowY).toBe('auto');
+  expect(layout.modal.clientHeight).toBeLessThanOrEqual(568);
+  await page.locator('.modal').evaluate((modal) => {
+    modal.scrollTop = modal.scrollHeight;
+  });
+  await expect(page.locator('.modal-actions [data-action="close-modal"]')).toBeInViewport();
+  expect(errors).toEqual([]);
+  await context.close();
+});
+
 test('the landing orbit survives a list update', async ({ browser }) => {
   const a = await openPage(browser);
   await expect(a.page.locator('.hero .orbit')).toBeVisible();
