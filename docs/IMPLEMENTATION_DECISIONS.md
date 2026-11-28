@@ -132,5 +132,5 @@ Decisions made where `docs/SPEC.md` is silent or incomplete. Append new entries;
 
 ## 2026-11-28 — Signalling encouragement copy
 
-91. **Peer strength without private relay.** The **read why?** disclosure encourages peer connections by explaining that each peer helps other beings find routes and makes the network resilient. It explicitly distinguishes public presence and connection requests from private content: photographs and voice never pass through another peer or the seed. This preserves the trust-versus-reachability explanation while removing any suggestion that being connected turns a browser into a personal-data relay.
+91. **Peer strength without private relay.** The note says **We encourage you to keep your public relay on to help the network stay connected and strong**. The **read why?** disclosure explains that each peer helps other beings find routes and makes the network resilient. It explicitly distinguishes public presence and connection requests from private content: photographs and voice never pass through another peer or the seed. This preserves the trust-versus-reachability explanation while removing any suggestion that being connected turns a browser into a personal-data relay.
 

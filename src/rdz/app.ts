@@ -1236,7 +1236,7 @@ export class RdzApp {
     return `
       ${this.renderSignalToggle('traffic')}
       <p class="signal-policy-note">
-        We encourage you to keep this on to help the network stay connected and strong
+        We encourage you to keep your public relay on to help the network stay connected and strong
         (<button class="inline-link" data-action="toggle-signal-explainer" type="button" aria-expanded="${this.signalExplainerOpen}" aria-controls="signal-policy-explainer">read why?</button>),
         but we understand if you turn it off.
       </p>

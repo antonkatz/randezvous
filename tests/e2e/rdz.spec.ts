@@ -196,7 +196,7 @@ test('verified-only signalling is styled, keyboard accessible, persistent, and m
   await expect(toggle).toHaveCSS('box-shadow', 'none');
   await expect(a.page.locator('.topbar .signal-toggle')).toHaveCount(0);
   await expect(a.page.locator('.signal-policy-note')).toContainText(
-    'We encourage you to keep this on to help the network stay connected and strong',
+    'We encourage you to keep your public relay on to help the network stay connected and strong',
   );
   await expect(a.page.locator('.signal-policy-note')).toContainText(
     'but we understand if you turn it off.',
