@@ -61,6 +61,10 @@ class FakePeerConnection extends EventTarget {
   }
 
   async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
+    // Real browsers reject an answer once the connection is already stable.
+    if (description.type === 'answer' && this.remoteDescription) {
+      throw new Error('InvalidStateError');
+    }
     this.remoteDescription = description;
     if (description.type !== 'offer') return;
     const channel = new FakeDataChannel();
@@ -318,6 +322,99 @@ describe('image connection mechanics', () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(pc.connectionState).toBe('closed');
+    rtc.stop();
+  });
+
+  it('shows the receiver reason when the connection closes before the transfer', async () => {
+    const { rtc, identity, peer, signals, progress } = await imageManager();
+    rtc.sendImage(
+      peer.humanId,
+      'channel',
+      new File([new Uint8Array([1, 2, 3])], 'one.png', { type: 'image/png' }),
+    );
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
+    );
+    const channel = FakePeerConnection.instances[0]!.channels[0]!;
+    channel.readyState = 'closed';
+    channel.dispatchEvent(new Event('close'));
+
+    // The signed decline lands a moment after the raw transport close.
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-decline', offer!.transferId, {
+        reason: 'The direct connection timed out.',
+      }),
+    );
+
+    expect(progress.at(-1)?.phase).toBe('failed');
+    expect(progress.at(-1)?.error).toBe('The direct connection timed out.');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(progress.at(-1)?.error).toBe('The direct connection timed out.');
+    expect(rtc.isSendingImage).toBe(false);
+    rtc.stop();
+  });
+
+  it('falls back to the generic close when no reason arrives', async () => {
+    const { rtc, identity, peer, signals, progress } = await imageManager();
+    rtc.sendImage(
+      peer.humanId,
+      'channel',
+      new File([new Uint8Array([1, 2, 3])], 'one.png', { type: 'image/png' }),
+    );
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
+    );
+    const channel = FakePeerConnection.instances[0]!.channels[0]!;
+    channel.readyState = 'closed';
+    channel.dispatchEvent(new Event('close'));
+
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(progress.at(-1)?.phase).not.toBe('failed');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(progress.at(-1)?.phase).toBe('failed');
+    expect(progress.at(-1)?.error).toBe('The direct connection closed during the transfer.');
+    rtc.stop();
+  });
+
+  it('ignores a duplicate image accept instead of replacing the connection', async () => {
+    const { rtc, identity, peer, signals } = await imageManager();
+    rtc.sendImage(
+      peer.humanId,
+      'channel',
+      new File([new Uint8Array([1, 2, 3])], 'one.png', { type: 'image/png' }),
+    );
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+    const accept = await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId);
+    await rtc.handleSignal(accept);
+    await rtc.handleSignal(accept);
+
+    expect(FakePeerConnection.instances).toHaveLength(1);
+    expect(signals.filter((entry) => entry.signal === 'offer')).toHaveLength(1);
+    expect(rtc.isSendingImage).toBe(true);
+    rtc.stop();
+  });
+
+  it('tolerates a duplicate answer without failing the transfer', async () => {
+    const { rtc, identity, peer, signals, progress } = await imageManager();
+    rtc.sendImage(
+      peer.humanId,
+      'channel',
+      new File([new Uint8Array([1, 2, 3])], 'one.png', { type: 'image/png' }),
+    );
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
+    );
+    const answer = await signalEnvelope(peer, identity.humanId, 'answer', offer!.transferId, {
+      sdp: { type: 'answer', sdp: 'v=0' },
+    });
+    await rtc.handleSignal(answer);
+    await rtc.handleSignal(answer);
+
+    expect(rtc.isSendingImage).toBe(true);
+    expect(progress.some((entry) => entry.phase === 'failed')).toBe(false);
     rtc.stop();
   });
 });

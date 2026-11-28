@@ -35,6 +35,10 @@ const AUDIO_LIMIT_MS = 60_000;
 // Keep the receiving transport alive briefly after the ack so the final SCTP
 // packet is not discarded with the peer connection.
 const ACK_FLUSH_MS = 1_000;
+// The receiver signs and relays its failure reason just before closing the
+// transport, and the close reaches the sender first. Wait briefly for that
+// reason so the sender reports the real cause instead of a generic close.
+const CLOSE_REASON_GRACE_MS = 1_500;
 
 interface RtcDeps {
   sendSignal: (
@@ -102,6 +106,7 @@ interface OutgoingAudio extends NegotiatedPeer {
   startedAt: number | null;
   muted: boolean;
   remoteStream: MediaStream | null;
+  negotiating: boolean;
 }
 
 interface IncomingAudio extends NegotiatedPeer {
@@ -258,6 +263,7 @@ export class RtcManager {
       startedAt: null,
       muted: false,
       remoteStream: null,
+      negotiating: false,
     };
     this.setAudio({
       transferId,
@@ -559,6 +565,9 @@ export class RtcManager {
   }
 
   private async startImageOffer(transfer: OutgoingImage): Promise<void> {
+    // A duplicate accept must not replace the live connection; the answerer
+    // path has the same guard.
+    if (transfer.pc) return;
     window.clearTimeout(transfer.timeout);
     if (!this.connections.tryAcquire(`image:out:${transfer.transferId}`)) {
       this.failOutgoingImage(`At most ${this.connections.size} live peer connections are allowed.`);
@@ -580,9 +589,7 @@ export class RtcManager {
       void this.sendImageBytes(transfer);
     });
     channel.addEventListener('close', () => {
-      if (this.outgoingImage === transfer && !transfer.done) {
-        this.failOutgoingImage('The direct connection closed during the transfer.');
-      }
+      this.reportOutgoingClose(transfer);
     });
     this.wireIce(pc, transfer.target, transfer.channelId, transfer.transferId);
     transfer.timeout = window.setTimeout(() => {
@@ -619,7 +626,11 @@ export class RtcManager {
 
   private async sendImageBytes(transfer: OutgoingImage): Promise<void> {
     const channel = transfer.channel;
-    if (!channel || channel.readyState !== 'open') return;
+    if (!channel || channel.readyState !== 'open') {
+      // Never leave the transfer silently stalled; surface the close.
+      this.reportOutgoingClose(transfer);
+      return;
+    }
     try {
       channel.send(
         JSON.stringify({
@@ -673,7 +684,7 @@ export class RtcManager {
     const sendNext = (): void => {
       if (transfer.done || this.outgoingImage !== transfer) return;
       if (channel.readyState !== 'open') {
-        this.failOutgoingImage('The direct connection closed during the transfer.');
+        this.reportOutgoingClose(transfer);
         return;
       }
       try {
@@ -835,6 +846,9 @@ export class RtcManager {
       try {
         await target.pc.setRemoteDescription(data.sdp);
       } catch {
+        // A concurrent duplicate answer may already have been applied; that
+        // is benign and must not fail the live transfer.
+        if (target.remoteReady) return;
         if (outgoing) {
           this.failOutgoingImage('The direct connection could not be made.');
         } else if (outgoingAudio) {
@@ -997,6 +1011,22 @@ export class RtcManager {
     window.setTimeout(() => closePeer(transfer.pc), ACK_FLUSH_MS);
   }
 
+  /**
+   * The transport closed before the transfer finished. The peer usually sends
+   * an image-decline carrying the real reason a moment before its close lands
+   * here, so give that signal a short grace period before falling back to the
+   * generic close message.
+   */
+  private reportOutgoingClose(transfer: OutgoingImage): void {
+    if (this.outgoingImage !== transfer || transfer.done) return;
+    window.clearTimeout(transfer.timeout);
+    transfer.timeout = window.setTimeout(() => {
+      if (this.outgoingImage === transfer && !transfer.done) {
+        this.failOutgoingImage('The direct connection closed during the transfer.');
+      }
+    }, CLOSE_REASON_GRACE_MS);
+  }
+
   private failOutgoingImage(message: string): void {
     const transfer = this.outgoingImage;
     if (!transfer || transfer.done) return;
@@ -1026,7 +1056,9 @@ export class RtcManager {
   }
 
   private async startAudioOffer(outgoing: OutgoingAudio): Promise<void> {
-    if (this.outgoingAudio !== outgoing) return;
+    if (this.outgoingAudio !== outgoing || outgoing.negotiating) return;
+    // Set synchronously: getUserMedia below yields before the pc exists.
+    outgoing.negotiating = true;
     window.clearTimeout(outgoing.timer);
     outgoing.timer = 0;
     if (!this.connections.tryAcquire(`audio:out:${outgoing.transferId}`)) {
