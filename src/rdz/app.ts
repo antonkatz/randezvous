@@ -1282,8 +1282,12 @@ export class RdzApp {
   private renderTrafficList(): string {
     const events = this.traffic.filtered(this.trafficFilter);
     if (events.length === 0) {
+      const direction =
+        this.trafficFilter === 'all'
+          ? 'all'
+          : trafficDirectionMeta(this.trafficFilter).label;
       const message = this.traffic.size
-        ? `No ${this.trafficFilter} traffic in this session.`
+        ? `No ${direction} traffic in this session.`
         : 'No traffic yet. Messages appear here as the mesh connects.';
       return `<p class="empty traffic-empty">${escapeHtml(message)}</p>`;
     }
@@ -1317,7 +1321,7 @@ export class RdzApp {
 
   private renderTrafficDetail(event: TrafficEvent): string {
     const rows: Array<[string, string]> = [
-      ['direction', event.direction],
+      ['direction', trafficDirectionMeta(event.direction).label],
       ['message', event.signal ? `${event.type} · ${event.signal}` : event.type],
       ['author', trafficIdFull(event.author)],
       ['created', `${formatTrafficDate(event.createdAt)} · ${event.createdAt}`],
@@ -1796,8 +1800,8 @@ export class RdzApp {
 }
 
 const TRAFFIC_DIRECTIONS = [
-  { id: 'coming', glyph: '↓', label: 'coming' },
-  { id: 'going', glyph: '↑', label: 'going' },
+  { id: 'coming', glyph: '↓', label: 'inbound' },
+  { id: 'going', glyph: '↑', label: 'outbound' },
   { id: 'relaying', glyph: '⇄', label: 'relaying' },
 ] as const;
 

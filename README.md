@@ -82,7 +82,7 @@ peer-assisted signalling; connected peers relay `SIGNAL` for other peers.
 
 ## Network traffic
 
-The landing hero shows a faded live feed of recent mesh activity on the right side of the orbit. It is a limited view of envelopes `coming` in, going out, and being `relaying` for other peers. Selecting it opens the full network traffic page.
+The landing hero shows a faded live feed of recent mesh activity on the right side of the orbit. It is a limited view of inbound, outbound, and relayed envelopes. Selecting it opens the full network traffic page.
 
 The full page is a session-only, 250-event log with direction filters. Collapsed rows show the short author and route; selecting a row reveals full identifiers, timestamps, sizes, rendezvous or signal metadata, and the peer count. The page never displays signatures, public keys, SDP/ICE bodies, or media bytes. `SIGNAL` appears only as transport metadata; it is not a user-visible application message.
 

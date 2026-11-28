@@ -103,6 +103,8 @@ test('the landing traffic stream opens the full network page', async ({ browser 
   await stream.click();
 
   await expect(a.page.locator('.traffic-page h1')).toHaveText('Network traffic');
+  await expect(a.page.locator('.traffic-stat.is-coming')).toContainText('inbound');
+  await expect(a.page.locator('.traffic-stat.is-going')).toContainText('outbound');
   const first = a.page.locator('.traffic-entry').first();
   await expect(first).toBeVisible();
   const firstId = await first.getAttribute('data-id');
