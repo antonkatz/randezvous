@@ -2013,8 +2013,7 @@ export class RdzApp {
         try {
           bitmap = await this.decodeImage(viewer.blob, scale);
           break;
-        } catch (error) {
-          console.warn('Received image decode failed.', error);
+        } catch {
           if (scale <= 1) break;
           // Very large or resource-constrained images may reject a decode even
           // at a reduced size. Retry smaller before using the original URL.
@@ -2029,16 +2028,13 @@ export class RdzApp {
       viewer.bitmap = bitmap;
       const image = viewport.querySelector<HTMLImageElement>('.received-image');
       if (image && bitmap) {
-        const source = URL.createObjectURL(bitmap as unknown as Blob);
-        image.src = source;
-        if (image.complete && image.naturalWidth > 0) URL.revokeObjectURL(source);
-        else {
-          image.addEventListener(
-            'load',
-            () => URL.revokeObjectURL(source),
-            { once: true },
-          );
-        }
+        const canvas = document.createElement('canvas');
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        canvas.getContext('2d')?.drawImage(bitmap, 0, 0);
+        image.src = canvas.toDataURL('image/png');
+        canvas.width = 1;
+        canvas.height = 1;
       }
       previous?.close();
       // The viewport can grow while decoding; settle at its final measured size.

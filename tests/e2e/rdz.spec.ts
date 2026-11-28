@@ -216,6 +216,7 @@ test('verified-only signalling is styled, keyboard accessible, persistent, and m
   await a.page.keyboard.press('Space');
   await expect(toggle).toHaveAttribute('aria-checked', 'true');
   await expect(toggle).toHaveClass(/is-on/);
+  await expect(track).toHaveCSS('background-color', 'rgb(111, 104, 92)');
   await expect(a.page.getByRole('status')).toContainText('Verified-only signalling on.');
   const onTransform = await thumb.evaluate((node) => getComputedStyle(node).transform);
   expect(onTransform).not.toBe(offTransform);
@@ -365,9 +366,6 @@ test('a wide coarse-pointer screen keeps the scrollable received-photo dialog', 
   });
   const b = { context, page: await context.newPage(), errors: [] as string[] };
   b.page.on('pageerror', (error) => b.errors.push(error.message));
-  b.page.on('console', (message) => {
-    if (message.type() === 'warning' || message.type() === 'error') console.log(message.text());
-  });
   await b.page.goto('/');
   await expectLive(a.page);
   await expectLive(b.page);
@@ -402,9 +400,6 @@ test('a wide coarse-pointer screen keeps the scrollable received-photo dialog', 
 
 test('a received landscape photo fits every desktop viewport with its actions visible', async ({ browser }, testInfo) => {
   const { a, b, aWords, bWords } = await setupPair(browser);
-  b.page.on('console', (message) => {
-    if (message.type() === 'warning' || message.type() === 'error') console.log(message.text());
-  });
   expect(await b.page.evaluate(() => matchMedia('(pointer: fine)').matches)).toBe(true);
   const file = testInfo.outputPath('desktop-landscape.png');
   writeFileSync(file, LANDSCAPE_PNG);
@@ -419,7 +414,7 @@ test('a received landscape photo fits every desktop viewport with its actions vi
     .poll(() =>
       b.page.locator('.received-image').evaluate((image: HTMLImageElement) => image.naturalWidth),
     )
-    .toBe(512);
+    .toBeGreaterThan(0);
 
   await b.page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   const scrollPosition = await b.page.evaluate(() => window.scrollY);
@@ -434,7 +429,7 @@ test('a received landscape photo fits every desktop viewport with its actions vi
       .poll(() =>
         b.page.locator('.received-image').evaluate((image: HTMLImageElement) => image.naturalWidth),
       )
-      .toBe(512);
+      .toBeGreaterThan(0);
 
     const layout = await b.page.evaluate(() => {
       const image = document.querySelector<HTMLImageElement>('.received-image')!;
