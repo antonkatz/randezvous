@@ -46,7 +46,7 @@ async function openChannel(page: Page, fullWords: string): Promise<void> {
 }
 
 async function announce(page: Page, time: string): Promise<void> {
-  await page.getByRole('button', { name: 'set a time' }).click();
+  await page.getByRole('button', { name: /(set|add) a time/ }).click();
   await page.locator('input[name=time]').fill(time);
   await page.getByRole('button', { name: 'announce time' }).click();
   await expect(page.locator('.time-group').first()).toBeVisible();
@@ -54,6 +54,13 @@ async function announce(page: Page, time: string): Promise<void> {
 
 function humanRow(page: Page, shortWords: string) {
   return page.locator('.human-row').filter({ hasText: shortWords }).first();
+}
+
+async function orbitProgress(page: Page): Promise<number> {
+  return page.locator('.hero .orbit').evaluate((orbit) => {
+    const distance = getComputedStyle(orbit, '::after').offsetDistance;
+    return Number.parseFloat(distance);
+  });
 }
 
 async function verify(page: Page, shortWords: string): Promise<void> {
@@ -447,7 +454,6 @@ test('I see my active mask in the online list', async ({ browser }) => {
 
   await expect(a.page.locator('.masthead-name')).toHaveText('rendezvous');
   await expect(a.page.locator('.masthead-stamp svg')).toBeVisible();
-  await expect(a.page.locator('.brand-mark svg')).toBeVisible();
   const humanEmoji = (await selfRow.locator('.human-emoji').innerText()).trim();
   const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
   expect([...segmenter.segment(humanEmoji)].length).toBeGreaterThanOrEqual(6);
@@ -494,6 +500,25 @@ test('I see my active mask in the online list', async ({ browser }) => {
   await expect(a.page.locator('.human-row')).toHaveCount(0);
   await expect(a.page.locator('.orbit')).toHaveCount(0);
 
+  await a.context.close();
+});
+
+test('the landing orbit keeps its phase when the landing re-renders', async ({ browser }) => {
+  const a = await openPage(browser);
+  await expect(a.page.locator('.hero .orbit')).toBeVisible();
+  await a.page.waitForTimeout(2500);
+  const before = await orbitProgress(a.page);
+  expect(before).toBeGreaterThan(5);
+
+  await a.page.locator('.hero .orbit').evaluate((orbit) => {
+    orbit.dataset.renderProbe = 'stale';
+  });
+  await a.page.locator('#filter').fill('x');
+  await expect(a.page.locator('.hero .orbit')).not.toHaveAttribute('data-render-probe', 'stale');
+
+  const after = await orbitProgress(a.page);
+  expect(after).toBeGreaterThan(before - 1.5);
+  expect(a.errors).toEqual([]);
   await a.context.close();
 });
 

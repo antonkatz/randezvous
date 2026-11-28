@@ -8,8 +8,10 @@ import {
   dedupeAnnouncements,
   filterChannels,
   filterHumans,
+  goingCount,
   groupAnnouncementsByMinute,
   isOnline,
+  nextAnnouncementTimes,
   parseTimeInput,
   sortAnnouncements,
   sortHumans,
@@ -98,6 +100,31 @@ describe('channels and expiry', () => {
     const first = announcement(author, 'channel', now, now - 10);
     const second = announcement(author, 'channel', now, now);
     expect(dedupeAnnouncements([first, second])).toEqual([second]);
+  });
+
+  it('counts each human once even with multiple announced times', () => {
+    const author = human(true, now);
+    const other = human(false, now);
+    expect(
+      goingCount([
+        announcement(author, 'channel', now),
+        announcement(author, 'channel', now + 60_000),
+        announcement(other, 'channel', now),
+      ]),
+    ).toBe(2);
+  });
+
+  it('lists the next two distinct upcoming times in order', () => {
+    const author = human(true, now);
+    const base = Math.floor(now / 60_000) * 60_000;
+    const entries = [
+      announcement(author, 'channel', base + 120_000),
+      announcement(author, 'channel', base),
+      announcement(author, 'channel', base),
+      announcement(author, 'channel', base + 60_000),
+    ];
+    expect(nextAnnouncementTimes(entries)).toEqual([base, base + 60_000]);
+    expect(nextAnnouncementTimes(entries, 3)).toEqual([base, base + 60_000, base + 120_000]);
   });
 
   it('groups announcements by local minute', () => {

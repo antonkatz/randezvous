@@ -32,10 +32,12 @@ import {
   filterHumans,
   formatDay,
   formatTime,
+  goingCount,
   groupAnnouncementsByMinute,
   isOnline,
   audioRemaining,
   dedupeAnnouncements,
+  nextAnnouncementTimes,
   parseTimeInput as parseTime,
   sortAnnouncements,
   sortHumans,
@@ -71,6 +73,9 @@ import type {
   SignalKind,
   VerificationRecord,
 } from './types';
+
+// Keep in sync with the 26s orbit-dot animation in styles.css.
+const ORBIT_DURATION_MS = 26_000;
 
 type Modal =
   | { type: 'set-time'; channelId: string | null }
@@ -117,11 +122,13 @@ export class RdzApp {
   private ticker = 0;
   private pingTicker = 0;
   private renderQueued = false;
+  private lastRenderedClock = '';
   private toast = '';
   private toastTimer = 0;
   private lastImage: File | null = null;
   private pendingSend: { humanId: string; channelId: string } | null = null;
   private fileInput!: HTMLInputElement;
+  private readonly orbitStartedAt = Date.now();
 
   async start(): Promise<void> {
     const maskState = await loadMaskState();
@@ -294,7 +301,7 @@ export class RdzApp {
     if (prior && prior > Date.now()) return;
     this.seen.set(id, expiresAt);
 
-    this.upsertHuman(envelope);
+    const humanChanged = this.upsertHuman(envelope);
     if (envelope.author !== this.identity.humanId && !this.isLocalMask(envelope.author)) {
       this.mesh?.considerPeer(envelope.author, envelope.publicKey);
       void savePeerRegistryEntry({
@@ -324,10 +331,10 @@ export class RdzApp {
       await this.rtc.handleSignal(envelope);
       return;
     }
-    this.scheduleRender();
+    if (humanChanged) this.scheduleRender();
   }
 
-  private upsertHuman(envelope: Envelope): void {
+  private upsertHuman(envelope: Envelope): boolean {
     const existing = this.humans.get(envelope.author);
     const verification = this.verifications.get(envelope.author);
     const otherLocalMask = this.masks.some(
@@ -346,6 +353,7 @@ export class RdzApp {
       verified,
     };
     this.humans.set(envelope.author, next);
+    return !existing || existing.verified !== next.verified || !isOnline(existing);
   }
 
   private handleMeshStatus(status: MeshStatus): void {
@@ -365,7 +373,6 @@ export class RdzApp {
         self.lastSeen = Date.now();
         self.verified = true;
       }
-      this.scheduleRender();
     });
   }
 
@@ -437,7 +444,19 @@ export class RdzApp {
     for (const [id, expiresAt] of this.seen) {
       if (expiresAt <= this.now) this.seen.delete(id);
     }
-    this.scheduleRender();
+    if (this.timeSensitiveState() !== this.lastRenderedClock) this.scheduleRender();
+  }
+
+  private timeSensitiveState(): string {
+    const online = [...this.humans.values()]
+      .map((human) => `${human.id}:${isOnline(human, this.now) ? 1 : 0}`)
+      .sort()
+      .join(',');
+    const active = activeAnnouncements([...this.announcements.values()], this.now)
+      .map((entry) => entry.envelopeId)
+      .sort()
+      .join(',');
+    return `${new Date(this.now).toDateString()}|${online}|${active}`;
   }
 
   private handleImageOffer(offer: IncomingImageOffer): void {
@@ -925,12 +944,6 @@ export class RdzApp {
           <span class="masthead-stamp" role="img" aria-label="InstantHero">${instantHeroMark}</span>
         </p>
         <header class="topbar">
-          <button class="brand" data-action="identity" type="button">
-            <span class="brand-mark" aria-hidden="true">
-              <svg viewBox="0 0 32 32"><path d="M16 4v24M5.6 10l20.8 12M26.4 10 5.6 22" /></svg>
-            </span>
-            <span>RDZ</span>
-          </button>
           <div class="top-actions">
             <span class="live ${statusClass}" title="WebRTC mesh"><span class="dot"></span>${statusLabel}</span>
             <button class="identity-chip" data-action="identity" type="button">
@@ -946,6 +959,7 @@ export class RdzApp {
       ${this.renderImage()}
       ${this.toast ? `<div class="toast" role="status">${escapeHtml(this.toast)}</div>` : ''}
     `;
+    this.lastRenderedClock = this.timeSensitiveState();
   }
 
   private renderLanding(): string {
@@ -961,10 +975,13 @@ export class RdzApp {
     const visibleHumans = filterHumans(humans, this.query);
     const humanIds = visibleHumans.map((human) => human.id);
     const channelIds = allChannels.map((channel) => channel.id);
+    // Live updates re-render the landing, which restarts CSS animations.
+    // A negative delay keeps the orbit at its true phase instead of snapping back.
+    const orbitDelay = `${(((this.orbitStartedAt - this.now) % ORBIT_DURATION_MS) / 1000).toFixed(3)}s`;
     return `
       <main class="landing">
         <section class="hero">
-          <div class="orbit" aria-hidden="true"></div>
+          <div class="orbit" aria-hidden="true" style="--orbit-delay: ${orbitDelay}"></div>
           <div class="hero-content">
             <h1>The Internet is Here</h1>
             <button class="primary" data-action="new-rendezvous" type="button">Set a rendezvous</button>
@@ -1008,7 +1025,12 @@ export class RdzApp {
   private renderChannelCard(channel: ChannelView, ids: readonly string[]): string {
     const words = formatWords(uniqueWordDisplay(ids, channel.id));
     const emoji = formatEmoji(uniqueEmojiDisplay(ids, channel.id, 3));
-    const next = channel.nextAt ? `${formatTime(channel.nextAt)}${formatDay(channel.nextAt, this.now) ? ` · ${formatDay(channel.nextAt, this.now)}` : ''}` : 'pinned';
+    const times = nextAnnouncementTimes(channel.announcements).map((at) => {
+      const day = formatDay(at, this.now);
+      return day ? `${formatTime(at)} (${day})` : formatTime(at);
+    });
+    const next = times.length ? times.join(' · ') : 'pinned';
+    const going = goingCount(channel.announcements);
     return `
       <button class="channel-card" data-action="open-channel" data-id="${escapeAttr(channel.id)}" type="button">
         <span class="channel-emoji">${escapeHtml(emoji)}</span>
@@ -1016,7 +1038,7 @@ export class RdzApp {
           <strong>${escapeHtml(channel.pinnedLabel ?? words)}</strong>
           <span>${escapeHtml(words)}</span>
         </span>
-        <span class="channel-meta">${escapeHtml(next)}<small>${channel.announcements.length} going</small></span>
+        <span class="channel-meta">${escapeHtml(next)}<small>${going} going</small></span>
       </button>
     `;
   }
@@ -1081,6 +1103,7 @@ export class RdzApp {
       ),
       this.humans,
     );
+    const hasTimes = entries.length > 0 || ownEntries.length > 0;
     const groups = groupAnnouncementsByMinute(entries);
     const authorIds = [...new Set(entries.map((entry) => entry.author))];
     const words = formatWords(shortWords(idToWords(channelId)));
@@ -1108,7 +1131,7 @@ export class RdzApp {
             </div>
           </div>
           <div class="channel-actions">
-            <button class="small ghost" data-action="set-time" type="button">set a time</button>
+            <button class="small ghost" data-action="set-time" type="button">${hasTimes ? 'add a time' : 'set a time'}</button>
             ${
               channelPins
                 ? `<button class="small ghost" data-action="unpin" data-id="${escapeAttr(channelId)}" type="button">unpin</button>`

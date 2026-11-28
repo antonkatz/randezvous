@@ -64,6 +64,10 @@ export function dedupeAnnouncements(
   return [...byKey.values()];
 }
 
+export function goingCount(announcements: readonly GoingAnnouncement[]): number {
+  return new Set(announcements.map((entry) => entry.author)).size;
+}
+
 export function groupAnnouncementsByMinute(
   announcements: readonly GoingAnnouncement[],
 ): Map<number, GoingAnnouncement[]> {
@@ -75,6 +79,15 @@ export function groupAnnouncementsByMinute(
     else groups.set(minute, [announcement]);
   }
   return groups;
+}
+
+export function nextAnnouncementTimes(
+  announcements: readonly GoingAnnouncement[],
+  limit = 2,
+): number[] {
+  return [...groupAnnouncementsByMinute(announcements).keys()]
+    .sort((left, right) => left - right)
+    .slice(0, limit);
 }
 
 export function buildChannels(
