@@ -23,6 +23,7 @@ import {
 } from './ids';
 import instantHeroMark from '../ui/instanthero-mark.svg?raw';
 import { version } from '../../package.json';
+import { Chime } from './chime';
 import { ConnectionBudget } from './connection-budget';
 import { MeshManager, resolveBootstrapUrl, type MeshStatus } from './mesh';
 import { RtcManager } from './rtc';
@@ -124,6 +125,7 @@ export class RdzApp {
   private imageProgress = new Map<string, ImageTransferProgress>();
   private imageViewer: ImageViewer | null = null;
   private audioSession: AudioSession | null = null;
+  private readonly chime = new Chime();
   private remoteAudio: HTMLAudioElement | null = null;
   private audioTicker = 0;
   private ticker = 0;
@@ -489,6 +491,7 @@ export class RdzApp {
       senderEmoji: human?.emoji ?? idToEmoji(offer.sender),
       verified: this.isVerified(offer.sender),
     });
+    this.chime.play('request');
     this.scheduleRender();
   }
 
@@ -540,10 +543,15 @@ export class RdzApp {
       senderEmoji: human?.emoji ?? idToEmoji(request.sender),
       verified: this.isVerified(request.sender),
     });
+    this.chime.play('request');
     this.scheduleRender();
   }
 
   private handleAudioState(session: AudioSession | null): void {
+    const wasLive = this.audioSession?.phase === 'live';
+    const isLive = session?.phase === 'live';
+    if (isLive && !wasLive) this.chime.play('voice-start');
+    else if (wasLive && !isLive) this.chime.play('voice-end');
     this.audioSession = session;
     if (session?.remoteStream) {
       if (!this.remoteAudio) {
@@ -921,6 +929,7 @@ export class RdzApp {
     this.incomingImages.clear();
     this.incomingAudio.clear();
     this.imageProgress.clear();
+    if (this.audioSession?.phase === 'live') this.chime.play('voice-end');
     this.audioSession = null;
     if (this.imageViewer) URL.revokeObjectURL(this.imageViewer.url);
     this.imageViewer = null;

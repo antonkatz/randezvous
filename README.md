@@ -7,6 +7,7 @@ A permissionless, peer-to-peer rendezvous board.
 - Presence is announced with signed `PING` messages.
 - A rendezvous is just people announcing `GOING` to a channel at a time.
 - Images and one-minute voice travel directly between browsers over WebRTC.
+- Local audio cues distinguish incoming media requests, voice start, and voice end.
 - The seed is a headless WebRTC peer. It can replay `PING`/`GOING` and relay `SIGNAL` over WebRTC, but has no human identity and cannot receive images or audio.
 
 The canonical specification is [`docs/SPEC.md`](docs/SPEC.md). Deferred features are in [`docs/FUTURE_SPEC.md`](docs/FUTURE_SPEC.md). The old spec is reference only in [`docs/SPEC_v0.md`](docs/SPEC_v0.md). Archived legacy code lives in [`archive/`](archive/README.md).

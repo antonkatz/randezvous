@@ -435,6 +435,7 @@ The specification does not promise that every peer can reach every other peer. N
 - The receiver generates a safe local filename when saving. A sender-supplied filename is never displayed or used.
 - The recipient explicitly accepts or declines.
 - No image bytes are sent before the recipient accepts. Accepting is at the user's own risk.
+- An incoming image offer plays a short notification cue so the request is noticeable without requiring the page to be in view.
 - Multiple sends to the same or different recipients are independent, each with its own image choice and consent.
 - Only raster image formats are accepted. SVG and other active-content image types are rejected.
 - The default maximum size is 25 MiB. A transfer that exceeds the actual byte limit is aborted.
@@ -453,6 +454,8 @@ The specification does not promise that every peer can reach every other peer. N
 - The pair may start another conversation afterwards, with no limit on reconnections.
 - A gentle pink progress bar shows the remaining time. It has no numbers.
 - Either participant can mute or end the conversation early.
+- A rising cue plays once when the conversation goes live, and a falling cue plays once when it ends.
+- An incoming voice request plays a separate three-note notification cue.
 - Audio is live only. It is never recorded, transcribed, or uploaded.
 - A declined request does not consume the channel and does not affect image transfer.
 - Audio ends at the one-minute cap or on disconnect.
