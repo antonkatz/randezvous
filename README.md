@@ -99,6 +99,7 @@ Only verified humans can open a channel connection. Unverified humans remain vis
 - One outgoing image at a time per sender.
 - Choose an image per send, or reuse the last one.
 - The recipient explicitly accepts or declines.
+- Either side can cancel from the transfer progress row before completion; the other side receives the cancellation reason.
 - Accepted images are displayed in the channel and can be saved while displayed.
 - Dismissing removes the in-app copy. There is no wall or gallery.
 

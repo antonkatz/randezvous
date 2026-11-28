@@ -138,8 +138,9 @@ As a participant, I want to choose an image and offer it to a specific human, so
 - My local filename is never transmitted. The offer contains only a numeric size in megabytes.
 - No image bytes are sent before that human accepts.
 - I can have only one outgoing image transfer in progress at a time.
-- The next send becomes available only after the current recipient accepts and the image is received, or the offer is declined or fails.
-- If an image offer is declined, times out, or fails, I am told what happened instead of the transfer disappearing silently.
+- The next send becomes available only after the current recipient accepts and the image is received, or the offer is declined, cancelled, or fails.
+- If an image offer is declined, cancelled, times out, or fails, I am told what happened instead of the transfer disappearing silently.
+- I can cancel my outgoing transfer while it is waiting, connecting, or transferring; the recipient is told why it stopped.
 - I may send again to the same human or to a different human; each send has its own image choice and its own consent.
 - Each transfer completes and is acknowledged independently.
 - An accepted image is displayed in the browser.
@@ -157,6 +158,7 @@ As a recipient, I want to accept or decline an incoming image before any bytes a
 - Offers from verified humans are listed before offers from unverified humans.
 - Each offer can be accepted or declined independently.
 - Accepting starts the transfer. Declining sends no image bytes.
+- After accepting, I can cancel the incoming transfer while it is connecting or transferring; the sender is told why it stopped.
 - An accepted image is displayed in the live rendezvous surface.
 - I can save it while it is displayed.
 - Dismissing the image removes the in-app copy.
@@ -431,12 +433,14 @@ The specification does not promise that every peer can reach every other peer. N
 - Each send action targets one recipient and one image.
 - Pressing send for a participant opens image selection or reuses the last image sent.
 - A sender has at most one outgoing image transfer in flight at a time.
-- The next send is enabled only after the current transfer is acknowledged as received, or the offer is declined or fails.
+- The next send is enabled only after the current transfer is acknowledged as received, or the offer is declined, cancelled, or fails.
+- Either side can cancel a transfer before completion. The cancelling side closes its direct connection and releases the connection-budget slot; the other side receives a signed `image-decline` reason and a visible notice. A local cancellation is not reported as a local failure.
 - An offer carries only a numeric size in megabytes, plus routing and consent fields.
 - The sender's filename, path, MIME type, and preview are never transmitted in the offer.
 - The exact byte length and safe image type are sent only after consent, inside the transfer channel.
 - The receiver generates a safe local filename when saving. A sender-supplied filename is never displayed or used.
 - The recipient explicitly accepts or declines.
+- Either side can cancel an active transfer from its progress row. Cancellation is pairwise, signed, and releases the direct connection immediately.
 - No image bytes are sent before the recipient accepts. Accepting is at the user's own risk.
 - An incoming image offer plays a short notification cue so the request is noticeable without requiring the page to be in view.
 - Multiple sends to the same or different recipients are independent, each with its own image choice and consent.

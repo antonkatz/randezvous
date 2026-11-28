@@ -1126,6 +1126,17 @@ h2 {
   gap: 8px;
 }
 
+.transfer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transfer-head .small {
+  flex: none;
+}
+
 .bar {
   height: 6px;
   background: var(--paper-deep);

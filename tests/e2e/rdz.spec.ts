@@ -238,6 +238,49 @@ test('image consent, direct transfer, save, dismiss, reuse, and decline', async 
   await b.context.close();
 });
 
+test('a photo transfer can be cancelled by either side', async ({ browser }, testInfo) => {
+  const { a, b, bWords } = await setupPair(browser);
+  const file = testInfo.outputPath('cancel.png');
+  const body = Buffer.alloc(4 * 1024 * 1024);
+  PNG.copy(body);
+  writeFileSync(file, body);
+
+  // Sender cancels while the offer is waiting.
+  await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await a.page.getByRole('button', { name: 'choose image' }).click();
+  await a.page.locator('input[type=file]').setInputFiles(file);
+  await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
+  await expect(a.page.locator('.progress-panel').getByRole('button', { name: 'cancel' })).toBeVisible();
+  await a.page.locator('.progress-panel').getByRole('button', { name: 'cancel' }).click();
+  await expect(a.page.getByRole('status')).toContainText('Image transfer cancelled.');
+  await expect(b.page.getByRole('status')).toContainText('The sender cancelled the transfer.');
+  await expect(b.page.locator('.offer')).toHaveCount(0);
+
+  // Recipient cancels after accepting, while the direct connection is starting.
+  // Hold binary chunks in the sender so the progress row stays active long
+  // enough to exercise the recipient's cancel control deterministically.
+  await a.page.evaluate(() => {
+    const originalSend = RTCDataChannel.prototype.send;
+    RTCDataChannel.prototype.send = function (data: string | ArrayBuffer | ArrayBufferView) {
+      if (typeof data !== 'string') return;
+      originalSend.call(this, data);
+    };
+  });
+  await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await a.page.getByRole('button', { name: /reuse last image/ }).click();
+  await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
+  await b.page.getByRole('button', { name: 'accept', exact: true }).click();
+  await expect(b.page.locator('.progress-panel').getByRole('button', { name: 'cancel' })).toBeVisible();
+  await b.page.locator('.progress-panel').getByRole('button', { name: 'cancel' }).click();
+  await expect(b.page.getByRole('status')).toContainText('Image transfer cancelled.');
+  await expect(a.page.getByRole('status')).toContainText('The recipient cancelled the transfer.');
+  await expect(a.page.locator('.progress-panel')).toHaveCount(0);
+  await expect(b.page.locator('.progress-panel')).toHaveCount(0);
+
+  await a.context.close();
+  await b.context.close();
+});
+
 test('a photo travels from a phone-sized sender to a desktop', async ({ browser }, testInfo) => {
   const { a, b, bWords } = await setupPair(browser, true);
   const file = testInfo.outputPath('phone.png');

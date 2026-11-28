@@ -146,7 +146,7 @@ export interface ImageTransferProgress {
   peer: HumanId;
   name: string;
   size: number;
-  phase: 'offer' | 'waiting' | 'connecting' | 'transferring' | 'done' | 'failed' | 'declined';
+  phase: 'offer' | 'waiting' | 'connecting' | 'transferring' | 'done' | 'failed' | 'declined' | 'cancelled';
   transferred: number;
   error: string | null;
 }

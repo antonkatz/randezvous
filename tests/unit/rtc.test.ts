@@ -428,6 +428,91 @@ describe('image connection mechanics', () => {
     rtc.stop();
   });
 
+  it('cancels an outgoing photo and tells the recipient why', async () => {
+    const { rtc, peer, signals, progress } = await imageManager();
+    rtc.sendImage(
+      peer.humanId,
+      'channel',
+      new File([new Uint8Array([1, 2, 3])], 'one.png', { type: 'image/png' }),
+    );
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+
+    expect(rtc.cancelImage(offer!.transferId)).toBe(true);
+    expect(signals.find((entry) => entry.signal === 'image-decline')?.data).toEqual({
+      reason: 'The sender cancelled the transfer.',
+    });
+    expect(progress.at(-1)?.phase).toBe('cancelled');
+    expect(rtc.isSendingImage).toBe(false);
+    expect(rtc.busyPeers().has(peer.humanId)).toBe(false);
+    rtc.stop();
+  });
+
+  it('cancels an accepted incoming photo and tells the sender why', async () => {
+    const { rtc, identity, peer, signals, progress } = await imageManager();
+    const transferId = 'cancel-incoming';
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-offer', transferId, { sizeMb: 0.1 }),
+    );
+    await rtc.acceptImage(transferId);
+
+    expect(rtc.cancelImage(transferId)).toBe(true);
+    expect(signals.find((entry) => entry.signal === 'image-decline')?.data).toEqual({
+      reason: 'The recipient cancelled the transfer.',
+    });
+    expect(progress.at(-1)?.phase).toBe('cancelled');
+    expect(rtc.busyPeers().has(peer.humanId)).toBe(false);
+    rtc.stop();
+  });
+
+  it('waits for a signed cancellation reason after the incoming channel closes', async () => {
+    const { rtc, identity, peer, failed } = await imageManager();
+    const transferId = 'close-cancel';
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-offer', transferId, { sizeMb: 0.1 }),
+    );
+    await rtc.acceptImage(transferId);
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'offer', transferId, {
+        sdp: { type: 'offer', sdp: 'v=0' },
+      }),
+    );
+    const channel = FakePeerConnection.instances[0]!.channels[0]!;
+    channel.dispatchEvent(new Event('close'));
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(failed).toEqual([]);
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-decline', transferId, {
+        reason: 'The sender cancelled the transfer.',
+      }),
+    );
+    expect(failed).toEqual(['The sender cancelled the transfer.']);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(failed).toEqual(['The sender cancelled the transfer.']);
+    rtc.stop();
+  });
+
+  it('falls back to a generic incoming close when no signed reason arrives', async () => {
+    const { rtc, identity, peer, failed } = await imageManager();
+    const transferId = 'close-generic';
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-offer', transferId, { sizeMb: 0.1 }),
+    );
+    await rtc.acceptImage(transferId);
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'offer', transferId, {
+        sdp: { type: 'offer', sdp: 'v=0' },
+      }),
+    );
+    FakePeerConnection.instances[0]!.channels[0]!.dispatchEvent(new Event('close'));
+
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(failed).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(failed).toEqual(['The direct connection closed during the transfer.']);
+    rtc.stop();
+  });
+
   it('limits queued bytes to the receiver window when bufferedAmount stays stale', async () => {
     const { rtc, identity, peer, signals } = await imageManager();
     const size = 1024 * 1024;

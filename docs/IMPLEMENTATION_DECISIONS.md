@@ -115,3 +115,7 @@ Decisions made where `docs/SPEC.md` is silent or incomplete. Append new entries;
 83. **Voice disconnect notices.** Both incoming and outgoing audio connection-state handlers announce "The voice connection was lost." before removing the live panel, satisfying FR-20/US-16 when the remote peer vanishes without sending `audio-end`.
 84. **Signature-complete canonical JSON.** Canonicalisation builds null-prototype records, so a `__proto__` key remains an ordinary signed field instead of disappearing into the prototype setter. Relay-injected content now invalidates the signature.
 
+## 2026-11-28 — Photo transfer cancellation
+
+85. **Explicit cancellation.** Every active photo progress row (waiting, connecting, or transferring) has a cancel button for both sender and recipient. Cancellation sends a signed `image-decline` with a side-specific reason, closes the direct connection, clears timers, and releases the connection-budget slot. The cancelling side sees "Image transfer cancelled." rather than a failure; the other side sees who cancelled. Incoming transports use the same 1.5 s close-reason grace as outgoing transports so the signed cancellation reason wins over the raw channel-close event.
+

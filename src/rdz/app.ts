@@ -507,6 +507,10 @@ export class RdzApp {
     if (progress.phase === 'declined') {
       this.showToast('The image was declined.');
     }
+    if (progress.phase === 'cancelled') {
+      this.imageProgress.delete(progress.transferId);
+      this.showToast('Image transfer cancelled.');
+    }
     if (progress.phase === 'failed') {
       this.showToast(progress.error ?? 'The image transfer failed.');
     }
@@ -783,6 +787,11 @@ export class RdzApp {
     if (action === 'decline-image') {
       this.rtc.declineImage(transferId);
       this.incomingImages.delete(transferId);
+      this.render();
+      return;
+    }
+    if (action === 'cancel-image') {
+      this.rtc.cancelImage(transferId);
       this.render();
       return;
     }
@@ -1641,9 +1650,12 @@ export class RdzApp {
           .map(
             (entry) => `
               <div class="transfer">
-                <div class="transfer-copy">
-                  <strong>${entry.direction === 'outgoing' ? 'sending' : 'receiving'} ${escapeHtml(entry.name)}</strong>
-                  <span>${entry.phase}${entry.error ? ` · ${escapeHtml(entry.error)}` : ''}</span>
+                <div class="transfer-head">
+                  <div class="transfer-copy">
+                    <strong>${entry.direction === 'outgoing' ? 'sending' : 'receiving'} ${escapeHtml(entry.name)}</strong>
+                    <span>${entry.phase}${entry.error ? ` · ${escapeHtml(entry.error)}` : ''}</span>
+                  </div>
+                  <button class="small ghost" data-action="cancel-image" data-transfer="${escapeAttr(entry.transferId)}" type="button">cancel</button>
                 </div>
                 <div class="bar"><span style="width:${entry.size ? Math.min(100, (entry.transferred / entry.size) * 100) : 10}%"></span></div>
               </div>

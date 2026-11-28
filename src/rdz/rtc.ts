@@ -108,6 +108,8 @@ interface IncomingImage extends NegotiatedPeer {
   windowAcknowledged: number;
   connectTimer: number;
   idleTimer: number;
+  closeTimer: number;
+  closePending: boolean;
 }
 
 interface OutgoingAudio extends NegotiatedPeer {
@@ -217,6 +219,53 @@ export class RtcManager {
     if (!transfer) return;
     this.deps.sendSignal(transfer.sender, transfer.channelId, 'image-decline', transferId);
     this.dropIncomingImage(transferId);
+  }
+
+  /**
+   * Cancel an outgoing or accepted incoming transfer. The signed decline tells
+   * the other side why the transfer disappeared; local cancellation is not
+   * reported as a failure.
+   */
+  cancelImage(transferId: string): boolean {
+    const outgoing = this.outgoingImage;
+    if (outgoing?.transferId === transferId) {
+      this.deps.sendSignal(outgoing.target, outgoing.channelId, 'image-decline', transferId, {
+        reason: 'The sender cancelled the transfer.',
+      });
+      this.deps.onImageProgress({
+        transferId,
+        direction: 'outgoing',
+        peer: outgoing.target,
+        name: 'image',
+        size: outgoing.file.size,
+        phase: 'cancelled',
+        transferred: 0,
+        error: null,
+      });
+      this.closeOutgoingImage();
+      return true;
+    }
+
+    const incoming = this.incomingImages.get(transferId);
+    if (incoming) {
+      this.deps.sendSignal(incoming.sender, incoming.channelId, 'image-decline', transferId, {
+        reason: 'The recipient cancelled the transfer.',
+      });
+      this.deps.onImageProgress({
+        transferId,
+        direction: 'incoming',
+        peer: incoming.sender,
+        name: 'image',
+        size: incoming.expected || Math.round(incoming.offer.sizeMb * 1024 * 1024),
+        phase: 'cancelled',
+        transferred: incoming.received,
+        error: null,
+      });
+      this.dropIncomingImage(transferId);
+      return true;
+    }
+
+    return false;
   }
 
   closeIncomingImage(transferId: string): void {
@@ -446,6 +495,8 @@ export class RtcManager {
         windowAcknowledged: 0,
         connectTimer: 0,
         idleTimer: 0,
+        closeTimer: 0,
+        closePending: false,
       });
       this.deps.onImageOffer(offer);
       return;
@@ -856,7 +907,7 @@ export class RtcManager {
           event.channel.addEventListener('message', (message) => this.receiveImageChunk(incoming, message));
           event.channel.addEventListener('close', () => {
             if (this.incomingImages.get(incoming.transferId) === incoming) {
-              this.failIncomingImage(incoming, 'The direct connection closed during the transfer.');
+              this.reportIncomingClose(incoming, 'The direct connection closed during the transfer.');
             }
           });
         });
@@ -865,7 +916,7 @@ export class RtcManager {
             (peer.connectionState === 'failed' || peer.connectionState === 'closed') &&
             this.incomingImages.get(incoming.transferId) === incoming
           ) {
-            this.failIncomingImage(incoming, 'The direct connection could not be made.');
+            this.reportIncomingClose(incoming, 'The direct connection could not be made.');
           }
         });
         this.wireIce(peer, incoming.sender, incoming.channelId, incoming.transferId);
@@ -1002,12 +1053,26 @@ export class RtcManager {
     this.dropIncomingImage(transfer.transferId);
   }
 
+  /** Wait briefly for the peer's signed close reason before reporting a generic failure. */
+  private reportIncomingClose(transfer: IncomingImage, message: string): void {
+    if (this.incomingImages.get(transfer.transferId) !== transfer || transfer.closePending) return;
+    transfer.closePending = true;
+    window.clearTimeout(transfer.idleTimer);
+    transfer.idleTimer = 0;
+    transfer.closeTimer = window.setTimeout(() => {
+      if (this.incomingImages.get(transfer.transferId) === transfer) {
+        this.failIncomingImage(transfer, message);
+      }
+    }, CLOSE_REASON_GRACE_MS);
+  }
+
   private dropIncomingImage(transferId: string): void {
     const transfer = this.incomingImages.get(transferId);
     if (!transfer) return;
     this.incomingImages.delete(transferId);
     window.clearTimeout(transfer.connectTimer);
     window.clearTimeout(transfer.idleTimer);
+    window.clearTimeout(transfer.closeTimer);
     closePeer(transfer.pc);
     this.connections.release(`image:in:${transferId}`);
   }
