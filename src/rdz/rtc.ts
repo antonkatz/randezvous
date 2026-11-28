@@ -23,10 +23,18 @@ const ALLOWED_IMAGE_TYPES = new Set([
 ]);
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const CHUNK_SIZE = 64 * 1024;
+const MAX_BUFFERED_SEND_BYTES = 1024 * 1024;
+const MAX_PENDING_ICE = 100;
 const OFFER_TIMEOUT_MS = 120_000;
+const IMAGE_CONNECT_TIMEOUT_MS = 30_000;
+const IMAGE_TRANSFER_TIMEOUT_MS = 120_000;
+const IMAGE_TRANSFER_IDLE_MS = 30_000;
 const AUDIO_RESPONSE_TIMEOUT_MS = 2 * 60_000;
 const AUDIO_CONNECT_TIMEOUT_MS = 30_000;
 const AUDIO_LIMIT_MS = 60_000;
+// Keep the receiving transport alive briefly after the ack so the final SCTP
+// packet is not discarded with the peer connection.
+const ACK_FLUSH_MS = 1_000;
 
 interface RtcDeps {
   sendSignal: (
@@ -47,36 +55,47 @@ interface RtcDeps {
   onAudioNotice: (message: string) => void;
 }
 
-interface OutgoingImage {
+/**
+ * ICE candidates can arrive before the SDP that makes the remote description
+ * known. They are held here until the connection can apply them; dropping them
+ * leaves some NAT pairs permanently stuck in connecting.
+ */
+interface NegotiatedPeer {
+  pc: RTCPeerConnection | null;
+  remoteReady: boolean;
+  pendingIce: RTCIceCandidateInit[];
+}
+
+interface OutgoingImage extends NegotiatedPeer {
   transferId: string;
   target: HumanId;
   channelId: RendezvousId;
   file: File;
-  pc: RTCPeerConnection | null;
   channel: RTCDataChannel | null;
   timeout: number;
   done: boolean;
 }
 
-interface IncomingImage {
+interface IncomingImage extends NegotiatedPeer {
   transferId: string;
   sender: HumanId;
   channelId: RendezvousId;
   offer: IncomingImageOffer;
-  pc: RTCPeerConnection | null;
   channel: RTCDataChannel | null;
   chunks: Uint8Array[];
+  chunkChain: Promise<void>;
   received: number;
   expected: number;
   mime: string;
   accepted: boolean;
+  connectTimer: number;
+  idleTimer: number;
 }
 
-interface OutgoingAudio {
+interface OutgoingAudio extends NegotiatedPeer {
   transferId: string;
   target: HumanId;
   channelId: RendezvousId;
-  pc: RTCPeerConnection | null;
   stream: MediaStream | null;
   timer: number;
   ticker: number;
@@ -85,11 +104,10 @@ interface OutgoingAudio {
   remoteStream: MediaStream | null;
 }
 
-interface IncomingAudio {
+interface IncomingAudio extends NegotiatedPeer {
   transferId: string;
   sender: HumanId;
   channelId: RendezvousId;
-  pc: RTCPeerConnection | null;
   stream: MediaStream | null;
   accepted: boolean;
   timer: number;
@@ -119,11 +137,9 @@ export class RtcManager {
   stop(): void {
     this.stopped = true;
     this.closeOutgoingImage();
-    for (const [id, transfer] of this.incomingImages) {
-      closePeer(transfer.pc);
-      this.connections.release(`image:in:${id}`);
+    for (const transfer of [...this.incomingImages.values()]) {
+      this.dropIncomingImage(transfer.transferId);
     }
-    this.incomingImages.clear();
     this.closeAudio(false);
   }
 
@@ -144,7 +160,15 @@ export class RtcManager {
   /** Called after the local user accepts an incoming image offer. */
   async acceptImage(transferId: string): Promise<void> {
     const transfer = this.incomingImages.get(transferId);
-    if (!transfer) return;
+    if (!transfer || transfer.accepted) return;
+    if (Date.now() - transfer.offer.receivedAt > OFFER_TIMEOUT_MS) {
+      this.deps.sendSignal(transfer.sender, transfer.channelId, 'image-decline', transferId, {
+        reason: 'The image offer expired.',
+      });
+      this.dropIncomingImage(transferId);
+      this.deps.onImageFailed(transferId, 'The image offer expired.');
+      return;
+    }
     transfer.accepted = true;
     this.deps.sendSignal(
       transfer.sender,
@@ -152,6 +176,11 @@ export class RtcManager {
       'image-accept',
       transfer.transferId,
     );
+    transfer.connectTimer = window.setTimeout(() => {
+      if (this.incomingImages.get(transferId) === transfer && transfer.expected === 0) {
+        this.failIncomingImage(transfer, 'The direct connection timed out.');
+      }
+    }, IMAGE_CONNECT_TIMEOUT_MS);
     this.deps.onImageProgress({
       transferId,
       direction: 'incoming',
@@ -162,27 +191,23 @@ export class RtcManager {
       transferred: 0,
       error: null,
     });
-    this.incomingImages.set(transferId, transfer);
   }
 
   declineImage(transferId: string): void {
     const transfer = this.incomingImages.get(transferId);
     if (!transfer) return;
     this.deps.sendSignal(transfer.sender, transfer.channelId, 'image-decline', transferId);
-    this.incomingImages.delete(transferId);
+    this.dropIncomingImage(transferId);
   }
 
   closeIncomingImage(transferId: string): void {
-    const transfer = this.incomingImages.get(transferId);
-    if (!transfer) return;
-    closePeer(transfer.pc);
-    this.connections.release(`image:in:${transferId}`);
-    this.incomingImages.delete(transferId);
+    this.dropIncomingImage(transferId);
   }
 
   sendImage(target: HumanId, channelId: RendezvousId, file: File): void {
     if (this.outgoingImage) throw new Error('Only one image can be sent at a time.');
     if (!ALLOWED_IMAGE_TYPES.has(file.type)) throw new Error('Only PNG, JPEG, WebP, GIF, or AVIF images are allowed.');
+    if (file.size <= 0) throw new Error('That image is empty.');
     if (file.size > MAX_IMAGE_BYTES) throw new Error('Images must be 25 MB or smaller.');
     const transferId = randomTransferId();
     const transfer: OutgoingImage = {
@@ -191,6 +216,8 @@ export class RtcManager {
       channelId,
       file,
       pc: null,
+      remoteReady: false,
+      pendingIce: [],
       channel: null,
       timeout: window.setTimeout(() => this.failOutgoingImage('No answer from the recipient.'), OFFER_TIMEOUT_MS),
       done: false,
@@ -223,6 +250,8 @@ export class RtcManager {
       target,
       channelId,
       pc: null,
+      remoteReady: false,
+      pendingIce: [],
       stream: null,
       timer: 0,
       ticker: 0,
@@ -374,18 +403,24 @@ export class RtcManager {
         sizeMb: data.sizeMb,
         receivedAt: Date.now(),
       };
+      if (this.incomingImages.has(transferId)) return;
       this.incomingImages.set(transferId, {
         transferId,
         sender: envelope.author,
         channelId: payload.channelId,
         offer,
         pc: null,
+        remoteReady: false,
+        pendingIce: [],
         channel: null,
         chunks: [],
+        chunkChain: Promise.resolve(),
         received: 0,
         expected: 0,
         mime: '',
         accepted: false,
+        connectTimer: 0,
+        idleTimer: 0,
       });
       this.deps.onImageOffer(offer);
       return;
@@ -399,18 +434,32 @@ export class RtcManager {
     }
 
     if (payload.signal === 'image-decline') {
+      const data = payload.data as { reason?: unknown } | undefined;
+      const reason = typeof data?.reason === 'string' ? data.reason.slice(0, 200) : '';
       if (this.outgoingImage?.transferId === transferId) {
+        const transfer = this.outgoingImage;
         this.deps.onImageProgress({
           transferId,
           direction: 'outgoing',
-          peer: this.outgoingImage.target,
+          peer: transfer.target,
           name: 'image',
-          size: this.outgoingImage.file.size,
-          phase: 'declined',
+          size: transfer.file.size,
+          phase: reason ? 'failed' : 'declined',
           transferred: 0,
-          error: null,
+          error: reason || null,
         });
         this.closeOutgoingImage();
+      }
+      const incoming = this.incomingImages.get(transferId);
+      if (incoming) {
+        const accepted = incoming.accepted;
+        this.dropIncomingImage(transferId);
+        if (accepted || reason) {
+          this.deps.onImageFailed(
+            transferId,
+            reason || 'The image was withdrawn before it was received.',
+          );
+        }
       }
       return;
     }
@@ -435,6 +484,8 @@ export class RtcManager {
         sender: envelope.author,
         channelId: payload.channelId,
         pc: null,
+        remoteReady: false,
+        pendingIce: [],
         stream: null,
         accepted: false,
         timer: 0,
@@ -518,23 +569,39 @@ export class RtcManager {
     const channel = pc.createDataChannel('image', { ordered: true });
     transfer.channel = channel;
     channel.binaryType = 'arraybuffer';
+    channel.bufferedAmountLowThreshold = MAX_BUFFERED_SEND_BYTES / 2;
     channel.addEventListener('open', () => {
       window.clearTimeout(transfer.timeout);
+      transfer.timeout = window.setTimeout(() => {
+        if (this.outgoingImage === transfer && !transfer.done) {
+          this.failOutgoingImage('The image transfer timed out.');
+        }
+      }, IMAGE_TRANSFER_TIMEOUT_MS);
       void this.sendImageBytes(transfer);
+    });
+    channel.addEventListener('close', () => {
+      if (this.outgoingImage === transfer && !transfer.done) {
+        this.failOutgoingImage('The direct connection closed during the transfer.');
+      }
     });
     this.wireIce(pc, transfer.target, transfer.channelId, transfer.transferId);
     transfer.timeout = window.setTimeout(() => {
-      if (transfer.channel?.readyState !== 'open') {
+      if (this.outgoingImage === transfer && transfer.channel?.readyState !== 'open') {
         this.failOutgoingImage('The direct connection timed out.');
       }
-    }, 30_000);
+    }, IMAGE_CONNECT_TIMEOUT_MS);
     pc.addEventListener('connectionstatechange', () => {
-      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+      if (
+        (pc.connectionState === 'failed' || pc.connectionState === 'closed') &&
+        this.outgoingImage === transfer &&
+        !transfer.done
+      ) {
         this.failOutgoingImage('The direct connection could not be made.');
       }
     });
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    if (this.outgoingImage !== transfer) return;
     this.deps.sendSignal(transfer.target, transfer.channelId, 'offer', transfer.transferId, {
       sdp: plainSdp(pc.localDescription),
     });
@@ -553,41 +620,38 @@ export class RtcManager {
   private async sendImageBytes(transfer: OutgoingImage): Promise<void> {
     const channel = transfer.channel;
     if (!channel || channel.readyState !== 'open') return;
-    channel.send(
-      JSON.stringify({
-        type: 'meta',
-        name: 'image',
-        size: transfer.file.size,
-        mime: transfer.file.type,
-      }),
-    );
-    const buffer = new Uint8Array(await transfer.file.arrayBuffer());
-    let offset = 0;
-    const sendNext = (): void => {
-      if (transfer.done) return;
-      if (offset >= buffer.length) return;
-      const end = Math.min(buffer.length, offset + CHUNK_SIZE);
-      channel.send(buffer.slice(offset, end));
-      offset = end;
-      this.deps.onImageProgress({
-        transferId: transfer.transferId,
-        direction: 'outgoing',
-        peer: transfer.target,
-        name: 'image',
-        size: transfer.file.size,
-        phase: 'transferring',
-        transferred: offset,
-        error: null,
-      });
-      if (offset < buffer.length) {
-        window.setTimeout(sendNext, 0);
-      }
-    };
+    try {
+      channel.send(
+        JSON.stringify({
+          type: 'meta',
+          name: 'image',
+          size: transfer.file.size,
+          mime: transfer.file.type,
+        }),
+      );
+    } catch {
+      this.failOutgoingImage('The image could not be sent over the direct connection.');
+      return;
+    }
+    let buffer: Uint8Array;
+    try {
+      buffer = new Uint8Array(await transfer.file.arrayBuffer());
+    } catch {
+      this.failOutgoingImage('The image could not be read.');
+      return;
+    }
+    if (buffer.length === 0) {
+      this.failOutgoingImage('That image is empty.');
+      return;
+    }
     channel.addEventListener('message', (event) => {
+      if (typeof event.data !== 'string') return;
       try {
-        const message = JSON.parse(String(event.data)) as { type?: string };
+        const message = JSON.parse(event.data) as { type?: string };
         if (message.type === 'ack') {
+          if (this.outgoingImage !== transfer || transfer.done) return;
           transfer.done = true;
+          window.clearTimeout(transfer.timeout);
           this.deps.onImageProgress({
             transferId: transfer.transferId,
             direction: 'outgoing',
@@ -604,6 +668,46 @@ export class RtcManager {
         // Ignore non-control messages.
       }
     });
+    let offset = 0;
+    let reported = 0;
+    const sendNext = (): void => {
+      if (transfer.done || this.outgoingImage !== transfer) return;
+      if (channel.readyState !== 'open') {
+        this.failOutgoingImage('The direct connection closed during the transfer.');
+        return;
+      }
+      try {
+        // Respect the SCTP send buffer. Mobile browsers have a much smaller
+        // buffer than desktop ones and throw if it is filled in one burst.
+        while (offset < buffer.length && channel.bufferedAmount < MAX_BUFFERED_SEND_BYTES) {
+          const end = Math.min(buffer.length, offset + CHUNK_SIZE);
+          channel.send(buffer.slice(offset, end));
+          offset = end;
+        }
+      } catch {
+        this.failOutgoingImage('The image could not be sent over the direct connection.');
+        return;
+      }
+      if (offset > reported) {
+        reported = offset;
+        this.deps.onImageProgress({
+          transferId: transfer.transferId,
+          direction: 'outgoing',
+          peer: transfer.target,
+          name: 'image',
+          size: transfer.file.size,
+          phase: 'transferring',
+          transferred: offset,
+          error: null,
+        });
+      }
+      if (offset < buffer.length) {
+        window.setTimeout(
+          sendNext,
+          channel.bufferedAmount >= MAX_BUFFERED_SEND_BYTES ? 50 : 0,
+        );
+      }
+    };
     sendNext();
   }
 
@@ -616,13 +720,12 @@ export class RtcManager {
     const incomingAudio = this.incomingAudio.get(payload.transferId);
     const outgoingAudio =
       this.outgoingAudio?.transferId === payload.transferId ? this.outgoingAudio : null;
-
-    const pc = incoming?.pc ?? outgoing?.pc ?? incomingAudio?.pc ?? outgoingAudio?.pc ?? null;
+    const target = incoming ?? outgoing ?? incomingAudio ?? outgoingAudio ?? null;
 
     if (payload.signal === 'offer' && data?.sdp) {
       if (incoming && incoming.accepted) {
+        if (incoming.pc) return;
         if (!this.connections.tryAcquire(`image:in:${incoming.transferId}`)) {
-          this.deps.sendSignal(incoming.sender, incoming.channelId, 'image-decline', incoming.transferId);
           this.failIncomingImage(incoming, 'Too many live connections are open right now.');
           return;
         }
@@ -632,6 +735,11 @@ export class RtcManager {
           incoming.channel = event.channel;
           event.channel.binaryType = 'arraybuffer';
           event.channel.addEventListener('message', (message) => this.receiveImageChunk(incoming, message));
+          event.channel.addEventListener('close', () => {
+            if (this.incomingImages.get(incoming.transferId) === incoming) {
+              this.failIncomingImage(incoming, 'The direct connection closed during the transfer.');
+            }
+          });
         });
         peer.addEventListener('connectionstatechange', () => {
           if (
@@ -642,15 +750,24 @@ export class RtcManager {
           }
         });
         this.wireIce(peer, incoming.sender, incoming.channelId, incoming.transferId);
-        await peer.setRemoteDescription(data.sdp);
+        try {
+          await peer.setRemoteDescription(data.sdp);
+        } catch {
+          this.failIncomingImage(incoming, 'The direct connection could not be made.');
+          return;
+        }
+        incoming.remoteReady = true;
+        await this.flushPendingIce(incoming);
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
+        if (this.incomingImages.get(incoming.transferId) !== incoming) return;
         this.deps.sendSignal(incoming.sender, incoming.channelId, 'answer', incoming.transferId, {
           sdp: plainSdp(peer.localDescription),
         });
         return;
       }
       if (incomingAudio?.accepted) {
+        if (incomingAudio.pc) return;
         if (!this.connections.tryAcquire(`audio:in:${incomingAudio.transferId}`)) {
           this.deps.sendSignal(incomingAudio.sender, incomingAudio.channelId, 'audio-decline', incomingAudio.transferId);
           this.deps.onAudioNotice('Too many live connections are open right now.');
@@ -675,9 +792,19 @@ export class RtcManager {
           for (const track of incomingAudio.stream.getTracks()) peer.addTrack(track, incomingAudio.stream);
         }
         this.wireIce(peer, incomingAudio.sender, incomingAudio.channelId, incomingAudio.transferId);
-        await peer.setRemoteDescription(data.sdp);
+        try {
+          await peer.setRemoteDescription(data.sdp);
+        } catch {
+          this.deps.sendSignal(incomingAudio.sender, incomingAudio.channelId, 'audio-decline', incomingAudio.transferId);
+          this.deps.onAudioNotice('The voice connection could not be made.');
+          this.dropIncomingAudio(incomingAudio.transferId);
+          return;
+        }
+        incomingAudio.remoteReady = true;
+        await this.flushPendingIce(incomingAudio);
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
+        if (this.incomingAudio.get(incomingAudio.transferId) !== incomingAudio) return;
         this.deps.sendSignal(incomingAudio.sender, incomingAudio.channelId, 'answer', incomingAudio.transferId, {
           sdp: plainSdp(peer.localDescription),
         });
@@ -703,33 +830,72 @@ export class RtcManager {
       return;
     }
 
-    if (payload.signal === 'answer' && pc && data?.sdp) {
-      await pc.setRemoteDescription(data.sdp);
-      if (outgoingAudio) this.startOutgoingAudio(outgoingAudio);
+    if (payload.signal === 'answer' && data?.sdp && target?.pc) {
+      if (target.remoteReady) return;
+      try {
+        await target.pc.setRemoteDescription(data.sdp);
+      } catch {
+        if (outgoing) {
+          this.failOutgoingImage('The direct connection could not be made.');
+        } else if (outgoingAudio) {
+          this.deps.onAudioNotice('The voice connection could not be made.');
+          this.closeAudio(false);
+        }
+        return;
+      }
+      target.remoteReady = true;
+      await this.flushPendingIce(target);
+      if (outgoingAudio && target === outgoingAudio) this.startOutgoingAudio(outgoingAudio);
       return;
     }
 
-    if (payload.signal === 'ice' && pc && data?.candidate) {
-      try {
-        await pc.addIceCandidate(data.candidate);
-      } catch {
-        // ICE can arrive before the remote description; ignore late failures.
+    if (payload.signal === 'ice' && data?.candidate && target) {
+      const candidate = data.candidate;
+      if (!target.remoteReady || !target.pc) {
+        if (target.pendingIce.length < MAX_PENDING_ICE) target.pendingIce.push(candidate);
+        return;
       }
+      await target.pc.addIceCandidate(candidate).catch(() => undefined);
+    }
+  }
+
+  private async flushPendingIce(target: NegotiatedPeer): Promise<void> {
+    const pc = target.pc;
+    if (!pc) return;
+    const candidates = target.pendingIce.splice(0);
+    for (const candidate of candidates) {
+      await pc.addIceCandidate(candidate).catch(() => undefined);
     }
   }
 
   private failIncomingImage(transfer: IncomingImage, message: string): void {
+    if (this.incomingImages.get(transfer.transferId) !== transfer) return;
+    if (transfer.accepted) {
+      this.deps.sendSignal(transfer.sender, transfer.channelId, 'image-decline', transfer.transferId, {
+        reason: message,
+      });
+    }
     this.deps.onImageFailed(transfer.transferId, message);
+    this.dropIncomingImage(transfer.transferId);
+  }
+
+  private dropIncomingImage(transferId: string): void {
+    const transfer = this.incomingImages.get(transferId);
+    if (!transfer) return;
+    this.incomingImages.delete(transferId);
+    window.clearTimeout(transfer.connectTimer);
+    window.clearTimeout(transfer.idleTimer);
     closePeer(transfer.pc);
-    this.connections.release(`image:in:${transfer.transferId}`);
-    this.incomingImages.delete(transfer.transferId);
+    this.connections.release(`image:in:${transferId}`);
   }
 
   private receiveImageChunk(transfer: IncomingImage, event: MessageEvent): void {
+    if (this.incomingImages.get(transfer.transferId) !== transfer) return;
     if (typeof event.data === 'string') {
       try {
         const message = JSON.parse(event.data) as { type?: string; size?: number; mime?: string };
         if (message.type === 'meta') {
+          if (transfer.expected > 0) return;
           if (
             typeof message.size !== 'number' ||
             !Number.isFinite(message.size) ||
@@ -743,6 +909,9 @@ export class RtcManager {
           }
           transfer.expected = message.size;
           transfer.mime = message.mime;
+          window.clearTimeout(transfer.connectTimer);
+          transfer.connectTimer = 0;
+          this.resetIncomingIdleTimer(transfer);
           this.deps.onImageProgress({
             transferId: transfer.transferId,
             direction: 'incoming',
@@ -755,13 +924,37 @@ export class RtcManager {
           });
         }
       } catch {
-        // Ignore.
+        // Ignore malformed control messages.
       }
       return;
     }
-    const chunk = new Uint8Array(event.data as ArrayBuffer);
+    transfer.chunkChain = transfer.chunkChain
+      .then(async () => {
+        if (this.incomingImages.get(transfer.transferId) !== transfer) return;
+        const chunk =
+          event.data instanceof Blob
+            ? new Uint8Array(await event.data.arrayBuffer())
+            : new Uint8Array(event.data as ArrayBuffer);
+        this.appendIncomingChunk(transfer, chunk);
+      })
+      .catch(() => {
+        this.failIncomingImage(transfer, 'The image could not be received.');
+      });
+  }
+
+  private appendIncomingChunk(transfer: IncomingImage, chunk: Uint8Array): void {
+    if (this.incomingImages.get(transfer.transferId) !== transfer) return;
+    if (transfer.expected === 0) {
+      this.failIncomingImage(transfer, 'The image metadata was not received.');
+      return;
+    }
+    if (transfer.received + chunk.length > transfer.expected) {
+      this.failIncomingImage(transfer, 'The image transfer was incomplete.');
+      return;
+    }
     transfer.chunks.push(chunk);
     transfer.received += chunk.length;
+    this.resetIncomingIdleTimer(transfer);
     this.deps.onImageProgress({
       transferId: transfer.transferId,
       direction: 'incoming',
@@ -772,19 +965,44 @@ export class RtcManager {
       transferred: transfer.received,
       error: null,
     });
-    if (transfer.received >= transfer.expected) {
-      const blob = new Blob(transfer.chunks as unknown as BlobPart[], { type: transfer.mime || 'application/octet-stream' });
+    if (transfer.received === transfer.expected) this.finishIncomingImage(transfer);
+  }
+
+  private resetIncomingIdleTimer(transfer: IncomingImage): void {
+    window.clearTimeout(transfer.idleTimer);
+    transfer.idleTimer = window.setTimeout(() => {
+      if (this.incomingImages.get(transfer.transferId) === transfer) {
+        this.failIncomingImage(transfer, 'The image transfer timed out.');
+      }
+    }, IMAGE_TRANSFER_IDLE_MS);
+  }
+
+  private finishIncomingImage(transfer: IncomingImage): void {
+    if (this.incomingImages.get(transfer.transferId) !== transfer) return;
+    const blob = new Blob(transfer.chunks as unknown as BlobPart[], {
+      type: transfer.mime || 'application/octet-stream',
+    });
+    this.incomingImages.delete(transfer.transferId);
+    window.clearTimeout(transfer.connectTimer);
+    window.clearTimeout(transfer.idleTimer);
+    this.connections.release(`image:in:${transfer.transferId}`);
+    try {
       transfer.channel?.send(JSON.stringify({ type: 'ack' }));
-      this.deps.onImageComplete(transfer.transferId, blob, transfer.mime);
-      closePeer(transfer.pc);
-      this.connections.release(`image:in:${transfer.transferId}`);
-      this.incomingImages.delete(transfer.transferId);
+    } catch {
+      // The image is complete locally even if the ack cannot be queued.
     }
+    this.deps.onImageComplete(transfer.transferId, blob, transfer.mime);
+    // Keep the transport alive briefly so the ack is actually flushed before
+    // closing the peer connection.
+    window.setTimeout(() => closePeer(transfer.pc), ACK_FLUSH_MS);
   }
 
   private failOutgoingImage(message: string): void {
     const transfer = this.outgoingImage;
-    if (!transfer) return;
+    if (!transfer || transfer.done) return;
+    this.deps.sendSignal(transfer.target, transfer.channelId, 'image-decline', transfer.transferId, {
+      reason: message,
+    });
     this.deps.onImageProgress({
       transferId: transfer.transferId,
       direction: 'outgoing',
@@ -799,11 +1017,12 @@ export class RtcManager {
   }
 
   private closeOutgoingImage(): void {
-    if (!this.outgoingImage) return;
-    window.clearTimeout(this.outgoingImage.timeout);
-    closePeer(this.outgoingImage.pc);
-    this.connections.release(`image:out:${this.outgoingImage.transferId}`);
+    const transfer = this.outgoingImage;
+    if (!transfer) return;
     this.outgoingImage = null;
+    window.clearTimeout(transfer.timeout);
+    closePeer(transfer.pc);
+    this.connections.release(`image:out:${transfer.transferId}`);
   }
 
   private async startAudioOffer(outgoing: OutgoingAudio): Promise<void> {

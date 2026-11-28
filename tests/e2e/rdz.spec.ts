@@ -11,8 +11,12 @@ function futureTime(): string {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
-async function openPage(browser: Browser, query = ''): Promise<{ context: Awaited<ReturnType<Browser['newContext']>>; page: Page; errors: string[] }> {
-  const context = await browser.newContext();
+async function openPage(
+  browser: Browser,
+  query = '',
+  viewport?: { width: number; height: number },
+): Promise<{ context: Awaited<ReturnType<Browser['newContext']>>; page: Page; errors: string[] }> {
+  const context = await browser.newContext(viewport ? { viewport, hasTouch: true } : {});
   const page = await context.newPage();
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -70,7 +74,7 @@ async function verify(page: Page, shortWords: string): Promise<void> {
   await expect(page.locator('.modal')).toHaveCount(0);
 }
 
-async function setupPair(browser: Browser): Promise<{
+async function setupPair(browser: Browser, phoneFirst = false): Promise<{
   a: Awaited<ReturnType<typeof openPage>>;
   b: Awaited<ReturnType<typeof openPage>>;
   aWords: string;
@@ -78,7 +82,7 @@ async function setupPair(browser: Browser): Promise<{
   channel: string;
 }> {
   const time = futureTime();
-  const a = await openPage(browser);
+  const a = await openPage(browser, '', phoneFirst ? { width: 390, height: 844 } : undefined);
   const b = await openPage(browser);
   await expectLive(a.page);
   await expectLive(b.page);
@@ -174,6 +178,28 @@ test('image consent, direct transfer, save, dismiss, reuse, and decline', async 
   await expect(b.page.getByRole('button', { name: 'decline', exact: true })).toBeVisible();
   await b.page.getByRole('button', { name: 'decline', exact: true }).click();
   await expect(a.page.getByText('The image was declined.')).toBeVisible();
+
+  await a.context.close();
+  await b.context.close();
+});
+
+test('a photo travels from a phone-sized sender to a desktop', async ({ browser }, testInfo) => {
+  const { a, b, bWords } = await setupPair(browser, true);
+  const file = testInfo.outputPath('phone.png');
+  const body = Buffer.alloc(2 * 1024 * 1024);
+  PNG.copy(body);
+  writeFileSync(file, body);
+
+  await humanRow(a.page, bWords).getByRole('button', { name: 'send photo' }).click();
+  await a.page.getByRole('button', { name: 'choose image' }).click();
+  await a.page.locator('input[type=file]').setInputFiles(file);
+
+  await expect(b.page.getByRole('button', { name: 'accept', exact: true })).toBeVisible();
+  await b.page.getByRole('button', { name: 'accept', exact: true }).click();
+  await expect(b.page.locator('img.received-image')).toBeVisible({ timeout: 30_000 });
+  await expect(a.page.locator('.transfer')).toHaveCount(0, { timeout: 15_000 });
+  expect(a.errors).toEqual([]);
+  expect(b.errors).toEqual([]);
 
   await a.context.close();
   await b.context.close();

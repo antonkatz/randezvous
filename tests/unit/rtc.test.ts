@@ -1,7 +1,116 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEnvelope, createIdentity } from '../../src/rdz/crypto';
 import { RtcManager } from '../../src/rdz/rtc';
-import type { AudioSession, SignalKind } from '../../src/rdz/types';
+import type {
+  AudioSession,
+  ImageTransferProgress,
+  IncomingImageOffer,
+  SignalKind,
+} from '../../src/rdz/types';
+
+class FakeDataChannel extends EventTarget {
+  readyState: RTCDataChannelState = 'open';
+  binaryType: BinaryType = 'arraybuffer';
+  bufferedAmount = 0;
+  bufferedAmountLowThreshold = 0;
+  sent: Array<string | ArrayBuffer | ArrayBufferView> = [];
+
+  send(data: string | ArrayBuffer | ArrayBufferView): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.readyState = 'closed';
+  }
+
+  receive(data: unknown): void {
+    this.dispatchEvent(new MessageEvent('message', { data }));
+  }
+}
+
+class FakePeerConnection extends EventTarget {
+  static instances: FakePeerConnection[] = [];
+
+  connectionState: RTCPeerConnectionState = 'new';
+  localDescription: RTCSessionDescription | null = null;
+  remoteDescription: RTCSessionDescriptionInit | null = null;
+  channels: FakeDataChannel[] = [];
+  addedIce: RTCIceCandidateInit[] = [];
+
+  constructor() {
+    super();
+    FakePeerConnection.instances.push(this);
+  }
+
+  createDataChannel(): RTCDataChannel {
+    const channel = new FakeDataChannel();
+    this.channels.push(channel);
+    return channel as unknown as RTCDataChannel;
+  }
+
+  async createOffer(): Promise<RTCSessionDescriptionInit> {
+    return { type: 'offer', sdp: 'offer-sdp' };
+  }
+
+  async createAnswer(): Promise<RTCSessionDescriptionInit> {
+    return { type: 'answer', sdp: 'answer-sdp' };
+  }
+
+  async setLocalDescription(description: RTCSessionDescriptionInit): Promise<void> {
+    this.localDescription = description as RTCSessionDescription;
+  }
+
+  async setRemoteDescription(description: RTCSessionDescriptionInit): Promise<void> {
+    this.remoteDescription = description;
+    if (description.type !== 'offer') return;
+    const channel = new FakeDataChannel();
+    this.channels.push(channel);
+    const event = new Event('datachannel') as Event & { channel: RTCDataChannel };
+    Object.defineProperty(event, 'channel', { value: channel as unknown as RTCDataChannel });
+    this.dispatchEvent(event);
+  }
+
+  async addIceCandidate(candidate: RTCIceCandidateInit): Promise<void> {
+    this.addedIce.push(candidate);
+  }
+
+  close(): void {
+    this.connectionState = 'closed';
+  }
+}
+
+interface CapturedSignal {
+  target: string;
+  channelId: string;
+  signal: SignalKind;
+  transferId: string;
+  data?: unknown;
+}
+
+async function imageManager() {
+  const identity = await createIdentity();
+  const peer = await createIdentity();
+  const signals: CapturedSignal[] = [];
+  const progress: ImageTransferProgress[] = [];
+  const failed: string[] = [];
+  const offers: IncomingImageOffer[] = [];
+  const completed: string[] = [];
+  const rtc = new RtcManager(identity, {
+    sendSignal: (target, channelId, signal, transferId, data) => {
+      signals.push({ target, channelId, signal, transferId, ...(data === undefined ? {} : { data }) });
+    },
+    isVerified: () => true,
+    canAcceptChannel: () => true,
+    onImageOffer: (offer) => offers.push(offer),
+    onImageProgress: (entry) => progress.push(entry),
+    onImageComplete: (transferId) => completed.push(transferId),
+    onImageFailed: (_transferId, message) => failed.push(message),
+    onAudioRequest: () => undefined,
+    onAudioState: () => undefined,
+    onAudioNotice: () => undefined,
+  });
+  return { rtc, identity, peer, signals, progress, failed, offers, completed };
+}
 
 async function manager(): Promise<RtcManager> {
   const identity = await createIdentity();
@@ -55,6 +164,7 @@ async function signalEnvelope(
   target: string,
   signal: SignalKind,
   transferId: string,
+  data?: unknown,
 ) {
   return createEnvelope(peer, {
     kind: 'SIGNAL',
@@ -62,6 +172,7 @@ async function signalEnvelope(
     channelId: 'channel',
     signal,
     transferId,
+    ...(data === undefined ? {} : { data }),
   });
 }
 
@@ -88,6 +199,126 @@ describe('image validation', () => {
     expect(() => rtc.sendImage('peer', 'channel', file)).toThrow(
       'Images must be 25 MB or smaller.',
     );
+  });
+});
+
+describe('image connection mechanics', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('window', globalThis);
+    vi.stubGlobal('RTCPeerConnection', FakePeerConnection);
+    FakePeerConnection.instances = [];
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('applies image ICE candidates that arrive before the offer', async () => {
+    const { rtc, identity, peer, signals } = await imageManager();
+    const transferId = 'incoming-transfer';
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-offer', transferId, { sizeMb: 0.1 }),
+    );
+    await rtc.acceptImage(transferId);
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'ice', transferId, {
+        candidate: { candidate: 'early' },
+      }),
+    );
+
+    expect(FakePeerConnection.instances).toHaveLength(0);
+
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'offer', transferId, {
+        sdp: { type: 'offer', sdp: 'v=0' },
+      }),
+    );
+
+    const pc = FakePeerConnection.instances[0]!;
+    expect(pc.addedIce).toEqual([{ candidate: 'early' }]);
+    expect(signals.some((entry) => entry.signal === 'answer')).toBe(true);
+    rtc.stop();
+  });
+
+  it('applies outgoing ICE candidates that arrive before the answer', async () => {
+    const { rtc, identity, peer, signals } = await imageManager();
+    rtc.sendImage(
+      peer.humanId,
+      'channel',
+      new File([new Uint8Array([1, 2, 3])], 'one.png', { type: 'image/png' }),
+    );
+    const offer = signals.find((entry) => entry.signal === 'image-offer');
+    expect(offer).toBeDefined();
+
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-accept', offer!.transferId),
+    );
+    const pc = FakePeerConnection.instances[0]!;
+
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'ice', offer!.transferId, {
+        candidate: { candidate: 'early-out' },
+      }),
+    );
+    expect(pc.addedIce).toEqual([]);
+
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'answer', offer!.transferId, {
+        sdp: { type: 'answer', sdp: 'v=0' },
+      }),
+    );
+
+    expect(pc.addedIce).toEqual([{ candidate: 'early-out' }]);
+    rtc.stop();
+  });
+
+  it('fails an accepted image that never connects and tells the sender', async () => {
+    const { rtc, identity, peer, signals, failed, progress } = await imageManager();
+    const transferId = 'never-connects';
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-offer', transferId, { sizeMb: 0.1 }),
+    );
+    await rtc.acceptImage(transferId);
+    expect(progress.at(-1)?.phase).toBe('connecting');
+
+    await vi.advanceTimersByTimeAsync(30_001);
+
+    expect(failed).toEqual(['The direct connection timed out.']);
+    expect(signals.find((entry) => entry.signal === 'image-decline')?.data).toEqual({
+      reason: 'The direct connection timed out.',
+    });
+    expect(rtc.busyPeers().has(peer.humanId)).toBe(false);
+    rtc.stop();
+  });
+
+  it('flushes the ack before closing the receiving connection', async () => {
+    const { rtc, identity, peer, completed } = await imageManager();
+    const transferId = 'ack-transfer';
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'image-offer', transferId, { sizeMb: 0.1 }),
+    );
+    await rtc.acceptImage(transferId);
+    await rtc.handleSignal(
+      await signalEnvelope(peer, identity.humanId, 'offer', transferId, {
+        sdp: { type: 'offer', sdp: 'v=0' },
+      }),
+    );
+
+    const pc = FakePeerConnection.instances[0]!;
+    const channel = pc.channels[0]!;
+    channel.receive(JSON.stringify({ type: 'meta', size: 3, mime: 'image/png' }));
+    channel.receive(new Uint8Array([1, 2, 3]).buffer);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(completed).toEqual([transferId]);
+    expect(channel.sent).toContain(JSON.stringify({ type: 'ack' }));
+    expect(pc.connectionState).not.toBe('closed');
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(pc.connectionState).toBe('closed');
+    rtc.stop();
   });
 });
 

@@ -524,6 +524,7 @@ export class RdzApp {
   }
 
   private handleImageFailed(transferId: string, message: string): void {
+    this.incomingImages.delete(transferId);
     const existing = this.imageProgress.get(transferId);
     if (existing) this.imageProgress.set(transferId, { ...existing, phase: 'failed', error: message });
     this.showToast(message);
